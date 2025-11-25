@@ -27,12 +27,20 @@ BET_USD = float(os.getenv("BET_USD", "1.1"))
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.565"))
 MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.15"))
 
+# Ile sekund po starcie 15-min okna zaczynamy handel (domyślnie 12)
+WINDOW_DELAY_SEC = int(os.getenv("WINDOW_DELAY_SEC", "12"))
+if WINDOW_DELAY_SEC < 0:
+    WINDOW_DELAY_SEC = 0
+if WINDOW_DELAY_SEC > 300:
+    WINDOW_DELAY_SEC = 300  # prosty bezpiecznik
+
 MARKETS_ENV = os.getenv("MARKETS", "BTC,ETH,XRP,SOL")
 MARKETS = [m.strip().upper() for m in MARKETS_ENV.split(",") if m.strip()]
 
 PROXY_PK = os.getenv("PROXY_PK")
 FUNDER_PROXY = os.getenv("FUNDER_PROXY", "")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
+BFXD_URL = os.getenv("BFXD_URL", "").strip()  # zewnętrzny filtr trendu (opcjonalny)
 
 if not PROXY_PK or not PROXY_PK.startswith("0x"):
     raise SystemExit("Missing PROXY_PK in .env!")
@@ -101,6 +109,10 @@ client = ClobClient(
     signature_type=SIGNATURE_TYPE,
     funder=FUNDER_PROXY or None,
 )
+
+# Hotfix: zapewnij, że klient ma atrybut builder_config
+if not hasattr(client, "builder_config"):
+    client.builder_config = None
 
 def setup_api_creds() -> None:
     """Setup API credentials from .env or generate new ones"""
@@ -196,7 +208,7 @@ def get_window_times(symbol: str):
     return window_start_et, window_end_et
 
 def get_token_ids(symbol: str):
-    """Get YES and NO token IDs from Gamma API"""
+    """Get UP and DOWN token IDs from Gamma API (YES/NO under the hood)"""
     slug = get_current_slug(symbol)
     for attempt in range(1, 13):
         try:
@@ -210,7 +222,8 @@ def get_token_ids(symbol: str):
                     except:
                         clob_ids = [x.strip().strip('"') for x in clob_ids.strip("[]").split(",")]
                 if isinstance(clob_ids, list) and len(clob_ids) >= 2:
-                    log(f"[{symbol}] Tokens found: YES {clob_ids[0][:10]}... | NO {clob_ids[1][:10]}...")
+                    # przyjmujemy: clob_ids[0] = UP, clob_ids[1] = DOWN
+                    log(f"[{symbol}] Tokens found: UP {clob_ids[0][:10]}... | DOWN {clob_ids[1][:10]}...")
                     return clob_ids[0], clob_ids[1]
         except Exception as e:
             log(f"[{symbol}] Error fetching tokens: {e}")
@@ -239,10 +252,10 @@ def get_fear_greed() -> int:
 
 # ========================== STRATEGY ==========================
 
-def calculate_edge(symbol: str, yes_token: str):
-    """Calculate edge for trading decision"""
+def calculate_edge(symbol: str, up_token: str):
+    """Calculate edge for trading decision (UP leg as reference)"""
     try:
-        book = client.get_order_book(yes_token)
+        book = client.get_order_book(up_token)
         if isinstance(book, dict):
             bids = book.get("bids", []) or []
             asks = book.get("asks", []) or []
@@ -273,52 +286,102 @@ def calculate_edge(symbol: str, yes_token: str):
         log(f"[{symbol}] Spread too wide: {spread:.2%}")
         return 0.5, f"spread {spread:.2%}", 0.5, best_bid, best_ask, 0.5
     
-    p_yes = (best_bid + best_ask) / 2.0
+    p_up = (best_bid + best_ask) / 2.0
     imbalance_raw = best_bid - (1.0 - best_ask)
     imbalance = max(min((imbalance_raw + 0.1) / 0.2, 1.0), 0.0)
     
     # Calculate edge: 70% price + 30% imbalance
-    edge = 0.7 * p_yes + 0.3 * imbalance
+    edge = 0.7 * p_up + 0.3 * imbalance
     edge += get_funding_bias(symbol)
     
     # Fear & Greed adjustment
     fg = get_fear_greed()
     if fg < 30:
-        edge += 0.03  # Extreme fear -> bullish bias
+        edge += 0.03  # Extreme fear -> bullish bias (UP)
     elif fg > 70:
-        edge -= 0.03  # Extreme greed -> bearish bias
+        edge -= 0.03  # Extreme greed -> bearish bias (DOWN)
     
-    log(f"[{symbol}] Edge calculation: p_yes={p_yes:.4f} bid={best_bid:.4f} ask={best_ask:.4f} imb={imbalance:.4f} edge={edge:.4f}")
-    return edge, "OK", p_yes, best_bid, best_ask, imbalance
+    log(f"[{symbol}] Edge calculation: p_up={p_up:.4f} bid={best_bid:.4f} ask={best_ask:.4f} imb={imbalance:.4f} edge={edge:.4f}")
+    return edge, "OK", p_up, best_bid, best_ask, imbalance
+
+# ========================== BFXD TREND FILTER ==========================
+
+def bfxd_allows_trade(symbol: str, direction: str) -> bool:
+    """
+    Zewnętrzny filtr trendu (BFXD_URL):
+
+    - działa tylko jeśli BFXD_URL jest ustawione,
+    - dotyczy tylko BTC (symbol == 'BTC'),
+    - zasady:
+        * jeśli trend BTC/USDT == 'UP'   -> pozwalaj TYLKO na UP, blokuj DOWN
+        * jeśli trend BTC/USDT == 'DOWN' -> pozwalaj TYLKO na DOWN, blokuj UP
+        * jeśli brak wpisu / błąd / dziwny trend -> pozwalaj na wszystko (brak filtra)
+    """
+    if not BFXD_URL:
+        return True
+
+    symbol_u = symbol.upper()
+    direction_u = direction.upper()
+
+    if symbol_u != "BTC":
+        return True
+
+    try:
+        r = requests.get(BFXD_URL, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, dict):
+            log(f"[{symbol}] BFXD: invalid JSON (expected object), BUY allowed (no strict filter)")
+            return True
+
+        trend = str(data.get("BTC/USDT", "")).upper()
+        if not trend:
+            log(f"[{symbol}] BFXD: no BTC/USDT entry in trend map, BUY allowed")
+            return True
+
+        if trend not in ("UP", "DOWN"):
+            log(f"[{symbol}] BFXD: unknown trend '{trend}', BUY allowed")
+            return True
+
+        if trend == direction_u:
+            log(f"[{symbol}] BFXD: trend BTC/USDT={trend}, direction={direction_u}, BUY allowed")
+            return True
+        else:
+            log(f"[{symbol}] BFXD: trend BTC/USDT={trend}, direction={direction_u}, skipping BUY")
+            return False
+
+    except Exception as e:
+        log(f"[{symbol}] BFXD: error fetching trend ({e}), BUY allowed (fallback)")
+        return True
 
 # ========================== ORDER MANAGER ==========================
 
 def place_order(token_id: str, price: float, size: float) -> dict:
-    """Place order on CLOB - using working method from reference script"""
+    """Place order on CLOB - using global client with hotfix for builder_config"""
     try:
         log(f"Placing order: {size} shares at ${price:.4f}")
         
-        # Create fresh client instance (like in working script)
-        order_client = ClobClient(
-            host=CLOB_HOST,
-            key=PROXY_PK,
-            chain_id=CHAIN_ID,
-            signature_type=SIGNATURE_TYPE,
-            funder=FUNDER_PROXY or None,
-        )
-        
-        # Set API credentials
+        # Używamy globalnego klienta
+        order_client = client
+
+        # Hotfix: dopilnuj, że obiekt ma builder_config
+        if not hasattr(order_client, "builder_config"):
+            order_client.builder_config = None
+
+        # (opcjonalnie) ustaw jeszcze raz API creds z .env, jeśli są
         api_key = os.getenv("API_KEY")
         api_secret = os.getenv("API_SECRET")
         api_passphrase = os.getenv("API_PASSPHRASE")
-        
         if api_key and api_secret and api_passphrase:
-            creds = ApiCreds(
-                api_key=api_key,
-                api_secret=api_secret,
-                api_passphrase=api_passphrase
-            )
-            order_client.set_api_creds(creds)
+            try:
+                creds = ApiCreds(
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    api_passphrase=api_passphrase
+                )
+                order_client.set_api_creds(creds)
+            except Exception as e:
+                log(f"⚠ Error setting API creds in place_order: {e}")
         
         # Create order arguments
         order_args = OrderArgs(
@@ -387,7 +450,12 @@ def check_and_settle_trades():
                 final_price = 0.5
             
             # Calculate PnL (simplified - uses market price as exit)
-            exit_value = final_price if side == "YES" else (1.0 - final_price)
+            side_u = (side or "").upper()
+            if side_u in ("UP", "YES"):
+                exit_value = final_price
+            else:
+                exit_value = 1.0 - final_price
+
             pnl_usd = (exit_value * size) - bet_usd
             roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
             
@@ -453,22 +521,27 @@ def generate_statistics():
 
 def trade_symbol(symbol: str):
     """Execute trading logic for a symbol"""
-    yes_id, no_id = get_token_ids(symbol)
-    if not yes_id or not no_id:
+    up_id, down_id = get_token_ids(symbol)
+    if not up_id or not down_id:
         log(f"[{symbol}] Market not found, skipping")
         return
     
-    edge, reason, p_yes, best_bid, best_ask, imbalance = calculate_edge(symbol, yes_id)
+    edge, reason, p_up, best_bid, best_ask, imbalance = calculate_edge(symbol, up_id)
     addr = Account.from_key(PROXY_PK).address
     balance = get_balance(addr)
     
-    # Trading decision
+    # Trading decision: UP / DOWN
     if edge >= MIN_EDGE:
-        token_id, side, price = yes_id, "YES", p_yes
+        token_id, side, price = up_id, "UP", p_up
     elif edge <= (1.0 - MIN_EDGE):
-        token_id, side, price = no_id, "NO", 1.0 - p_yes
+        token_id, side, price = down_id, "DOWN", 1.0 - p_up
     else:
         log(f"[{symbol}] PASS | Edge {edge:.1%} (threshold: {MIN_EDGE:.1%}/{1-MIN_EDGE:.1%})")
+        return
+
+    # BFXD trend filter: BTC, dopasowanie kierunku
+    if not bfxd_allows_trade(symbol, side):
+        log(f"[{symbol}] BFXD filter prevented BUY (symbol={symbol}, side={side})")
         return
     
     if price <= 0:
@@ -477,25 +550,56 @@ def trade_symbol(symbol: str):
     
     # Clamp price to valid range
     price = max(0.01, min(0.99, price))
+
+    # Bazowy size wynikający z BET_USD
     size = round(BET_USD / price, 6)
-    
-    log(f"[{symbol}] 📈 {side} ${BET_USD} | Edge {edge:.1%} | Price {price:.4f} | Size {size} | Balance {balance:.2f}")
-    send_discord(f"**[{symbol}] {side} ${BET_USD}** | Edge {edge:.1%} | Price {price:.4f}")
+
+    # OPCJA C: wymuszamy min. 5 sztuk, kosztem większego realnego stake
+    MIN_SIZE = 5.0
+    bet_usd_effective = BET_USD
+
+    if size < MIN_SIZE:
+        old_size = size
+        size = MIN_SIZE
+        bet_usd_effective = round(size * price, 4)  # realna kwota w USDC
+        log(
+            f"[{symbol}] Size {old_size:.4f} < min {MIN_SIZE}, bumping to {size:.4f}. "
+            f"Effective stake ≈ ${bet_usd_effective:.2f}"
+        )
+
+    log(
+        f"[{symbol}] 📈 {side} ${bet_usd_effective:.2f} | Edge {edge:.1%} | "
+        f"Price {price:.4f} | Size {size} | Balance {balance:.2f}"
+    )
+    send_discord(
+        f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Price {price:.4f}"
+    )
     
     # Place order
     result = place_order(token_id, price, size)
     log(f"[{symbol}] Order status: {result['status']}")
     
-    # Save to database
+    # Save to database – zapisujemy realny stake, nie bazowe BET_USD
     try:
         window_start, window_end = get_window_times(symbol)
         save_trade(
-            symbol=symbol, window_start=window_start.isoformat(),
-            window_end=window_end.isoformat(), slug=get_current_slug(symbol),
-            token_id=token_id, side=side, edge=edge, price=price, size=size,
-            bet_usd=BET_USD, p_yes=p_yes, best_bid=best_bid, best_ask=best_ask,
-            imbalance=imbalance, funding_bias=get_funding_bias(symbol),
-            order_status=result['status'], order_id=result['order_id']
+            symbol=symbol,
+            window_start=window_start.isoformat(),
+            window_end=window_end.isoformat(),
+            slug=get_current_slug(symbol),
+            token_id=token_id,
+            side=side,
+            edge=edge,
+            price=price,
+            size=size,
+            bet_usd=bet_usd_effective,
+            p_yes=p_up,
+            best_bid=best_bid,
+            best_ask=best_ask,
+            imbalance=imbalance,
+            funding_bias=get_funding_bias(symbol),
+            order_status=result['status'],
+            order_id=result['order_id'],
         )
     except Exception as e:
         log(f"[{symbol}] Database error: {e}")
@@ -513,6 +617,7 @@ def main():
     log(f"🤖 POLYASTRA | Markets: {', '.join(MARKETS)}")
     log(f"💼 Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC")
     log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: ${BET_USD} | MAX_SPREAD: {MAX_SPREAD:.1%}")
+    log(f"🕒 WINDOW_DELAY_SEC: {WINDOW_DELAY_SEC}s")
     log("=" * 90)
     
     cycle = 0
@@ -524,8 +629,8 @@ def main():
             if wait <= 0:
                 wait += 900
             
-            log(f"⏱️  Waiting {wait}s until next window...")
-            time.sleep(wait + 12)  # +12s buffer for market creation
+            log(f"⏱️  Waiting {wait}s until next window + {WINDOW_DELAY_SEC}s delay...")
+            time.sleep(wait + WINDOW_DELAY_SEC)  # konfigurowalny bufor po starcie okna
             
             log(f"\n{'='*90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*90}\n")
             
