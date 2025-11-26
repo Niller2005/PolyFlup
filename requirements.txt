@@ -1,5 +1,25 @@
+# PolyAstra Trading Bot - Requirements
+# Install with: pip install -r requirements.txt
+
+# Web3 & Blockchain
 web3>=6.0.0
-py-clob-client>=0.27.0
+eth-account>=0.8.0
+
+# Polymarket CLOB Client
+py-clob-client>=0.1.0
+
+# HTTP Requests
+requests>=2.28.0
+
+# Environment Variables
 python-dotenv>=1.0.0
-requests>=2.31.0
-eth-account>=0.10.0
+
+# Technical Analysis (for ADX calculation)
+ta>=0.10.0
+pandas>=2.0.0
+
+# Timezone Support (built-in from Python 3.9+, but listed for clarity)
+# zoneinfo is part of standard library
+
+# Database (sqlite3 is built-in)
+# No external package needed
