@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PolyAstra Trading Bot - Complete Version (FIXED)
+PolyAstra Trading Bot - Complete Version (FIXED + ADX Filter)
 Automated trading bot for 15-minute crypto prediction markets on Polymarket
 
 """
@@ -27,6 +27,12 @@ load_dotenv()
 BET_USD = float(os.getenv("BET_USD", "1.1"))
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.565"))
 MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.15"))
+
+# ADX Filter Configuration
+ADX_ENABLED = os.getenv("ADX", "NO").upper() == "YES"
+ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "25.0"))
+ADX_INTERVAL = os.getenv("ADX_INTERVAL", "15m")  # Kline interval for ADX calculation
+ADX_PERIOD = int(os.getenv("ADX_PERIOD", "14"))  # ADX period (default 14)
 
 # How many seconds after a 15m window starts we begin trading (default 12)
 WINDOW_DELAY_SEC = int(os.getenv("WINDOW_DELAY_SEC", "12"))
@@ -70,8 +76,7 @@ USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
 
 def log(text: str) -> None:
     """Log message to console and file"""
-    line = f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC'
-)}] {text}"
+    line = f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC')}] {text}"
     print(line)
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -95,11 +100,9 @@ w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
 def get_balance(addr: str) -> float:
     """Get USDC balance for address"""
     try:
-        abi = '[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"
-name":"balanceOf","outputs":[{"name":"","type":"uint256"}],"type":"function"}]'
+        abi = '[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"","type":"uint256"}],"type":"function"}]'
         contract = w3.eth.contract(address=USDC_ADDRESS, abi=abi)
-        raw = contract.functions.balanceOf(Web3.to_checksum_address(addr)).call(
-)
+        raw = contract.functions.balanceOf(Web3.to_checksum_address(addr)).call()
         return raw / 1e6
     except Exception:
         return 0.0
@@ -126,8 +129,7 @@ def setup_api_creds() -> None:
 
     if api_key and api_secret and api_passphrase:
         try:
-            creds = ApiCreds(api_key=api_key, api_secret=api_secret, api_passphr
-ase=api_passphrase)
+            creds = ApiCreds(api_key=api_key, api_secret=api_secret, api_passphrase=api_passphrase)
             client.set_api_creds(creds)
             log("✓ API credentials loaded from .env")
             return
@@ -173,8 +175,7 @@ def save_trade(**kwargs):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''
-        INSERT INTO trades (timestamp, symbol, window_start, window_end, slug, t
-oken_id,
+        INSERT INTO trades (timestamp, symbol, window_start, window_end, slug, token_id,
         side, edge, entry_price, size, bet_usd, p_yes, best_bid, best_ask,
         imbalance, funding_bias, order_status, order_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -198,8 +199,7 @@ def get_current_slug(symbol: str) -> str:
     """Generate slug for current 15-minute window"""
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
     minute_slot = (now_et.minute // 15) * 15
-    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0
-)
+    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0)
     window_start_utc = window_start_et.astimezone(ZoneInfo("UTC"))
     ts = int(window_start_utc.timestamp())
     slug = f"{symbol.lower()}-updown-15m-{ts}"
@@ -210,8 +210,7 @@ def get_window_times(symbol: str):
     """Get window start and end times in ET"""
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
     minute_slot = (now_et.minute // 15) * 15
-    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0
-)
+    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0)
     window_end_et = window_start_et + timedelta(minutes=15)
     return window_start_et, window_end_et
 
@@ -228,12 +227,10 @@ def get_token_ids(symbol: str):
                     try:
                         clob_ids = json.loads(clob_ids)
                     except:
-                        clob_ids = [x.strip().strip('"') for x in clob_ids.strip
-("[]").split(",")]
+                        clob_ids = [x.strip().strip('"') for x in clob_ids.strip("[]").split(",")]
                 if isinstance(clob_ids, list) and len(clob_ids) >= 2:
                     # assume clob_ids[0] = UP, clob_ids[1] = DOWN
-                    log(f"[{symbol}] Tokens found: UP {clob_ids[0][:10]}... | DO
-WN {clob_ids[1][:10]}...")
+                    log(f"[{symbol}] Tokens found: UP {clob_ids[0][:10]}... | DOWN {clob_ids[1][:10]}...")
                     return clob_ids[0], clob_ids[1]
         except Exception as e:
             log(f"[{symbol}] Error fetching tokens: {e}")
@@ -256,10 +253,118 @@ def get_funding_bias(symbol: str) -> float:
 def get_fear_greed() -> int:
     """Get Fear & Greed Index"""
     try:
-        return int(requests.get("https://api.alternative.me/fng/", timeout=5).js
-on()["data"][0]["value"])
+        return int(requests.get("https://api.alternative.me/fng/", timeout=5).json()["data"][0]["value"])
     except:
         return 50
+
+# ========================== ADX CALCULATION ==========================
+
+def get_adx_from_binance(symbol: str) -> float:
+    """
+    Fetch klines from Binance and calculate ADX for symbol/USDT pair using ta library.
+    
+    Args:
+        symbol: Trading symbol (e.g., 'BTC', 'ETH')
+    
+    Returns:
+        ADX value (0-100) or -1.0 on error
+    """
+    try:
+        import pandas as pd
+        from ta.trend import ADXIndicator
+    except ImportError:
+        log(f"[{symbol}] ADX: Missing 'ta' library. Install with: pip install ta")
+        return -1.0
+    
+    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    if not pair:
+        log(f"[{symbol}] ADX: No Binance mapping found for symbol")
+        return -1.0
+    
+    try:
+        # Need enough klines for ADX calculation (at least 2*period + buffer)
+        limit = ADX_PERIOD * 3 + 10
+        url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval={ADX_INTERVAL}&limit={limit}"
+        
+        log(f"[{symbol}] ADX: Fetching klines from Binance ({pair}, {ADX_INTERVAL}, limit={limit})...")
+        
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        klines = response.json()
+        
+        if not klines or len(klines) < ADX_PERIOD * 2:
+            log(f"[{symbol}] ADX: Insufficient klines data (got {len(klines)})")
+            return -1.0
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(klines, columns=[
+            'open_time', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+            'taker_buy_quote', 'ignore'
+        ])
+        
+        # Convert to numeric
+        df['high'] = pd.to_numeric(df['high'])
+        df['low'] = pd.to_numeric(df['low'])
+        df['close'] = pd.to_numeric(df['close'])
+        
+        # Calculate ADX using ta library
+        adx_indicator = ADXIndicator(
+            high=df['high'],
+            low=df['low'],
+            close=df['close'],
+            window=ADX_PERIOD,
+            fillna=False
+        )
+        
+        adx_series = adx_indicator.adx()
+        adx_value = adx_series.iloc[-1]
+        
+        if pd.isna(adx_value):
+            log(f"[{symbol}] ADX: Calculated value is NaN")
+            return -1.0
+        
+        log(f"[{symbol}] ADX: Calculated value = {adx_value:.2f}")
+        return float(adx_value)
+        
+    except requests.RequestException as e:
+        log(f"[{symbol}] ADX: Binance API error: {e}")
+        return -1.0
+    except Exception as e:
+        log(f"[{symbol}] ADX: Unexpected error: {e}")
+        import traceback
+        log(traceback.format_exc())
+        return -1.0
+
+
+def adx_allows_trade(symbol: str) -> bool:
+    """
+    Check if ADX filter allows trade for given symbol.
+    
+    Returns True if:
+    - ADX filter is disabled (ADX != YES)
+    - ADX value is >= ADX_THRESHOLD
+    - ADX calculation failed (fail-open for safety)
+    
+    Returns False if:
+    - ADX filter is enabled AND ADX value < ADX_THRESHOLD
+    """
+    if not ADX_ENABLED:
+        log(f"[{symbol}] ADX: Filter disabled, allowing trade")
+        return True
+    
+    adx_value = get_adx_from_binance(symbol)
+    
+    if adx_value < 0:
+        log(f"[{symbol}] ADX: Could not calculate ADX, allowing trade (fail-open)")
+        return True
+    
+    if adx_value >= ADX_THRESHOLD:
+        log(f"[{symbol}] ADX: {adx_value:.2f} >= {ADX_THRESHOLD:.2f} threshold, ALLOWING trade")
+        return True
+    else:
+        log(f"[{symbol}] ADX: {adx_value:.2f} < {ADX_THRESHOLD:.2f} threshold, BLOCKING trade (weak trend)")
+        return False
 
 # ========================== STRATEGY ==========================
 
@@ -284,11 +389,9 @@ def calculate_edge(symbol: str, up_token: str):
     best_ask = None
 
     if bids:
-        best_bid = float(bids[-1].price) if hasattr(bids[-1], 'price') else floa
-t(bids[-1].get('price', 0))
+        best_bid = float(bids[-1].price) if hasattr(bids[-1], 'price') else float(bids[-1].get('price', 0))
     if asks:
-        best_ask = float(asks[-1].price) if hasattr(asks[-1], 'price') else floa
-t(asks[-1].get('price', 0))
+        best_ask = float(asks[-1].price) if hasattr(asks[-1], 'price') else float(asks[-1].get('price', 0))
 
     if not best_bid or not best_ask:
         return 0.5, "no bid/ask", 0.5, best_bid, best_ask, 0.5
@@ -312,8 +415,7 @@ t(asks[-1].get('price', 0))
     elif fg > 70:
         edge -= 0.03  # extreme greed -> bearish bias (DOWN)
 
-    log(f"[{symbol}] Edge calculation: p_up={p_up:.4f} bid={best_bid:.4f} ask={b
-est_ask:.4f} imb={imbalance:.4f} edge={edge:.4f}")
+    log(f"[{symbol}] Edge calculation: p_up={p_up:.4f} bid={best_bid:.4f} ask={best_ask:.4f} imb={imbalance:.4f} edge={edge:.4f}")
     return edge, "OK", p_up, best_bid, best_ask, imbalance
 
 # ========================== BFXD TREND FILTER ==========================
@@ -328,68 +430,56 @@ def bfxd_allows_trade(symbol: str, direction: str) -> bool:
         * trend BTC/USDT == 'UP'   -> allow only UP, block DOWN
         * trend BTC/USDT == 'DOWN' -> allow only DOWN, block UP
         * missing/invalid/error    -> allow everything (no filter)
-    Additionally: logs WHAT we want to buy, WHAT trend was read, and IF it match
-es.
+    Additionally: logs WHAT we want to buy, WHAT trend was read, and IF it matches.
     """
     symbol_u = symbol.upper()
     direction_u = direction.upper()
 
     if not BFXD_URL:
-        log(f"[{symbol}] BFXD: URL not set, skipping trend filter (side={directi
-on_u})")
+        log(f"[{symbol}] BFXD: URL not set, skipping trend filter (side={direction_u})")
         return True
 
     if symbol_u != "BTC":
-        log(f"[{symbol}] BFXD: symbol {symbol_u} != BTC, skipping trend filter (
-side={direction_u})")
+        log(f"[{symbol}] BFXD: symbol {symbol_u} != BTC, skipping trend filter (side={direction_u})")
         return True
 
     try:
-        log(f"[{symbol}] BFXD: fetching trend from {BFXD_URL} for side={directio
-n_u}...")
+        log(f"[{symbol}] BFXD: fetching trend from {BFXD_URL} for side={direction_u}...")
         r = requests.get(BFXD_URL, timeout=5)
         r.raise_for_status()
         data = r.json()
 
         if not isinstance(data, dict):
-            log(f"[{symbol}] BFXD: invalid JSON (expected dict), allowing trade
-(side={direction_u})")
+            log(f"[{symbol}] BFXD: invalid JSON (expected dict), allowing trade (side={direction_u})")
             return True
 
         trend = str(data.get("BTC/USDT", "")).upper()
         if not trend:
-            log(f"[{symbol}] BFXD: no BTC/USDT entry, allowing trade (side={dire
-ction_u}, trend=None)")
+            log(f"[{symbol}] BFXD: no BTC/USDT entry, allowing trade (side={direction_u}, trend=None)")
             return True
 
         if trend not in ("UP", "DOWN"):
-            log(f"[{symbol}] BFXD: unknown trend '{trend}', allowing trade (side
-={direction_u})")
+            log(f"[{symbol}] BFXD: unknown trend '{trend}', allowing trade (side={direction_u})")
             return True
 
         match = (trend == direction_u)
-        log(f"[{symbol}] BFXD: direction={direction_u}, trend={trend}, match={ma
-tch}")
+        log(f"[{symbol}] BFXD: direction={direction_u}, trend={trend}, match={match}")
 
         if match:
-            log(f"[{symbol}] BFXD: trend agrees with side={direction_u}, trade a
-llowed")
+            log(f"[{symbol}] BFXD: trend agrees with side={direction_u}, trade allowed")
             return True
         else:
-            log(f"[{symbol}] BFXD: trend disagrees (trend={trend}, side={directi
-on_u}), trade BLOCKED")
+            log(f"[{symbol}] BFXD: trend disagrees (trend={trend}, side={direction_u}), trade BLOCKED")
             return False
 
     except Exception as e:
-        log(f"[{symbol}] BFXD: error fetching/parsing trend ({e}), allowing trad
-e (side={direction_u})")
+        log(f"[{symbol}] BFXD: error fetching/parsing trend ({e}), allowing trade (side={direction_u})")
         return True
 
 # ========================== ORDER MANAGER ==========================
 
 def place_order(token_id: str, price: float, size: float) -> dict:
-    """Place order on CLOB - using global client with hotfix for builder_config"
-""
+    """Place order on CLOB - using global client with hotfix for builder_config"""
     try:
         log(f"Placing order: {size} shares at ${price:.4f}")
 
@@ -451,9 +541,7 @@ def check_and_settle_trades():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     now = datetime.now(tz=ZoneInfo('UTC'))
-    c.execute('SELECT id, symbol, slug, token_id, side, entry_price, size, bet_u
-sd FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)', (now.i
-soformat(),))
+    c.execute('SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)', (now.isoformat(),))
     unsettled = c.fetchall()
 
     if not unsettled:
@@ -464,17 +552,14 @@ soformat(),))
     log(f"📊 Settling {len(unsettled)} trades...")
     total_pnl = 0
 
-    for trade_id, symbol, slug, token_id, side, entry_price, size, bet_usd in un
-settled:
+    for trade_id, symbol, slug, token_id, side, entry_price, size, bet_usd in unsettled:
         try:
             book = client.get_order_book(token_id)
             bids = getattr(book, "bids", []) or []
             asks = getattr(book, "asks", []) or []
             if bids and asks:
-                final_price = (float(bids[-1].price if hasattr(bids[-1], 'price'
-) else bids[-1].get('price', 0)) +
-                              float(asks[-1].price if hasattr(asks[-1], 'price')
- else asks[-1].get('price', 0))) / 2.0
+                final_price = (float(bids[-1].price if hasattr(bids[-1], 'price') else bids[-1].get('price', 0)) +
+                              float(asks[-1].price if hasattr(asks[-1], 'price') else asks[-1].get('price', 0))) / 2.0
             else:
                 final_price = 0.5
 
@@ -487,14 +572,11 @@ settled:
             pnl_usd = (exit_value * size) - bet_usd
             roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
-            c.execute('UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=
-?, roi_pct=?, settled=1, settled_at=? WHERE id=?',
-                     ('PENDING', final_price, pnl_usd, roi_pct, now.isoformat(),
- trade_id))
+            c.execute('UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=? WHERE id=?',
+                     ('PENDING', final_price, pnl_usd, roi_pct, now.isoformat(), trade_id))
 
             emoji = "✅" if pnl_usd > 0 else "❌"
-            log(f"{emoji} Trade #{trade_id} [{symbol}] {side}: {pnl_usd:+.2f}$ (
-{roi_pct:+.1f}%)")
+            log(f"{emoji} Trade #{trade_id} [{symbol}] {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%)")
             total_pnl += pnl_usd
 
         except Exception as e:
@@ -504,8 +586,7 @@ settled:
     conn.close()
 
     if len(unsettled) > 0:
-        send_discord(f"📊 Settled {len(unsettled)} trades | Total PnL: ${total_p
-nl:+.2f}")
+        send_discord(f"📊 Settled {len(unsettled)} trades | Total PnL: ${total_pnl:+.2f}")
 
 # ========================== REPORTS ==========================
 
@@ -513,8 +594,7 @@ def generate_statistics():
     """Generate performance statistics report"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('SELECT COUNT(*), SUM(bet_usd), SUM(pnl_usd), AVG(roi_pct) FROM tr
-ades WHERE settled = 1')
+    c.execute('SELECT COUNT(*), SUM(bet_usd), SUM(pnl_usd), AVG(roi_pct) FROM trades WHERE settled = 1')
     result = c.fetchone()
     total_trades = result[0] or 0
 
@@ -523,8 +603,7 @@ ades WHERE settled = 1')
         conn.close()
         return
 
-    total_invested, total_pnl, avg_roi = result[1] or 0, result[2] or 0, result[
-3] or 0
+    total_invested, total_pnl, avg_roi = result[1] or 0, result[2] or 0, result[3] or 0
     c.execute('SELECT COUNT(*) FROM trades WHERE settled = 1 AND pnl_usd > 0')
     winning_trades = c.fetchone()[0]
     win_rate = (winning_trades / total_trades) * 100
@@ -544,8 +623,7 @@ ades WHERE settled = 1')
     report_text = "\n".join(report)
     log(report_text)
 
-    report_file = f"{REPORTS_DIR}/report_{datetime.now().strftime('%Y%m%d_%H%M%S
-')}.txt"
+    report_file = f"{REPORTS_DIR}/report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     with open(report_file, 'w') as f:
         f.write(report_text)
 
@@ -561,45 +639,42 @@ def trade_symbol(symbol: str):
         log(f"[{symbol}] Market not found, skipping")
         return
 
-    edge, reason, p_up, best_bid, best_ask, imbalance = calculate_edge(symbol, u
-p_id)
+    edge, reason, p_up, best_bid, best_ask, imbalance = calculate_edge(symbol, up_id)
     addr = Account.from_key(PROXY_PK).address
     balance = get_balance(addr)
 
     # ============================================================
     # FIX: ODWRÓCONA LOGIKA - kupujemy NIEDOWARTOŚCIOWANĄ stronę
     # ============================================================
-    # Wysoki edge (>= MIN_EDGE) = rynek wycenia UP wysoko = UP przewartościowane
- = kupuj DOWN
-    # Niski edge (<= 1-MIN_EDGE) = rynek wycenia UP nisko = UP niedowartościowan
-e = kupuj UP
+    # Wysoki edge (>= MIN_EDGE) = rynek wycenia UP wysoko = UP przewartościowane = kupuj DOWN
+    # Niski edge (<= 1-MIN_EDGE) = rynek wycenia UP nisko = UP niedowartościowane = kupuj UP
     # ============================================================
 
     if edge <= (1.0 - MIN_EDGE):
         # Edge niski = UP jest tanie/niedowartościowane -> kupuj UP
         token_id, side, price = up_id, "UP", p_up
-        log(f"[{symbol}] LOW edge ({edge:.4f} <= {1.0-MIN_EDGE:.4f}) -> UP is un
-dervalued, buying UP")
+        log(f"[{symbol}] LOW edge ({edge:.4f} <= {1.0-MIN_EDGE:.4f}) -> UP is undervalued, buying UP")
     elif edge >= MIN_EDGE:
         # Edge wysoki = UP jest drogie/przewartościowane -> kupuj DOWN
         token_id, side, price = down_id, "DOWN", 1.0 - p_up
-        log(f"[{symbol}] HIGH edge ({edge:.4f} >= {MIN_EDGE:.4f}) -> UP is overv
-alued, buying DOWN")
+        log(f"[{symbol}] HIGH edge ({edge:.4f} >= {MIN_EDGE:.4f}) -> UP is overvalued, buying DOWN")
     else:
-        log(f"[{symbol}] PASS | Edge {edge:.1%} in neutral zone ({1-MIN_EDGE:.1%
-} - {MIN_EDGE:.1%})")
+        log(f"[{symbol}] PASS | Edge {edge:.1%} in neutral zone ({1-MIN_EDGE:.1%} - {MIN_EDGE:.1%})")
         return
 
     # LOG: what we want to buy before trend filter
-    log(f"[{symbol}] Direction decision: side={side}, edge={edge:.4f}, p_up={p_u
-p:.4f}")
+    log(f"[{symbol}] Direction decision: side={side}, edge={edge:.4f}, p_up={p_up:.4f}")
+
+    # ADX trend strength filter (applies to all symbols)
+    log(f"[{symbol}] ADX check: enabled={ADX_ENABLED}, threshold={ADX_THRESHOLD}")
+    if not adx_allows_trade(symbol):
+        log(f"[{symbol}] ADX filter prevented trade (symbol={symbol}, side={side}) - weak trend")
+        return
 
     # BFXD trend filter (BTC only)
-    log(f"[{symbol}] BFXD check: side={side}, url={'set' if BFXD_URL else 'not s
-et'}")
+    log(f"[{symbol}] BFXD check: side={side}, url={'set' if BFXD_URL else 'not set'}")
     if not bfxd_allows_trade(symbol, side):
-        log(f"[{symbol}] BFXD filter prevented trade (symbol={symbol}, side={sid
-e})")
+        log(f"[{symbol}] BFXD filter prevented trade (symbol={symbol}, side={side})")
         return
 
     if price <= 0:
@@ -618,8 +693,7 @@ e})")
         size = MIN_SIZE
         bet_usd_effective = round(size * price, 4)
         log(
-            f"[{symbol}] Size {old_size:.4f} < min {MIN_SIZE}, bumping to {size:
-.4f}. "
+            f"[{symbol}] Size {old_size:.4f} < min {MIN_SIZE}, bumping to {size:.4f}. "
             f"Effective stake ≈ ${bet_usd_effective:.2f}"
         )
 
@@ -628,8 +702,7 @@ e})")
         f"Price {price:.4f} | Size {size} | Balance {balance:.2f}"
     )
     send_discord(
-        f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Pri
-ce {price:.4f}"
+        f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Price {price:.4f}"
     )
 
     result = place_order(token_id, price, size)
@@ -663,19 +736,19 @@ ce {price:.4f}"
 
 def main():
     """Main bot loop"""
-    log("🚀 Starting PolyAstra Trading Bot (FIXED VERSION)...")
+    log("🚀 Starting PolyAstra Trading Bot (FIXED VERSION + ADX Filter)...")
     log("📝 FIX: Reversed UP/DOWN logic - now buying undervalued side")
+    log(f"📊 ADX Filter: {'ENABLED' if ADX_ENABLED else 'DISABLED'} (threshold={ADX_THRESHOLD}, period={ADX_PERIOD}, interval={ADX_INTERVAL})")
     setup_api_creds()
     init_database()
 
     addr = Account.from_key(PROXY_PK).address
     log("=" * 90)
     log(f"🤖 POLYASTRA | Markets: {', '.join(MARKETS)}")
-    log(f"💼 Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f
-} USDC")
-    log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: ${BET_USD} | MAX_SPREAD: {MAX_SPREA
-D:.1%}")
+    log(f"💼 Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC")
+    log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: ${BET_USD} | MAX_SPREAD: {MAX_SPREAD:.1%}")
     log(f"🕒 WINDOW_DELAY_SEC: {WINDOW_DELAY_SEC}s")
+    log(f"📈 ADX: {'YES' if ADX_ENABLED else 'NO'} | Threshold: {ADX_THRESHOLD} | Period: {ADX_PERIOD} | Interval: {ADX_INTERVAL}")
     log("=" * 90)
 
     cycle = 0
@@ -686,12 +759,10 @@ D:.1%}")
             if wait <= 0:
                 wait += 900
 
-            log(f"⏱️  Waiting {wait}s until next window + {WINDOW_DELAY_SEC}s del
-ay...")
+            log(f"⏱️  Waiting {wait}s until next window + {WINDOW_DELAY_SEC}s delay...")
             time.sleep(wait + WINDOW_DELAY_SEC)
 
-            log(f"\n{'='*90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('
-%Y-%m-%d %H:%M:%S UTC')}\n{'='*90}\n")
+            log(f"\n{'='*90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*90}\n")
 
             for sym in MARKETS:
                 trade_symbol(sym)
