@@ -3,7 +3,6 @@
 PolyAstra Trading Bot - Complete Version (FIXED)
 Automated trading bot for 15-minute crypto prediction markets on Polymarket
 
-FIX: Odwrócona logika decyzji UP/DOWN - teraz kupujemy niedowartościowaną stronę
 """
 
 import os
