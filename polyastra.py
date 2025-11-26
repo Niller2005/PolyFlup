@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-PolyAstra Trading Bot - Complete Version
+PolyAstra Trading Bot - Complete Version (FIXED)
 Automated trading bot for 15-minute crypto prediction markets on Polymarket
+
+FIX: Odwrócona logika decyzji UP/DOWN - teraz kupujemy niedowartościowaną stronę
 """
 
 import os
@@ -27,12 +29,12 @@ BET_USD = float(os.getenv("BET_USD", "1.1"))
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.565"))
 MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.15"))
 
-# Ile sekund po starcie 15-min okna zaczynamy handel (domyślnie 12)
+# How many seconds after a 15m window starts we begin trading (default 12)
 WINDOW_DELAY_SEC = int(os.getenv("WINDOW_DELAY_SEC", "12"))
 if WINDOW_DELAY_SEC < 0:
     WINDOW_DELAY_SEC = 0
 if WINDOW_DELAY_SEC > 300:
-    WINDOW_DELAY_SEC = 300  # prosty bezpiecznik
+    WINDOW_DELAY_SEC = 300  # simple safety limit
 
 MARKETS_ENV = os.getenv("MARKETS", "BTC,ETH,XRP,SOL")
 MARKETS = [m.strip().upper() for m in MARKETS_ENV.split(",") if m.strip()]
@@ -40,7 +42,7 @@ MARKETS = [m.strip().upper() for m in MARKETS_ENV.split(",") if m.strip()]
 PROXY_PK = os.getenv("PROXY_PK")
 FUNDER_PROXY = os.getenv("FUNDER_PROXY", "")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
-BFXD_URL = os.getenv("BFXD_URL", "").strip()  # zewnętrzny filtr trendu (opcjonalny)
+BFXD_URL = os.getenv("BFXD_URL", "").strip()  # external trend filter (optional)
 
 if not PROXY_PK or not PROXY_PK.startswith("0x"):
     raise SystemExit("Missing PROXY_PK in .env!")
@@ -61,7 +63,7 @@ os.makedirs(f"{BASE_DIR}/logs/reports", exist_ok=True)
 CLOB_HOST = "https://clob.polymarket.com"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 CHAIN_ID = 137
-SIGNATURE_TYPE = 2  # Changed to 2 like in working script
+SIGNATURE_TYPE = 2  # like in working reference script
 POLYGON_RPC = "https://polygon-rpc.com"
 USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
 
@@ -69,7 +71,8 @@ USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
 
 def log(text: str) -> None:
     """Log message to console and file"""
-    line = f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC')}] {text}"
+    line = f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC'
+)}] {text}"
     print(line)
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
@@ -93,9 +96,11 @@ w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
 def get_balance(addr: str) -> float:
     """Get USDC balance for address"""
     try:
-        abi = '[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"","type":"uint256"}],"type":"function"}]'
+        abi = '[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"
+name":"balanceOf","outputs":[{"name":"","type":"uint256"}],"type":"function"}]'
         contract = w3.eth.contract(address=USDC_ADDRESS, abi=abi)
-        raw = contract.functions.balanceOf(Web3.to_checksum_address(addr)).call()
+        raw = contract.functions.balanceOf(Web3.to_checksum_address(addr)).call(
+)
         return raw / 1e6
     except Exception:
         return 0.0
@@ -110,7 +115,7 @@ client = ClobClient(
     funder=FUNDER_PROXY or None,
 )
 
-# Hotfix: zapewnij, że klient ma atrybut builder_config
+# Hotfix: ensure client has builder_config attribute
 if not hasattr(client, "builder_config"):
     client.builder_config = None
 
@@ -119,16 +124,17 @@ def setup_api_creds() -> None:
     api_key = os.getenv("API_KEY")
     api_secret = os.getenv("API_SECRET")
     api_passphrase = os.getenv("API_PASSPHRASE")
-    
+
     if api_key and api_secret and api_passphrase:
         try:
-            creds = ApiCreds(api_key=api_key, api_secret=api_secret, api_passphrase=api_passphrase)
+            creds = ApiCreds(api_key=api_key, api_secret=api_secret, api_passphr
+ase=api_passphrase)
             client.set_api_creds(creds)
             log("✓ API credentials loaded from .env")
             return
         except Exception as e:
             log(f"⚠ Error loading API creds from .env: {e}")
-    
+
     try:
         creds = client.create_or_derive_api_creds()
         client.set_api_creds(creds)
@@ -168,7 +174,8 @@ def save_trade(**kwargs):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute('''
-        INSERT INTO trades (timestamp, symbol, window_start, window_end, slug, token_id,
+        INSERT INTO trades (timestamp, symbol, window_start, window_end, slug, t
+oken_id,
         side, edge, entry_price, size, bet_usd, p_yes, best_bid, best_ask,
         imbalance, funding_bias, order_status, order_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -192,7 +199,8 @@ def get_current_slug(symbol: str) -> str:
     """Generate slug for current 15-minute window"""
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
     minute_slot = (now_et.minute // 15) * 15
-    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0)
+    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0
+)
     window_start_utc = window_start_et.astimezone(ZoneInfo("UTC"))
     ts = int(window_start_utc.timestamp())
     slug = f"{symbol.lower()}-updown-15m-{ts}"
@@ -203,12 +211,13 @@ def get_window_times(symbol: str):
     """Get window start and end times in ET"""
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
     minute_slot = (now_et.minute // 15) * 15
-    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0)
+    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0
+)
     window_end_et = window_start_et + timedelta(minutes=15)
     return window_start_et, window_end_et
 
 def get_token_ids(symbol: str):
-    """Get UP and DOWN token IDs from Gamma API (YES/NO under the hood)"""
+    """Get UP and DOWN token IDs from Gamma API"""
     slug = get_current_slug(symbol)
     for attempt in range(1, 13):
         try:
@@ -220,10 +229,12 @@ def get_token_ids(symbol: str):
                     try:
                         clob_ids = json.loads(clob_ids)
                     except:
-                        clob_ids = [x.strip().strip('"') for x in clob_ids.strip("[]").split(",")]
+                        clob_ids = [x.strip().strip('"') for x in clob_ids.strip
+("[]").split(",")]
                 if isinstance(clob_ids, list) and len(clob_ids) >= 2:
-                    # przyjmujemy: clob_ids[0] = UP, clob_ids[1] = DOWN
-                    log(f"[{symbol}] Tokens found: UP {clob_ids[0][:10]}... | DOWN {clob_ids[1][:10]}...")
+                    # assume clob_ids[0] = UP, clob_ids[1] = DOWN
+                    log(f"[{symbol}] Tokens found: UP {clob_ids[0][:10]}... | DO
+WN {clob_ids[1][:10]}...")
                     return clob_ids[0], clob_ids[1]
         except Exception as e:
             log(f"[{symbol}] Error fetching tokens: {e}")
@@ -246,7 +257,8 @@ def get_funding_bias(symbol: str) -> float:
 def get_fear_greed() -> int:
     """Get Fear & Greed Index"""
     try:
-        return int(requests.get("https://api.alternative.me/fng/", timeout=5).json()["data"][0]["value"])
+        return int(requests.get("https://api.alternative.me/fng/", timeout=5).js
+on()["data"][0]["value"])
     except:
         return 50
 
@@ -265,110 +277,128 @@ def calculate_edge(symbol: str, up_token: str):
     except Exception as e:
         log(f"[{symbol}] Order book error: {e}")
         return 0.5, "order book error", 0.5, None, None, 0.5
-    
+
     if not bids or not asks:
         return 0.5, "empty order book", 0.5, None, None, 0.5
-    
-    # Get best prices (LAST elements - lists are sorted worst to best)
+
     best_bid = None
     best_ask = None
-    
+
     if bids:
-        best_bid = float(bids[-1].price) if hasattr(bids[-1], 'price') else float(bids[-1].get('price', 0))
+        best_bid = float(bids[-1].price) if hasattr(bids[-1], 'price') else floa
+t(bids[-1].get('price', 0))
     if asks:
-        best_ask = float(asks[-1].price) if hasattr(asks[-1], 'price') else float(asks[-1].get('price', 0))
-    
+        best_ask = float(asks[-1].price) if hasattr(asks[-1], 'price') else floa
+t(asks[-1].get('price', 0))
+
     if not best_bid or not best_ask:
         return 0.5, "no bid/ask", 0.5, best_bid, best_ask, 0.5
-    
+
     spread = best_ask - best_bid
     if spread > MAX_SPREAD:
         log(f"[{symbol}] Spread too wide: {spread:.2%}")
         return 0.5, f"spread {spread:.2%}", 0.5, best_bid, best_ask, 0.5
-    
+
     p_up = (best_bid + best_ask) / 2.0
     imbalance_raw = best_bid - (1.0 - best_ask)
     imbalance = max(min((imbalance_raw + 0.1) / 0.2, 1.0), 0.0)
-    
-    # Calculate edge: 70% price + 30% imbalance
+
+    # 70% price + 30% imbalance
     edge = 0.7 * p_up + 0.3 * imbalance
     edge += get_funding_bias(symbol)
-    
-    # Fear & Greed adjustment
+
     fg = get_fear_greed()
     if fg < 30:
-        edge += 0.03  # Extreme fear -> bullish bias (UP)
+        edge += 0.03  # extreme fear -> bullish bias (UP)
     elif fg > 70:
-        edge -= 0.03  # Extreme greed -> bearish bias (DOWN)
-    
-    log(f"[{symbol}] Edge calculation: p_up={p_up:.4f} bid={best_bid:.4f} ask={best_ask:.4f} imb={imbalance:.4f} edge={edge:.4f}")
+        edge -= 0.03  # extreme greed -> bearish bias (DOWN)
+
+    log(f"[{symbol}] Edge calculation: p_up={p_up:.4f} bid={best_bid:.4f} ask={b
+est_ask:.4f} imb={imbalance:.4f} edge={edge:.4f}")
     return edge, "OK", p_up, best_bid, best_ask, imbalance
 
 # ========================== BFXD TREND FILTER ==========================
 
 def bfxd_allows_trade(symbol: str, direction: str) -> bool:
     """
-    Zewnętrzny filtr trendu (BFXD_URL):
+    External BTC trend filter (BFXD_URL).
 
-    - działa tylko jeśli BFXD_URL jest ustawione,
-    - dotyczy tylko BTC (symbol == 'BTC'),
-    - zasady:
-        * jeśli trend BTC/USDT == 'UP'   -> pozwalaj TYLKO na UP, blokuj DOWN
-        * jeśli trend BTC/USDT == 'DOWN' -> pozwalaj TYLKO na DOWN, blokuj UP
-        * jeśli brak wpisu / błąd / dziwny trend -> pozwalaj na wszystko (brak filtra)
+    - Active only if BFXD_URL is set.
+    - Applies only to BTC markets (symbol == 'BTC').
+    - Rules:
+        * trend BTC/USDT == 'UP'   -> allow only UP, block DOWN
+        * trend BTC/USDT == 'DOWN' -> allow only DOWN, block UP
+        * missing/invalid/error    -> allow everything (no filter)
+    Additionally: logs WHAT we want to buy, WHAT trend was read, and IF it match
+es.
     """
-    if not BFXD_URL:
-        return True
-
     symbol_u = symbol.upper()
     direction_u = direction.upper()
 
+    if not BFXD_URL:
+        log(f"[{symbol}] BFXD: URL not set, skipping trend filter (side={directi
+on_u})")
+        return True
+
     if symbol_u != "BTC":
+        log(f"[{symbol}] BFXD: symbol {symbol_u} != BTC, skipping trend filter (
+side={direction_u})")
         return True
 
     try:
+        log(f"[{symbol}] BFXD: fetching trend from {BFXD_URL} for side={directio
+n_u}...")
         r = requests.get(BFXD_URL, timeout=5)
         r.raise_for_status()
         data = r.json()
+
         if not isinstance(data, dict):
-            log(f"[{symbol}] BFXD: invalid JSON (expected object), BUY allowed (no strict filter)")
+            log(f"[{symbol}] BFXD: invalid JSON (expected dict), allowing trade
+(side={direction_u})")
             return True
 
         trend = str(data.get("BTC/USDT", "")).upper()
         if not trend:
-            log(f"[{symbol}] BFXD: no BTC/USDT entry in trend map, BUY allowed")
+            log(f"[{symbol}] BFXD: no BTC/USDT entry, allowing trade (side={dire
+ction_u}, trend=None)")
             return True
 
         if trend not in ("UP", "DOWN"):
-            log(f"[{symbol}] BFXD: unknown trend '{trend}', BUY allowed")
+            log(f"[{symbol}] BFXD: unknown trend '{trend}', allowing trade (side
+={direction_u})")
             return True
 
-        if trend == direction_u:
-            log(f"[{symbol}] BFXD: trend BTC/USDT={trend}, direction={direction_u}, BUY allowed")
+        match = (trend == direction_u)
+        log(f"[{symbol}] BFXD: direction={direction_u}, trend={trend}, match={ma
+tch}")
+
+        if match:
+            log(f"[{symbol}] BFXD: trend agrees with side={direction_u}, trade a
+llowed")
             return True
         else:
-            log(f"[{symbol}] BFXD: trend BTC/USDT={trend}, direction={direction_u}, skipping BUY")
+            log(f"[{symbol}] BFXD: trend disagrees (trend={trend}, side={directi
+on_u}), trade BLOCKED")
             return False
 
     except Exception as e:
-        log(f"[{symbol}] BFXD: error fetching trend ({e}), BUY allowed (fallback)")
+        log(f"[{symbol}] BFXD: error fetching/parsing trend ({e}), allowing trad
+e (side={direction_u})")
         return True
 
 # ========================== ORDER MANAGER ==========================
 
 def place_order(token_id: str, price: float, size: float) -> dict:
-    """Place order on CLOB - using global client with hotfix for builder_config"""
+    """Place order on CLOB - using global client with hotfix for builder_config"
+""
     try:
         log(f"Placing order: {size} shares at ${price:.4f}")
-        
-        # Używamy globalnego klienta
+
         order_client = client
 
-        # Hotfix: dopilnuj, że obiekt ma builder_config
         if not hasattr(order_client, "builder_config"):
             order_client.builder_config = None
 
-        # (opcjonalnie) ustaw jeszcze raz API creds z .env, jeśli są
         api_key = os.getenv("API_KEY")
         api_secret = os.getenv("API_SECRET")
         api_passphrase = os.getenv("API_PASSPHRASE")
@@ -382,24 +412,20 @@ def place_order(token_id: str, price: float, size: float) -> dict:
                 order_client.set_api_creds(creds)
             except Exception as e:
                 log(f"⚠ Error setting API creds in place_order: {e}")
-        
-        # Create order arguments
+
         order_args = OrderArgs(
             token_id=token_id,
             price=price,
             size=size,
             side=BUY,
         )
-        
-        # Step 1: Create order (returns signed order ready to post)
+
         signed_order = order_client.create_order(order_args)
-        
-        # Step 2: Post the signed order
         resp = order_client.post_order(signed_order, OrderType.GTC)
-        
+
         status = resp.get("status", "UNKNOWN") if resp else "UNKNOWN"
         order_id = resp.get("orderID") if resp else None
-        
+
         log(f"✓ Order placed: {status} (ID: {order_id})")
         return {
             'success': True,
@@ -407,7 +433,7 @@ def place_order(token_id: str, price: float, size: float) -> dict:
             'order_id': order_id,
             'error': None
         }
-        
+
     except Exception as e:
         log(f"❌ Order error: {e}")
         import traceback
@@ -426,30 +452,33 @@ def check_and_settle_trades():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     now = datetime.now(tz=ZoneInfo('UTC'))
-    c.execute('SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)', (now.isoformat(),))
+    c.execute('SELECT id, symbol, slug, token_id, side, entry_price, size, bet_u
+sd FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)', (now.i
+soformat(),))
     unsettled = c.fetchall()
-    
+
     if not unsettled:
         log("ℹ No trades to settle")
         conn.close()
         return
-    
+
     log(f"📊 Settling {len(unsettled)} trades...")
     total_pnl = 0
-    
-    for trade_id, symbol, slug, token_id, side, entry_price, size, bet_usd in unsettled:
+
+    for trade_id, symbol, slug, token_id, side, entry_price, size, bet_usd in un
+settled:
         try:
-            # Get final price from order book
             book = client.get_order_book(token_id)
             bids = getattr(book, "bids", []) or []
             asks = getattr(book, "asks", []) or []
             if bids and asks:
-                final_price = (float(bids[-1].price if hasattr(bids[-1], 'price') else bids[-1].get('price', 0)) + 
-                              float(asks[-1].price if hasattr(asks[-1], 'price') else asks[-1].get('price', 0))) / 2.0
+                final_price = (float(bids[-1].price if hasattr(bids[-1], 'price'
+) else bids[-1].get('price', 0)) +
+                              float(asks[-1].price if hasattr(asks[-1], 'price')
+ else asks[-1].get('price', 0))) / 2.0
             else:
                 final_price = 0.5
-            
-            # Calculate PnL (simplified - uses market price as exit)
+
             side_u = (side or "").upper()
             if side_u in ("UP", "YES"):
                 exit_value = final_price
@@ -458,22 +487,26 @@ def check_and_settle_trades():
 
             pnl_usd = (exit_value * size) - bet_usd
             roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
-            
-            c.execute('UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=? WHERE id=?',
-                     ('PENDING', final_price, pnl_usd, roi_pct, now.isoformat(), trade_id))
-            
+
+            c.execute('UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=
+?, roi_pct=?, settled=1, settled_at=? WHERE id=?',
+                     ('PENDING', final_price, pnl_usd, roi_pct, now.isoformat(),
+ trade_id))
+
             emoji = "✅" if pnl_usd > 0 else "❌"
-            log(f"{emoji} Trade #{trade_id} [{symbol}] {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%)")
+            log(f"{emoji} Trade #{trade_id} [{symbol}] {side}: {pnl_usd:+.2f}$ (
+{roi_pct:+.1f}%)")
             total_pnl += pnl_usd
-            
+
         except Exception as e:
             log(f"⚠️ Error settling trade #{trade_id}: {e}")
-    
+
     conn.commit()
     conn.close()
-    
+
     if len(unsettled) > 0:
-        send_discord(f"📊 Settled {len(unsettled)} trades | Total PnL: ${total_pnl:+.2f}")
+        send_discord(f"📊 Settled {len(unsettled)} trades | Total PnL: ${total_p
+nl:+.2f}")
 
 # ========================== REPORTS ==========================
 
@@ -481,20 +514,22 @@ def generate_statistics():
     """Generate performance statistics report"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('SELECT COUNT(*), SUM(bet_usd), SUM(pnl_usd), AVG(roi_pct) FROM trades WHERE settled = 1')
+    c.execute('SELECT COUNT(*), SUM(bet_usd), SUM(pnl_usd), AVG(roi_pct) FROM tr
+ades WHERE settled = 1')
     result = c.fetchone()
     total_trades = result[0] or 0
-    
+
     if not total_trades:
         log("ℹ No settled trades for analysis")
         conn.close()
         return
-    
-    total_invested, total_pnl, avg_roi = result[1] or 0, result[2] or 0, result[3] or 0
+
+    total_invested, total_pnl, avg_roi = result[1] or 0, result[2] or 0, result[
+3] or 0
     c.execute('SELECT COUNT(*) FROM trades WHERE settled = 1 AND pnl_usd > 0')
     winning_trades = c.fetchone()[0]
     win_rate = (winning_trades / total_trades) * 100
-    
+
     report = []
     report.append("=" * 80)
     report.append("📊 POLYASTRA TRADING PERFORMANCE REPORT")
@@ -506,14 +541,15 @@ def generate_statistics():
     report.append(f"Average ROI:      {avg_roi:.2f}%")
     report.append(f"Total ROI:        {(total_pnl/total_invested)*100:.2f}%")
     report.append("=" * 80)
-    
+
     report_text = "\n".join(report)
     log(report_text)
-    
-    report_file = f"{REPORTS_DIR}/report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+
+    report_file = f"{REPORTS_DIR}/report_{datetime.now().strftime('%Y%m%d_%H%M%S
+')}.txt"
     with open(report_file, 'w') as f:
         f.write(report_text)
-    
+
     send_discord(f"📊 **PERFORMANCE REPORT**\n```\n{report_text}\n```")
     conn.close()
 
@@ -525,45 +561,66 @@ def trade_symbol(symbol: str):
     if not up_id or not down_id:
         log(f"[{symbol}] Market not found, skipping")
         return
-    
-    edge, reason, p_up, best_bid, best_ask, imbalance = calculate_edge(symbol, up_id)
+
+    edge, reason, p_up, best_bid, best_ask, imbalance = calculate_edge(symbol, u
+p_id)
     addr = Account.from_key(PROXY_PK).address
     balance = get_balance(addr)
-    
-    # Trading decision: UP / DOWN
-    if edge >= MIN_EDGE:
+
+    # ============================================================
+    # FIX: ODWRÓCONA LOGIKA - kupujemy NIEDOWARTOŚCIOWANĄ stronę
+    # ============================================================
+    # Wysoki edge (>= MIN_EDGE) = rynek wycenia UP wysoko = UP przewartościowane
+ = kupuj DOWN
+    # Niski edge (<= 1-MIN_EDGE) = rynek wycenia UP nisko = UP niedowartościowan
+e = kupuj UP
+    # ============================================================
+
+    if edge <= (1.0 - MIN_EDGE):
+        # Edge niski = UP jest tanie/niedowartościowane -> kupuj UP
         token_id, side, price = up_id, "UP", p_up
-    elif edge <= (1.0 - MIN_EDGE):
+        log(f"[{symbol}] LOW edge ({edge:.4f} <= {1.0-MIN_EDGE:.4f}) -> UP is un
+dervalued, buying UP")
+    elif edge >= MIN_EDGE:
+        # Edge wysoki = UP jest drogie/przewartościowane -> kupuj DOWN
         token_id, side, price = down_id, "DOWN", 1.0 - p_up
+        log(f"[{symbol}] HIGH edge ({edge:.4f} >= {MIN_EDGE:.4f}) -> UP is overv
+alued, buying DOWN")
     else:
-        log(f"[{symbol}] PASS | Edge {edge:.1%} (threshold: {MIN_EDGE:.1%}/{1-MIN_EDGE:.1%})")
+        log(f"[{symbol}] PASS | Edge {edge:.1%} in neutral zone ({1-MIN_EDGE:.1%
+} - {MIN_EDGE:.1%})")
         return
 
-    # BFXD trend filter: BTC, dopasowanie kierunku
+    # LOG: what we want to buy before trend filter
+    log(f"[{symbol}] Direction decision: side={side}, edge={edge:.4f}, p_up={p_u
+p:.4f}")
+
+    # BFXD trend filter (BTC only)
+    log(f"[{symbol}] BFXD check: side={side}, url={'set' if BFXD_URL else 'not s
+et'}")
     if not bfxd_allows_trade(symbol, side):
-        log(f"[{symbol}] BFXD filter prevented BUY (symbol={symbol}, side={side})")
+        log(f"[{symbol}] BFXD filter prevented trade (symbol={symbol}, side={sid
+e})")
         return
-    
+
     if price <= 0:
         log(f"[{symbol}] ERROR: Invalid price {price}")
         return
-    
-    # Clamp price to valid range
+
     price = max(0.01, min(0.99, price))
 
-    # Bazowy size wynikający z BET_USD
     size = round(BET_USD / price, 6)
 
-    # OPCJA C: wymuszamy min. 5 sztuk, kosztem większego realnego stake
     MIN_SIZE = 5.0
     bet_usd_effective = BET_USD
 
     if size < MIN_SIZE:
         old_size = size
         size = MIN_SIZE
-        bet_usd_effective = round(size * price, 4)  # realna kwota w USDC
+        bet_usd_effective = round(size * price, 4)
         log(
-            f"[{symbol}] Size {old_size:.4f} < min {MIN_SIZE}, bumping to {size:.4f}. "
+            f"[{symbol}] Size {old_size:.4f} < min {MIN_SIZE}, bumping to {size:
+.4f}. "
             f"Effective stake ≈ ${bet_usd_effective:.2f}"
         )
 
@@ -572,14 +629,13 @@ def trade_symbol(symbol: str):
         f"Price {price:.4f} | Size {size} | Balance {balance:.2f}"
     )
     send_discord(
-        f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Price {price:.4f}"
+        f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Pri
+ce {price:.4f}"
     )
-    
-    # Place order
+
     result = place_order(token_id, price, size)
     log(f"[{symbol}] Order status: {result['status']}")
-    
-    # Save to database – zapisujemy realny stake, nie bazowe BET_USD
+
     try:
         window_start, window_end = get_window_times(symbol)
         save_trade(
@@ -608,52 +664,53 @@ def trade_symbol(symbol: str):
 
 def main():
     """Main bot loop"""
-    log("🚀 Starting PolyAstra Trading Bot...")
+    log("🚀 Starting PolyAstra Trading Bot (FIXED VERSION)...")
+    log("📝 FIX: Reversed UP/DOWN logic - now buying undervalued side")
     setup_api_creds()
     init_database()
-    
+
     addr = Account.from_key(PROXY_PK).address
     log("=" * 90)
     log(f"🤖 POLYASTRA | Markets: {', '.join(MARKETS)}")
-    log(f"💼 Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC")
-    log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: ${BET_USD} | MAX_SPREAD: {MAX_SPREAD:.1%}")
+    log(f"💼 Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f
+} USDC")
+    log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: ${BET_USD} | MAX_SPREAD: {MAX_SPREA
+D:.1%}")
     log(f"🕒 WINDOW_DELAY_SEC: {WINDOW_DELAY_SEC}s")
     log("=" * 90)
-    
+
     cycle = 0
     while True:
         try:
-            # Calculate time until next 15-min window
             now = datetime.utcnow()
             wait = 900 - ((now.minute % 15) * 60 + now.second)
             if wait <= 0:
                 wait += 900
-            
-            log(f"⏱️  Waiting {wait}s until next window + {WINDOW_DELAY_SEC}s delay...")
-            time.sleep(wait + WINDOW_DELAY_SEC)  # konfigurowalny bufor po starcie okna
-            
-            log(f"\n{'='*90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*90}\n")
-            
-            # Trade all symbols
+
+            log(f"⏱️  Waiting {wait}s until next window + {WINDOW_DELAY_SEC}s del
+ay...")
+            time.sleep(wait + WINDOW_DELAY_SEC)
+
+            log(f"\n{'='*90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('
+%Y-%m-%d %H:%M:%S UTC')}\n{'='*90}\n")
+
             for sym in MARKETS:
                 trade_symbol(sym)
                 time.sleep(1)
-            
-            # Settle completed trades
+
             check_and_settle_trades()
             cycle += 1
-            
-            # Generate report every 4 hours (16 cycles)
+
             if cycle % 16 == 0:
                 log("\n📊 Generating performance report...")
                 generate_statistics()
-        
+
         except KeyboardInterrupt:
             log("\n⛔ Bot stopped by user")
             log("📊 Generating final report...")
             generate_statistics()
             break
-        
+
         except Exception as e:
             log(f"❌ Critical error: {e}")
             import traceback
