@@ -7,4 +7,4 @@ __pycache__/
 logs/
 trades.db
 .DS_Store
-
+public/
