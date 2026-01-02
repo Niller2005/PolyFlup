@@ -22,35 +22,49 @@ from py_clob_client.order_builder.constants import BUY
 
 # ========================== CONFIGURATION ==========================
 
-load_dotenv()
+try:
+    load_dotenv()
 
-BET_USD = float(os.getenv("BET_USD", "1.1"))
-MIN_EDGE = float(os.getenv("MIN_EDGE", "0.565"))
-MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.15"))
+    BET_USD = float(os.getenv("BET_USD", "1.1"))
+    MIN_EDGE = float(os.getenv("MIN_EDGE", "0.565"))
+    MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.15"))
 
-# ADX Filter Configuration
-ADX_ENABLED = os.getenv("ADX", "NO").upper() == "YES"
-ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "25.0"))
-ADX_INTERVAL = os.getenv("ADX_INTERVAL", "15m")  # Kline interval for ADX calculation
-ADX_PERIOD = int(os.getenv("ADX_PERIOD", "14"))  # ADX period (default 14)
+    # ADX Filter Configuration
+    ADX_ENABLED = os.getenv("ADX", "NO").upper() == "YES"
+    ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "25.0"))
+    ADX_INTERVAL = os.getenv(
+        "ADX_INTERVAL", "15m"
+    )  # Kline interval for ADX calculation
+    ADX_PERIOD = int(os.getenv("ADX_PERIOD", "14"))  # ADX period (default 14)
 
-# How many seconds after a 15m window starts we begin trading (default 12)
-WINDOW_DELAY_SEC = int(os.getenv("WINDOW_DELAY_SEC", "12"))
-if WINDOW_DELAY_SEC < 0:
-    WINDOW_DELAY_SEC = 0
-if WINDOW_DELAY_SEC > 300:
-    WINDOW_DELAY_SEC = 300  # simple safety limit
+    # How many seconds after a 15m window starts we begin trading (default 12)
+    WINDOW_DELAY_SEC = int(os.getenv("WINDOW_DELAY_SEC", "12"))
+    if WINDOW_DELAY_SEC < 0:
+        WINDOW_DELAY_SEC = 0
+    if WINDOW_DELAY_SEC > 300:
+        WINDOW_DELAY_SEC = 300  # simple safety limit
 
-MARKETS_ENV = os.getenv("MARKETS", "BTC,ETH,XRP,SOL")
-MARKETS = [m.strip().upper() for m in MARKETS_ENV.split(",") if m.strip()]
+    MARKETS_ENV = os.getenv("MARKETS", "BTC,ETH,XRP,SOL")
+    MARKETS = [m.strip().upper() for m in MARKETS_ENV.split(",") if m.strip()]
 
-PROXY_PK = os.getenv("PROXY_PK")
-FUNDER_PROXY = os.getenv("FUNDER_PROXY", "")
-DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
-BFXD_URL = os.getenv("BFXD_URL", "").strip()  # external trend filter (optional)
+    PROXY_PK = os.getenv("PROXY_PK")
+    FUNDER_PROXY = os.getenv("FUNDER_PROXY", "")
+    DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
+    BFXD_URL = os.getenv("BFXD_URL", "").strip()  # external trend filter (optional)
 
-if not PROXY_PK or not PROXY_PK.startswith("0x"):
-    raise SystemExit("Missing PROXY_PK in .env!")
+    if not PROXY_PK or not PROXY_PK.startswith("0x"):
+        print(
+            f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC')}] ❌ FATAL: Missing PROXY_PK in .env!",
+            flush=True,
+        )
+        raise SystemExit("Missing PROXY_PK in .env!")
+
+except Exception as e:
+    print(
+        f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC')}] ❌ STARTUP ERROR: {e}",
+        flush=True,
+    )
+    raise SystemExit(1)
 
 BINANCE_FUNDING_MAP = {
     "BTC": "BTCUSDT",
@@ -59,7 +73,7 @@ BINANCE_FUNDING_MAP = {
     "SOL": "SOLUSDT",
 }
 
-BASE_DIR = "/home/ubuntu/polyastra"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = f"{BASE_DIR}/logs/trades_2025.log"
 DB_FILE = f"{BASE_DIR}/trades.db"
 REPORTS_DIR = f"{BASE_DIR}/logs/reports"
@@ -74,15 +88,19 @@ USDC_ADDRESS = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359"
 
 # ========================== LOGGER ==========================
 
+
 def log(text: str) -> None:
     """Log message to console and file"""
-    line = f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC')}] {text}"
-    print(line)
+    line = (
+        f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC')}] {text}"
+    )
+    print(line, flush=True)
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     except Exception:
         pass
+
 
 def send_discord(msg: str) -> None:
     """Send notification to Discord webhook"""
@@ -93,9 +111,11 @@ def send_discord(msg: str) -> None:
     except Exception:
         pass
 
+
 # ========================== WEB3 ==========================
 
 w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
+
 
 def get_balance(addr: str) -> float:
     """Get USDC balance for address"""
@@ -106,6 +126,7 @@ def get_balance(addr: str) -> float:
         return raw / 1e6
     except Exception:
         return 0.0
+
 
 # ========================== CLOB CLIENT ==========================
 
@@ -121,6 +142,7 @@ client = ClobClient(
 if not hasattr(client, "builder_config"):
     client.builder_config = None
 
+
 def setup_api_creds() -> None:
     """Setup API credentials from .env or generate new ones"""
     api_key = os.getenv("API_KEY")
@@ -129,7 +151,9 @@ def setup_api_creds() -> None:
 
     if api_key and api_secret and api_passphrase:
         try:
-            creds = ApiCreds(api_key=api_key, api_secret=api_secret, api_passphrase=api_passphrase)
+            creds = ApiCreds(
+                api_key=api_key, api_secret=api_secret, api_passphrase=api_passphrase
+            )
             client.set_api_creds(creds)
             log("✓ API credentials loaded from .env")
             return
@@ -147,13 +171,15 @@ def setup_api_creds() -> None:
         log(f"❌ FATAL: API credentials error: {e}")
         raise
 
+
 # ========================== DATABASE ==========================
+
 
 def init_database():
     """Initialize SQLite database"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''
+    c.execute("""
         CREATE TABLE IF NOT EXISTS trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT, symbol TEXT, window_start TEXT, window_end TEXT,
@@ -163,37 +189,55 @@ def init_database():
             final_outcome TEXT, exit_price REAL, pnl_usd REAL, roi_pct REAL,
             settled BOOLEAN DEFAULT 0, settled_at TEXT
         )
-    ''')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_symbol ON trades(symbol)')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_settled ON trades(settled)')
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_symbol ON trades(symbol)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_settled ON trades(settled)")
     conn.commit()
     conn.close()
     log("✓ Database initialized")
+
 
 def save_trade(**kwargs):
     """Save trade to database"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('''
+    c.execute(
+        """
         INSERT INTO trades (timestamp, symbol, window_start, window_end, slug, token_id,
         side, edge, entry_price, size, bet_usd, p_yes, best_bid, best_ask,
         imbalance, funding_bias, order_status, order_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        datetime.now(tz=ZoneInfo('UTC')).isoformat(),
-        kwargs['symbol'], kwargs['window_start'], kwargs['window_end'],
-        kwargs['slug'], kwargs['token_id'], kwargs['side'], kwargs['edge'],
-        kwargs['price'], kwargs['size'], kwargs['bet_usd'], kwargs['p_yes'],
-        kwargs['best_bid'], kwargs['best_ask'], kwargs['imbalance'],
-        kwargs['funding_bias'], kwargs['order_status'], kwargs['order_id']
-    ))
+    """,
+        (
+            datetime.now(tz=ZoneInfo("UTC")).isoformat(),
+            kwargs["symbol"],
+            kwargs["window_start"],
+            kwargs["window_end"],
+            kwargs["slug"],
+            kwargs["token_id"],
+            kwargs["side"],
+            kwargs["edge"],
+            kwargs["price"],
+            kwargs["size"],
+            kwargs["bet_usd"],
+            kwargs["p_yes"],
+            kwargs["best_bid"],
+            kwargs["best_ask"],
+            kwargs["imbalance"],
+            kwargs["funding_bias"],
+            kwargs["order_status"],
+            kwargs["order_id"],
+        ),
+    )
     trade_id = c.lastrowid
     conn.commit()
     conn.close()
     log(f"✓ Trade #{trade_id} saved to database")
     return trade_id
 
+
 # ========================== MARKET DATA ==========================
+
 
 def get_current_slug(symbol: str) -> str:
     """Generate slug for current 15-minute window"""
@@ -206,6 +250,7 @@ def get_current_slug(symbol: str) -> str:
     log(f"[{symbol}] Window slug: {slug}")
     return slug
 
+
 def get_window_times(symbol: str):
     """Get window start and end times in ET"""
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
@@ -213,6 +258,7 @@ def get_window_times(symbol: str):
     window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0)
     window_end_et = window_start_et + timedelta(minutes=15)
     return window_start_et, window_end_et
+
 
 def get_token_ids(symbol: str):
     """Get UP and DOWN token IDs from Gamma API"""
@@ -227,16 +273,22 @@ def get_token_ids(symbol: str):
                     try:
                         clob_ids = json.loads(clob_ids)
                     except:
-                        clob_ids = [x.strip().strip('"') for x in clob_ids.strip("[]").split(",")]
+                        clob_ids = [
+                            x.strip().strip('"')
+                            for x in clob_ids.strip("[]").split(",")
+                        ]
                 if isinstance(clob_ids, list) and len(clob_ids) >= 2:
                     # assume clob_ids[0] = UP, clob_ids[1] = DOWN
-                    log(f"[{symbol}] Tokens found: UP {clob_ids[0][:10]}... | DOWN {clob_ids[1][:10]}...")
+                    log(
+                        f"[{symbol}] Tokens found: UP {clob_ids[0][:10]}... | DOWN {clob_ids[1][:10]}..."
+                    )
                     return clob_ids[0], clob_ids[1]
         except Exception as e:
             log(f"[{symbol}] Error fetching tokens: {e}")
         if attempt < 12:
             time.sleep(4)
     return None, None
+
 
 def get_funding_bias(symbol: str) -> float:
     """Get funding rate bias from Binance futures"""
@@ -250,22 +302,29 @@ def get_funding_bias(symbol: str) -> float:
     except:
         return 0.0
 
+
 def get_fear_greed() -> int:
     """Get Fear & Greed Index"""
     try:
-        return int(requests.get("https://api.alternative.me/fng/", timeout=5).json()["data"][0]["value"])
+        return int(
+            requests.get("https://api.alternative.me/fng/", timeout=5).json()["data"][
+                0
+            ]["value"]
+        )
     except:
         return 50
 
+
 # ========================== ADX CALCULATION ==========================
+
 
 def get_adx_from_binance(symbol: str) -> float:
     """
     Fetch klines from Binance and calculate ADX for symbol/USDT pair using ta library.
-    
+
     Args:
         symbol: Trading symbol (e.g., 'BTC', 'ETH')
-    
+
     Returns:
         ADX value (0-100) or -1.0 on error
     """
@@ -275,64 +334,79 @@ def get_adx_from_binance(symbol: str) -> float:
     except ImportError:
         log(f"[{symbol}] ADX: Missing 'ta' library. Install with: pip install ta")
         return -1.0
-    
+
     pair = BINANCE_FUNDING_MAP.get(symbol.upper())
     if not pair:
         log(f"[{symbol}] ADX: No Binance mapping found for symbol")
         return -1.0
-    
+
     try:
         # Need enough klines for ADX calculation (at least 2*period + buffer)
         limit = ADX_PERIOD * 3 + 10
         url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval={ADX_INTERVAL}&limit={limit}"
-        
-        log(f"[{symbol}] ADX: Fetching klines from Binance ({pair}, {ADX_INTERVAL}, limit={limit})...")
-        
+
+        log(
+            f"[{symbol}] ADX: Fetching klines from Binance ({pair}, {ADX_INTERVAL}, limit={limit})..."
+        )
+
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         klines = response.json()
-        
+
         if not klines or len(klines) < ADX_PERIOD * 2:
             log(f"[{symbol}] ADX: Insufficient klines data (got {len(klines)})")
             return -1.0
-        
+
         # Convert to DataFrame
-        df = pd.DataFrame(klines, columns=[
-            'open_time', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
-            'taker_buy_quote', 'ignore'
-        ])
-        
+        df = pd.DataFrame(
+            klines,
+            columns=[
+                "open_time",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "close_time",
+                "quote_volume",
+                "trades",
+                "taker_buy_base",
+                "taker_buy_quote",
+                "ignore",
+            ],
+        )
+
         # Convert to numeric
-        df['high'] = pd.to_numeric(df['high'])
-        df['low'] = pd.to_numeric(df['low'])
-        df['close'] = pd.to_numeric(df['close'])
-        
+        df["high"] = pd.to_numeric(df["high"])
+        df["low"] = pd.to_numeric(df["low"])
+        df["close"] = pd.to_numeric(df["close"])
+
         # Calculate ADX using ta library
         adx_indicator = ADXIndicator(
-            high=df['high'],
-            low=df['low'],
-            close=df['close'],
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
             window=ADX_PERIOD,
-            fillna=False
+            fillna=False,
         )
-        
+
         adx_series = adx_indicator.adx()
         adx_value = adx_series.iloc[-1]
-        
+
         if pd.isna(adx_value):
             log(f"[{symbol}] ADX: Calculated value is NaN")
             return -1.0
-        
+
         log(f"[{symbol}] ADX: Calculated value = {adx_value:.2f}")
         return float(adx_value)
-        
+
     except requests.RequestException as e:
         log(f"[{symbol}] ADX: Binance API error: {e}")
         return -1.0
     except Exception as e:
         log(f"[{symbol}] ADX: Unexpected error: {e}")
         import traceback
+
         log(traceback.format_exc())
         return -1.0
 
@@ -340,33 +414,39 @@ def get_adx_from_binance(symbol: str) -> float:
 def adx_allows_trade(symbol: str) -> bool:
     """
     Check if ADX filter allows trade for given symbol.
-    
+
     Returns True if:
     - ADX filter is disabled (ADX != YES)
     - ADX value is >= ADX_THRESHOLD
     - ADX calculation failed (fail-open for safety)
-    
+
     Returns False if:
     - ADX filter is enabled AND ADX value < ADX_THRESHOLD
     """
     if not ADX_ENABLED:
         log(f"[{symbol}] ADX: Filter disabled, allowing trade")
         return True
-    
+
     adx_value = get_adx_from_binance(symbol)
-    
+
     if adx_value < 0:
         log(f"[{symbol}] ADX: Could not calculate ADX, allowing trade (fail-open)")
         return True
-    
+
     if adx_value >= ADX_THRESHOLD:
-        log(f"[{symbol}] ADX: {adx_value:.2f} >= {ADX_THRESHOLD:.2f} threshold, ALLOWING trade")
+        log(
+            f"[{symbol}] ADX: {adx_value:.2f} >= {ADX_THRESHOLD:.2f} threshold, ALLOWING trade"
+        )
         return True
     else:
-        log(f"[{symbol}] ADX: {adx_value:.2f} < {ADX_THRESHOLD:.2f} threshold, BLOCKING trade (weak trend)")
+        log(
+            f"[{symbol}] ADX: {adx_value:.2f} < {ADX_THRESHOLD:.2f} threshold, BLOCKING trade (weak trend)"
+        )
         return False
 
+
 # ========================== STRATEGY ==========================
+
 
 def calculate_edge(symbol: str, up_token: str):
     """Calculate edge for trading decision (UP leg as reference)"""
@@ -389,9 +469,17 @@ def calculate_edge(symbol: str, up_token: str):
     best_ask = None
 
     if bids:
-        best_bid = float(bids[-1].price) if hasattr(bids[-1], 'price') else float(bids[-1].get('price', 0))
+        best_bid = (
+            float(bids[-1].price)
+            if hasattr(bids[-1], "price")
+            else float(bids[-1].get("price", 0))
+        )
     if asks:
-        best_ask = float(asks[-1].price) if hasattr(asks[-1], 'price') else float(asks[-1].get('price', 0))
+        best_ask = (
+            float(asks[-1].price)
+            if hasattr(asks[-1], "price")
+            else float(asks[-1].get("price", 0))
+        )
 
     if not best_bid or not best_ask:
         return 0.5, "no bid/ask", 0.5, best_bid, best_ask, 0.5
@@ -415,10 +503,14 @@ def calculate_edge(symbol: str, up_token: str):
     elif fg > 70:
         edge -= 0.03  # extreme greed -> bearish bias (DOWN)
 
-    log(f"[{symbol}] Edge calculation: p_up={p_up:.4f} bid={best_bid:.4f} ask={best_ask:.4f} imb={imbalance:.4f} edge={edge:.4f}")
+    log(
+        f"[{symbol}] Edge calculation: p_up={p_up:.4f} bid={best_bid:.4f} ask={best_ask:.4f} imb={imbalance:.4f} edge={edge:.4f}"
+    )
     return edge, "OK", p_up, best_bid, best_ask, imbalance
 
+
 # ========================== BFXD TREND FILTER ==========================
+
 
 def bfxd_allows_trade(symbol: str, direction: str) -> bool:
     """
@@ -440,43 +532,59 @@ def bfxd_allows_trade(symbol: str, direction: str) -> bool:
         return True
 
     if symbol_u != "BTC":
-        log(f"[{symbol}] BFXD: symbol {symbol_u} != BTC, skipping trend filter (side={direction_u})")
+        log(
+            f"[{symbol}] BFXD: symbol {symbol_u} != BTC, skipping trend filter (side={direction_u})"
+        )
         return True
 
     try:
-        log(f"[{symbol}] BFXD: fetching trend from {BFXD_URL} for side={direction_u}...")
+        log(
+            f"[{symbol}] BFXD: fetching trend from {BFXD_URL} for side={direction_u}..."
+        )
         r = requests.get(BFXD_URL, timeout=5)
         r.raise_for_status()
         data = r.json()
 
         if not isinstance(data, dict):
-            log(f"[{symbol}] BFXD: invalid JSON (expected dict), allowing trade (side={direction_u})")
+            log(
+                f"[{symbol}] BFXD: invalid JSON (expected dict), allowing trade (side={direction_u})"
+            )
             return True
 
         trend = str(data.get("BTC/USDT", "")).upper()
         if not trend:
-            log(f"[{symbol}] BFXD: no BTC/USDT entry, allowing trade (side={direction_u}, trend=None)")
+            log(
+                f"[{symbol}] BFXD: no BTC/USDT entry, allowing trade (side={direction_u}, trend=None)"
+            )
             return True
 
         if trend not in ("UP", "DOWN"):
-            log(f"[{symbol}] BFXD: unknown trend '{trend}', allowing trade (side={direction_u})")
+            log(
+                f"[{symbol}] BFXD: unknown trend '{trend}', allowing trade (side={direction_u})"
+            )
             return True
 
-        match = (trend == direction_u)
+        match = trend == direction_u
         log(f"[{symbol}] BFXD: direction={direction_u}, trend={trend}, match={match}")
 
         if match:
             log(f"[{symbol}] BFXD: trend agrees with side={direction_u}, trade allowed")
             return True
         else:
-            log(f"[{symbol}] BFXD: trend disagrees (trend={trend}, side={direction_u}), trade BLOCKED")
+            log(
+                f"[{symbol}] BFXD: trend disagrees (trend={trend}, side={direction_u}), trade BLOCKED"
+            )
             return False
 
     except Exception as e:
-        log(f"[{symbol}] BFXD: error fetching/parsing trend ({e}), allowing trade (side={direction_u})")
+        log(
+            f"[{symbol}] BFXD: error fetching/parsing trend ({e}), allowing trade (side={direction_u})"
+        )
         return True
 
+
 # ========================== ORDER MANAGER ==========================
+
 
 def place_order(token_id: str, price: float, size: float) -> dict:
     """Place order on CLOB - using global client with hotfix for builder_config"""
@@ -496,7 +604,7 @@ def place_order(token_id: str, price: float, size: float) -> dict:
                 creds = ApiCreds(
                     api_key=api_key,
                     api_secret=api_secret,
-                    api_passphrase=api_passphrase
+                    api_passphrase=api_passphrase,
                 )
                 order_client.set_api_creds(creds)
             except Exception as e:
@@ -516,32 +624,28 @@ def place_order(token_id: str, price: float, size: float) -> dict:
         order_id = resp.get("orderID") if resp else None
 
         log(f"✓ Order placed: {status} (ID: {order_id})")
-        return {
-            'success': True,
-            'status': status,
-            'order_id': order_id,
-            'error': None
-        }
+        return {"success": True, "status": status, "order_id": order_id, "error": None}
 
     except Exception as e:
         log(f"❌ Order error: {e}")
         import traceback
+
         log(traceback.format_exc())
-        return {
-            'success': False,
-            'status': 'ERROR',
-            'order_id': None,
-            'error': str(e)
-        }
+        return {"success": False, "status": "ERROR", "order_id": None, "error": str(e)}
+
 
 # ========================== SETTLEMENT ==========================
+
 
 def check_and_settle_trades():
     """Check and settle completed trades"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    now = datetime.now(tz=ZoneInfo('UTC'))
-    c.execute('SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)', (now.isoformat(),))
+    now = datetime.now(tz=ZoneInfo("UTC"))
+    c.execute(
+        "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)",
+        (now.isoformat(),),
+    )
     unsettled = c.fetchall()
 
     if not unsettled:
@@ -558,8 +662,18 @@ def check_and_settle_trades():
             bids = getattr(book, "bids", []) or []
             asks = getattr(book, "asks", []) or []
             if bids and asks:
-                final_price = (float(bids[-1].price if hasattr(bids[-1], 'price') else bids[-1].get('price', 0)) +
-                              float(asks[-1].price if hasattr(asks[-1], 'price') else asks[-1].get('price', 0))) / 2.0
+                final_price = (
+                    float(
+                        bids[-1].price
+                        if hasattr(bids[-1], "price")
+                        else bids[-1].get("price", 0)
+                    )
+                    + float(
+                        asks[-1].price
+                        if hasattr(asks[-1], "price")
+                        else asks[-1].get("price", 0)
+                    )
+                ) / 2.0
             else:
                 final_price = 0.5
 
@@ -572,11 +686,15 @@ def check_and_settle_trades():
             pnl_usd = (exit_value * size) - bet_usd
             roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
-            c.execute('UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=? WHERE id=?',
-                     ('PENDING', final_price, pnl_usd, roi_pct, now.isoformat(), trade_id))
+            c.execute(
+                "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=? WHERE id=?",
+                ("PENDING", final_price, pnl_usd, roi_pct, now.isoformat(), trade_id),
+            )
 
             emoji = "✅" if pnl_usd > 0 else "❌"
-            log(f"{emoji} Trade #{trade_id} [{symbol}] {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%)")
+            log(
+                f"{emoji} Trade #{trade_id} [{symbol}] {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%)"
+            )
             total_pnl += pnl_usd
 
         except Exception as e:
@@ -586,15 +704,21 @@ def check_and_settle_trades():
     conn.close()
 
     if len(unsettled) > 0:
-        send_discord(f"📊 Settled {len(unsettled)} trades | Total PnL: ${total_pnl:+.2f}")
+        send_discord(
+            f"📊 Settled {len(unsettled)} trades | Total PnL: ${total_pnl:+.2f}"
+        )
+
 
 # ========================== REPORTS ==========================
+
 
 def generate_statistics():
     """Generate performance statistics report"""
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
-    c.execute('SELECT COUNT(*), SUM(bet_usd), SUM(pnl_usd), AVG(roi_pct) FROM trades WHERE settled = 1')
+    c.execute(
+        "SELECT COUNT(*), SUM(bet_usd), SUM(pnl_usd), AVG(roi_pct) FROM trades WHERE settled = 1"
+    )
     result = c.fetchone()
     total_trades = result[0] or 0
 
@@ -604,7 +728,7 @@ def generate_statistics():
         return
 
     total_invested, total_pnl, avg_roi = result[1] or 0, result[2] or 0, result[3] or 0
-    c.execute('SELECT COUNT(*) FROM trades WHERE settled = 1 AND pnl_usd > 0')
+    c.execute("SELECT COUNT(*) FROM trades WHERE settled = 1 AND pnl_usd > 0")
     winning_trades = c.fetchone()[0]
     win_rate = (winning_trades / total_trades) * 100
 
@@ -617,20 +741,22 @@ def generate_statistics():
     report.append(f"Total PnL:        ${total_pnl:.2f}")
     report.append(f"Total invested:   ${total_invested:.2f}")
     report.append(f"Average ROI:      {avg_roi:.2f}%")
-    report.append(f"Total ROI:        {(total_pnl/total_invested)*100:.2f}%")
+    report.append(f"Total ROI:        {(total_pnl / total_invested) * 100:.2f}%")
     report.append("=" * 80)
 
     report_text = "\n".join(report)
     log(report_text)
 
     report_file = f"{REPORTS_DIR}/report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    with open(report_file, 'w') as f:
+    with open(report_file, "w") as f:
         f.write(report_text)
 
     send_discord(f"📊 **PERFORMANCE REPORT**\n```\n{report_text}\n```")
     conn.close()
 
+
 # ========================== MAIN TRADING ==========================
+
 
 def trade_symbol(symbol: str):
     """Execute trading logic for a symbol"""
@@ -653,13 +779,19 @@ def trade_symbol(symbol: str):
     if edge <= (1.0 - MIN_EDGE):
         # Edge niski = UP jest tanie/niedowartościowane -> kupuj UP
         token_id, side, price = up_id, "UP", p_up
-        log(f"[{symbol}] LOW edge ({edge:.4f} <= {1.0-MIN_EDGE:.4f}) -> UP is undervalued, buying UP")
+        log(
+            f"[{symbol}] LOW edge ({edge:.4f} <= {1.0 - MIN_EDGE:.4f}) -> UP is undervalued, buying UP"
+        )
     elif edge >= MIN_EDGE:
         # Edge wysoki = UP jest drogie/przewartościowane -> kupuj DOWN
         token_id, side, price = down_id, "DOWN", 1.0 - p_up
-        log(f"[{symbol}] HIGH edge ({edge:.4f} >= {MIN_EDGE:.4f}) -> UP is overvalued, buying DOWN")
+        log(
+            f"[{symbol}] HIGH edge ({edge:.4f} >= {MIN_EDGE:.4f}) -> UP is overvalued, buying DOWN"
+        )
     else:
-        log(f"[{symbol}] PASS | Edge {edge:.1%} in neutral zone ({1-MIN_EDGE:.1%} - {MIN_EDGE:.1%})")
+        log(
+            f"[{symbol}] PASS | Edge {edge:.1%} in neutral zone ({1 - MIN_EDGE:.1%} - {MIN_EDGE:.1%})"
+        )
         return
 
     # LOG: what we want to buy before trend filter
@@ -668,7 +800,9 @@ def trade_symbol(symbol: str):
     # ADX trend strength filter (applies to all symbols)
     log(f"[{symbol}] ADX check: enabled={ADX_ENABLED}, threshold={ADX_THRESHOLD}")
     if not adx_allows_trade(symbol):
-        log(f"[{symbol}] ADX filter prevented trade (symbol={symbol}, side={side}) - weak trend")
+        log(
+            f"[{symbol}] ADX filter prevented trade (symbol={symbol}, side={side}) - weak trend"
+        )
         return
 
     # BFXD trend filter (BTC only)
@@ -683,10 +817,14 @@ def trade_symbol(symbol: str):
 
     price = max(0.01, min(0.99, price))
 
-    size = round(BET_USD / price, 6)
+    # Use 5% of available balance instead of fixed BET_USD
+    target_bet = balance * 0.05
+    log(f"[{symbol}] Target bet: ${target_bet:.2f} (5% of ${balance:.2f})")
+
+    size = round(target_bet / price, 6)
 
     MIN_SIZE = 5.0
-    bet_usd_effective = BET_USD
+    bet_usd_effective = target_bet
 
     if size < MIN_SIZE:
         old_size = size
@@ -726,19 +864,23 @@ def trade_symbol(symbol: str):
             best_ask=best_ask,
             imbalance=imbalance,
             funding_bias=get_funding_bias(symbol),
-            order_status=result['status'],
-            order_id=result['order_id'],
+            order_status=result["status"],
+            order_id=result["order_id"],
         )
     except Exception as e:
         log(f"[{symbol}] Database error: {e}")
 
+
 # ========================== MAIN ==========================
+
 
 def main():
     """Main bot loop"""
     log("🚀 Starting PolyAstra Trading Bot (FIXED VERSION + ADX Filter)...")
     log("📝 FIX: Reversed UP/DOWN logic - now buying undervalued side")
-    log(f"📊 ADX Filter: {'ENABLED' if ADX_ENABLED else 'DISABLED'} (threshold={ADX_THRESHOLD}, period={ADX_PERIOD}, interval={ADX_INTERVAL})")
+    log(
+        f"📊 ADX Filter: {'ENABLED' if ADX_ENABLED else 'DISABLED'} (threshold={ADX_THRESHOLD}, period={ADX_PERIOD}, interval={ADX_INTERVAL})"
+    )
     setup_api_creds()
     init_database()
 
@@ -748,7 +890,9 @@ def main():
     log(f"💼 Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC")
     log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: ${BET_USD} | MAX_SPREAD: {MAX_SPREAD:.1%}")
     log(f"🕒 WINDOW_DELAY_SEC: {WINDOW_DELAY_SEC}s")
-    log(f"📈 ADX: {'YES' if ADX_ENABLED else 'NO'} | Threshold: {ADX_THRESHOLD} | Period: {ADX_PERIOD} | Interval: {ADX_INTERVAL}")
+    log(
+        f"📈 ADX: {'YES' if ADX_ENABLED else 'NO'} | Threshold: {ADX_THRESHOLD} | Period: {ADX_PERIOD} | Interval: {ADX_INTERVAL}"
+    )
     log("=" * 90)
 
     cycle = 0
@@ -762,7 +906,9 @@ def main():
             log(f"⏱️  Waiting {wait}s until next window + {WINDOW_DELAY_SEC}s delay...")
             time.sleep(wait + WINDOW_DELAY_SEC)
 
-            log(f"\n{'='*90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'='*90}\n")
+            log(
+                f"\n{'=' * 90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'=' * 90}\n"
+            )
 
             for sym in MARKETS:
                 trade_symbol(sym)
@@ -784,9 +930,11 @@ def main():
         except Exception as e:
             log(f"❌ Critical error: {e}")
             import traceback
+
             log(traceback.format_exc())
             send_discord(f"❌ Error: {e}")
             time.sleep(60)
+
 
 if __name__ == "__main__":
     main()

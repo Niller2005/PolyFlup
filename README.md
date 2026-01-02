@@ -43,6 +43,58 @@ and places **UP / DOWN** bets based on:
 
 ---
 
+## Requirements
+
+- **Option A (Docker):** Docker & Docker Compose installed.
+- **Option B (Local):** Python 3.10+ and [uv](https://github.com/astral-sh/uv) installed.
+- Access to Polymarket via:
+  - a **proxy wallet private key** on Polygon (`PROXY_PK`),
+  - optionally a `FUNDER_PROXY` address.
+- Sufficient **USDC on Polygon** on the proxy wallet.
+
+---
+
+## Installation & Usage
+
+### 1. Configuration
+First, copy the example environment file and configure your credentials:
+
+```bash
+cp .env.example .env
+# Edit .env and fill in PROXY_PK and other settings
+```
+
+### 2. Running with Docker (Recommended)
+This runs the bot, a background dashboard generator, and a local web dashboard.
+
+```bash
+docker-compose up -d --build
+```
+
+- **View Logs:** `docker-compose logs -f polyastra`
+- **View Dashboard:** Open [http://localhost:8000](http://localhost:8000)
+
+### 3. Running Locally with uv
+If you prefer running directly on your machine:
+
+1. **Install dependencies:**
+   ```bash
+   uv sync
+   ```
+
+2. **Run the bot:**
+   ```bash
+   uv run polyastra.py
+   ```
+
+3. **(Optional) Run dashboard generator:**
+   To generate the dashboard HTML file in the `public/` directory:
+   ```bash
+   uv run generate_dashboard.py
+   ```
+
+---
+
 ## How it works (high level)
 
 1. Time is divided into **15-minute slots**:  
@@ -68,14 +120,3 @@ and places **UP / DOWN** bets based on:
      for a DOWN position: exit value ≈ `1 - final_price`,
    - calculates PnL in USDC and ROI, then marks trades as settled in SQLite.
 4. Every N cycles (e.g. every ~4 hours) and on shutdown, the bot generates a performance report.
-
----
-
-## Requirements
-
-- Python **3.10+**
-- Access to Polymarket via:
-  - a **proxy wallet private key** on Polygon (`PROXY_PK`),
-  - optionally a `FUNDER_PROXY` address.
-- Sufficient **USDC on Polygon** on the proxy wallet.
-- Internet access (Gamma API, CLOB, Binance, Fear & Greed API, optional BFXD).

@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+.ruff_cache/
+logs/
+trades.db
+.DS_Store
+

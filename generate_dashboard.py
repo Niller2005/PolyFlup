@@ -3,15 +3,20 @@
 PolyAstra Dashboard Generator
 Creates interactive HTML dashboard for viewing trading statistics
 Run: python3 generate_dashboard.py
-View: http://your-server-ip:8000/dashboard.html
+View: http://your-server-ip:8000/
 """
 
 import sqlite3
 import json
 from datetime import datetime
 
-DB_FILE = "/home/ubuntu/polyastra/trades.db"
-OUTPUT_FILE = "/home/ubuntu/polyastra/dashboard.html"
+import os
+import sys
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(BASE_DIR, "trades.db")
+OUTPUT_FILE = os.path.join(BASE_DIR, "public", "index.html")
+
 
 def get_stats():
     """Fetch all statistics from database"""
@@ -19,7 +24,7 @@ def get_stats():
     c = conn.cursor()
 
     # Summary statistics
-    c.execute('''
+    c.execute("""
         SELECT
             COUNT(*) as total,
             SUM(CASE WHEN settled = 1 THEN 1 ELSE 0 END) as settled,
@@ -28,11 +33,11 @@ def get_stats():
             SUM(CASE WHEN settled = 1 THEN pnl_usd ELSE 0 END) as total_pnl,
             AVG(CASE WHEN settled = 1 THEN roi_pct ELSE NULL END) as avg_roi
         FROM trades
-    ''')
+    """)
     summary = c.fetchone()
 
     # Per symbol statistics
-    c.execute('''
+    c.execute("""
         SELECT symbol,
             COUNT(*) as trades,
             SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END) as wins,
@@ -42,11 +47,11 @@ def get_stats():
         WHERE settled = 1
         GROUP BY symbol
         ORDER BY pnl DESC
-    ''')
+    """)
     per_symbol = c.fetchall()
 
     # Per side statistics
-    c.execute('''
+    c.execute("""
         SELECT side,
             COUNT(*) as trades,
             SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END) as wins,
@@ -55,57 +60,68 @@ def get_stats():
         FROM trades
         WHERE settled = 1
         GROUP BY side
-    ''')
+    """)
     per_side = c.fetchall()
 
     # Recent trades
-    c.execute('''
+    c.execute("""
         SELECT id, timestamp, symbol, side, edge, entry_price,
                pnl_usd, roi_pct, settled, order_status
         FROM trades
         ORDER BY id DESC
         LIMIT 50
-    ''')
+    """)
     recent_trades = c.fetchall()
 
     # PnL history for chart
-    c.execute('''
+    c.execute("""
         SELECT timestamp, pnl_usd
         FROM trades
         WHERE settled = 1
         ORDER BY timestamp ASC
-    ''')
+    """)
     pnl_history = c.fetchall()
 
     conn.close()
 
     return {
-        'summary': summary,
-        'per_symbol': per_symbol,
-        'per_side': per_side,
-        'recent_trades': recent_trades,
-        'pnl_history': pnl_history
+        "summary": summary,
+        "per_symbol": per_symbol,
+        "per_side": per_side,
+        "recent_trades": recent_trades,
+        "pnl_history": pnl_history,
     }
+
 
 def generate_html(stats):
     """Generate HTML dashboard"""
 
-    total, settled, wins, invested, total_pnl, avg_roi = stats['summary']
+    total, settled, wins, invested, total_pnl, avg_roi = stats["summary"]
+
+    # Handle None values
+    total = total or 0
+    settled = settled or 0
+    wins = wins or 0
+    invested = invested or 0.0
+    total_pnl = total_pnl or 0.0
+    avg_roi = avg_roi or 0.0
+
     win_rate = (wins / settled * 100) if settled > 0 else 0
     total_roi = (total_pnl / invested * 100) if invested > 0 else 0
 
     # Prepare chart data
     cumulative_pnl = []
     cumsum = 0
-    for timestamp, pnl in stats['pnl_history']:
+    for timestamp, pnl in stats["pnl_history"]:
         cumsum += pnl
-        cumulative_pnl.append({'time': timestamp, 'pnl': cumsum})
+        cumulative_pnl.append({"time": timestamp, "pnl": cumsum})
 
-    html = f'''<!DOCTYPE html>
+    html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="refresh" content="60">
     <title>PolyAstra Trading Dashboard</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0"></script>
     <style>
@@ -293,7 +309,7 @@ def generate_html(stats):
     <div class="container">
         <div class="header">
             <h1>🤖 PolyAstra Trading Dashboard</h1>
-            <div class="last-update">Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</div>
+            <div class="last-update">Last updated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")}</div>
         </div>
 
         <div class="stats-grid">
@@ -307,15 +323,15 @@ def generate_html(stats):
             </div>
             <div class="stat-card">
                 <div class="stat-label">Win Rate</div>
-                <div class="stat-value {'positive' if win_rate >= 50 else 'negative'}">{win_rate:.1f}%</div>
+                <div class="stat-value {"positive" if win_rate >= 50 else "negative"}">{win_rate:.1f}%</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Total PnL</div>
-                <div class="stat-value {'positive' if total_pnl >= 0 else 'negative'}">${total_pnl:.2f}</div>
+                <div class="stat-value {"positive" if total_pnl >= 0 else "negative"}">${total_pnl:.2f}</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Total ROI</div>
-                <div class="stat-value {'positive' if total_roi >= 0 else 'negative'}">{total_roi:.1f}%</div>
+                <div class="stat-value {"positive" if total_roi >= 0 else "negative"}">{total_roi:.1f}%</div>
             </div>
             <div class="stat-card">
                 <div class="stat-label">Avg ROI</div>
@@ -347,12 +363,12 @@ def generate_html(stats):
                     </tr>
                 </thead>
                 <tbody>
-'''
+"""
 
     # Add per-symbol statistics
-    for symbol, trades, wins, pnl, roi in stats['per_symbol']:
-        wr = (wins/trades*100) if trades > 0 else 0
-        pnl_class = 'positive' if pnl >= 0 else 'negative'
+    for symbol, trades, wins, pnl, roi in stats["per_symbol"]:
+        wr = (wins / trades * 100) if trades > 0 else 0
+        pnl_class = "positive" if pnl >= 0 else "negative"
         html += f'''
                     <tr>
                         <td><strong>{symbol}</strong></td>
@@ -364,7 +380,7 @@ def generate_html(stats):
                     </tr>
 '''
 
-    html += '''
+    html += """
                 </tbody>
             </table>
         </div>
@@ -386,15 +402,26 @@ def generate_html(stats):
                     </tr>
                 </thead>
                 <tbody>
-'''
+"""
 
     # Add recent trades
-    for trade_id, timestamp, symbol, side, edge, price, pnl, roi, settled, status in stats['recent_trades']:
+    for (
+        trade_id,
+        timestamp,
+        symbol,
+        side,
+        edge,
+        price,
+        pnl,
+        roi,
+        settled,
+        status,
+    ) in stats["recent_trades"]:
         pnl_display = f"${pnl:.2f}" if settled else "-"
         roi_display = f"{roi:.1f}%" if settled else "-"
-        pnl_class = 'positive' if (pnl and pnl > 0) else 'negative'
-        status_badge = 'settled' if settled else 'pending'
-        time_str = timestamp.split('T')[1][:8] if 'T' in timestamp else timestamp
+        pnl_class = "positive" if (pnl and pnl > 0) else "negative"
+        status_badge = "settled" if settled else "pending"
+        time_str = timestamp.split("T")[1][:8] if "T" in timestamp else timestamp
 
         html += f'''
                     <tr>
@@ -402,22 +429,25 @@ def generate_html(stats):
                         <td>{time_str}</td>
                         <td><strong>{symbol}</strong></td>
                         <td><span class="badge {side.lower()}">{side}</span></td>
-                        <td>{edge*100:.1f}%</td>
+                        <td>{edge * 100:.1f}%</td>
                         <td>${price:.4f}</td>
                         <td class="{pnl_class}">{pnl_display}</td>
                         <td>{roi_display}</td>
-                        <td><span class="badge {status_badge}">{'✓' if settled else '⏳'}</span></td>
+                        <td><span class="badge {status_badge}">{"✓" if settled else "⏳"}</span></td>
                     </tr>
 '''
 
     # Prepare chart data
-    cumulative_labels = [item['time'].split('T')[0] + ' ' + item['time'].split('T')[1][:5] for item in cumulative_pnl]
-    cumulative_data = [item['pnl'] for item in cumulative_pnl]
+    cumulative_labels = [
+        item["time"].split("T")[0] + " " + item["time"].split("T")[1][:5]
+        for item in cumulative_pnl
+    ]
+    cumulative_data = [item["pnl"] for item in cumulative_pnl]
 
-    symbol_labels = [row[0] for row in stats['per_symbol']]
-    symbol_pnl = [row[3] for row in stats['per_symbol']]
+    symbol_labels = [row[0] for row in stats["per_symbol"]]
+    symbol_pnl = [row[3] for row in stats["per_symbol"]]
 
-    html += f'''
+    html += f"""
                 </tbody>
             </table>
         </div>
@@ -484,9 +514,10 @@ def generate_html(stats):
         }});
     </script>
 </body>
-</html>'''
+</html>"""
 
     return html
+
 
 def main():
     print("🚀 Generating PolyAstra dashboard...")
@@ -494,21 +525,24 @@ def main():
         stats = get_stats()
         html = generate_html(stats)
 
-        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
+        os.makedirs(os.path.dirname(OUTPUT_FILE), exist_ok=True)
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
             f.write(html)
 
         print(f"✅ Dashboard generated: {OUTPUT_FILE}")
         print("\n📊 To view:")
         print("1. cd /home/ubuntu/polyastra")
         print("2. python3 -m http.server 8000")
-        print("3. Open: http://YOUR_SERVER_IP:8000/dashboard.html")
+        print("3. Open: http://YOUR_SERVER_IP:8000/")
         print("\n🔄 Auto-refresh: Add to crontab:")
         print("*/5 * * * * cd /home/ubuntu/polyastra && python3 generate_dashboard.py")
 
     except Exception as e:
         print(f"❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     main()
