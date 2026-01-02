@@ -780,17 +780,17 @@ def trade_symbol(symbol: str, balance: float):
         # Edge niski = UP jest tanie/niedowartościowane -> kupuj UP
         token_id, side, price = up_id, "UP", p_up
         log(
-            f"[{symbol}] LOW edge ({edge:.4f} <= {1.0 - MIN_EDGE:.4f}) -> UP is undervalued, buying UP"
+            f"[{symbol}] 📉 LOW edge ({edge:.4f} <= {1.0 - MIN_EDGE:.4f}) -> UP is undervalued, buying UP"
         )
     elif edge >= MIN_EDGE:
         # Edge wysoki = UP jest drogie/przewartościowane -> kupuj DOWN
         token_id, side, price = down_id, "DOWN", 1.0 - p_up
         log(
-            f"[{symbol}] HIGH edge ({edge:.4f} >= {MIN_EDGE:.4f}) -> UP is overvalued, buying DOWN"
+            f"[{symbol}] 📈 HIGH edge ({edge:.4f} >= {MIN_EDGE:.4f}) -> UP is overvalued, buying DOWN"
         )
     else:
         log(
-            f"[{symbol}] PASS | Edge {edge:.1%} in neutral zone ({1 - MIN_EDGE:.1%} - {MIN_EDGE:.1%})"
+            f"[{symbol}] ⚪ PASS | Edge {edge:.1%} in neutral zone ({1 - MIN_EDGE:.1%} - {MIN_EDGE:.1%})"
         )
         return
 
@@ -798,7 +798,7 @@ def trade_symbol(symbol: str, balance: float):
     log(f"[{symbol}] Direction decision: side={side}, edge={edge:.4f}, p_up={p_up:.4f}")
 
     # ADX trend strength filter (applies to all symbols)
-    log(f"[{symbol}] ADX check: enabled={ADX_ENABLED}, threshold={ADX_THRESHOLD}")
+    log(f"[{symbol}] 📊 ADX check: enabled={ADX_ENABLED}, threshold={ADX_THRESHOLD}")
     if not adx_allows_trade(symbol):
         log(
             f"[{symbol}] ADX filter prevented trade (symbol={symbol}, side={side}) - weak trend"
@@ -806,7 +806,9 @@ def trade_symbol(symbol: str, balance: float):
         return
 
     # BFXD trend filter (BTC only)
-    log(f"[{symbol}] BFXD check: side={side}, url={'set' if BFXD_URL else 'not set'}")
+    log(
+        f"[{symbol}] 🔍 BFXD check: side={side}, url={'set' if BFXD_URL else 'not set'}"
+    )
     if not bfxd_allows_trade(symbol, side):
         log(f"[{symbol}] BFXD filter prevented trade (symbol={symbol}, side={side})")
         return
@@ -819,7 +821,7 @@ def trade_symbol(symbol: str, balance: float):
 
     # Use 5% of available balance instead of fixed BET_USD
     target_bet = balance * 0.05
-    log(f"[{symbol}] Target bet: ${target_bet:.2f} (5% of ${balance:.2f})")
+    log(f"[{symbol}] 🎯 Target bet: ${target_bet:.2f} (5% of ${balance:.2f})")
 
     size = round(target_bet / price, 6)
 
@@ -923,6 +925,7 @@ def main():
             log(f"💰 Current Balance: {current_balance:.2f} USDC")
 
             for sym in MARKETS:
+                log(f"\n{'=' * 30} {sym} {'=' * 30}")
                 trade_symbol(sym, current_balance)
                 time.sleep(1)
 
