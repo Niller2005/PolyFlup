@@ -1,5 +1,6 @@
 services:
   polyastra:
+    container_name: polyastra-bot
     build: .
     # Mount the current directory to /app so logs and DB are persisted locally
     volumes:
@@ -12,6 +13,7 @@ services:
     restart: unless-stopped
 
   dashboard:
+    container_name: polyastra-generate-dashboard
     build: .
     volumes:
       - .:/app
@@ -26,6 +28,7 @@ services:
     restart: unless-stopped
 
   nginx:
+    container_name: polyastra-dashboard
     image: nginx:alpine
     ports:
       - "8000:80"
