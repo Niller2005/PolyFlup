@@ -766,7 +766,12 @@ def trade_symbol(symbol: str):
         return
 
     edge, reason, p_up, best_bid, best_ask, imbalance = calculate_edge(symbol, up_id)
-    addr = Account.from_key(PROXY_PK).address
+
+    if FUNDER_PROXY and FUNDER_PROXY.startswith("0x"):
+        addr = FUNDER_PROXY
+    else:
+        addr = Account.from_key(PROXY_PK).address
+
     balance = get_balance(addr)
 
     # ============================================================
@@ -884,10 +889,18 @@ def main():
     setup_api_creds()
     init_database()
 
-    addr = Account.from_key(PROXY_PK).address
+    if FUNDER_PROXY and FUNDER_PROXY.startswith("0x"):
+        addr = FUNDER_PROXY
+        log_addr_type = "Funder"
+    else:
+        addr = Account.from_key(PROXY_PK).address
+        log_addr_type = "Proxy"
+
     log("=" * 90)
     log(f"🤖 POLYASTRA | Markets: {', '.join(MARKETS)}")
-    log(f"💼 Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC")
+    log(
+        f"💼 Wallet ({log_addr_type}): {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC"
+    )
     log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: ${BET_USD} | MAX_SPREAD: {MAX_SPREAD:.1%}")
     log(f"🕒 WINDOW_DELAY_SEC: {WINDOW_DELAY_SEC}s")
     log(
