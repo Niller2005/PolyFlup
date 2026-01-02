@@ -801,7 +801,7 @@ def trade_symbol(symbol: str, balance: float):
     log(f"[{symbol}] 📊 ADX check: enabled={ADX_ENABLED}, threshold={ADX_THRESHOLD}")
     if not adx_allows_trade(symbol):
         log(
-            f"[{symbol}] ADX filter prevented trade (symbol={symbol}, side={side}) - weak trend"
+            f"[{symbol}] ⛔ ADX FILTER BLOCKED TRADE (symbol={symbol}, side={side}) - Weak Trend ⛔"
         )
         return
 
@@ -810,7 +810,9 @@ def trade_symbol(symbol: str, balance: float):
         f"[{symbol}] 🔍 BFXD check: side={side}, url={'set' if BFXD_URL else 'not set'}"
     )
     if not bfxd_allows_trade(symbol, side):
-        log(f"[{symbol}] BFXD filter prevented trade (symbol={symbol}, side={side})")
+        log(
+            f"[{symbol}] ⛔ BFXD FILTER BLOCKED TRADE (symbol={symbol}, side={side}) ⛔"
+        )
         return
 
     if price <= 0:
