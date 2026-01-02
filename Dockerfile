@@ -1,27 +1,37 @@
-FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim
+# Stage 1: Builder
+FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS builder
+
+# Configure uv
+ENV UV_COMPILE_BYTECODE=1
+ENV UV_LINK_MODE=copy
+ENV UV_PROJECT_ENVIRONMENT="/venv"
+
+WORKDIR /app
+
+# Copy dependency files
+COPY uv.lock pyproject.toml ./
+
+# Install dependencies into /venv
+RUN uv sync --frozen --no-install-project --no-dev
+
+# Stage 2: Runner
+FROM python:3.11-slim-bookworm
 
 # Set working directory
 WORKDIR /app
 
-# Configure uv to use a specific location for the virtual environment
-# This allows us to mount the local directory to /app without hiding the venv
-ENV UV_PROJECT_ENVIRONMENT="/uv-venv"
-ENV PATH="/uv-venv/bin:$PATH"
+# Copy virtual environment from builder
+# We place it outside /app so that binding local directory to /app doesn't overwrite it
+COPY --from=builder /venv /venv
 
-# Enable bytecode compilation
-ENV UV_COMPILE_BYTECODE=1
+# Add virtual environment to PATH
+ENV PATH="/venv/bin:$PATH"
 
-# Ensure python output is sent straight to terminal (e.g. container logs) without being buffered
+# Set environment variables
 ENV PYTHONUNBUFFERED=1
 
-# Copy dependency files first to leverage cache
-COPY uv.lock pyproject.toml ./
-
-# Install dependencies using uv
-RUN uv sync --frozen --no-install-project
-
-# Copy the rest of the application
+# Copy application code
 COPY . .
 
-# Run the application
-CMD ["uv", "run", "polyastra.py"]
+# Run the application using the venv python directly (no uv run needed)
+CMD ["python", "polyastra.py"]
