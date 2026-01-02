@@ -760,7 +760,7 @@ def generate_statistics():
 # ========================== MAIN TRADING ==========================
 
 
-def trade_symbol(symbol: str):
+def trade_symbol(symbol: str, balance: float):
     """Execute trading logic for a symbol"""
     up_id, down_id = get_token_ids(symbol)
     if not up_id or not down_id:
@@ -768,13 +768,6 @@ def trade_symbol(symbol: str):
         return
 
     edge, reason, p_up, best_bid, best_ask, imbalance = calculate_edge(symbol, up_id)
-
-    if FUNDER_PROXY and FUNDER_PROXY.startswith("0x"):
-        addr = FUNDER_PROXY
-    else:
-        addr = Account.from_key(PROXY_PK).address
-
-    balance = get_balance(addr)
 
     # ============================================================
     # FIX: ODWRÓCONA LOGIKA - kupujemy NIEDOWARTOŚCIOWANĄ stronę
@@ -925,8 +918,12 @@ def main():
                 f"\n{'=' * 90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'=' * 90}\n"
             )
 
+            # Fetch balance once for the cycle
+            current_balance = get_balance(addr)
+            log(f"💰 Current Balance: {current_balance:.2f} USDC")
+
             for sym in MARKETS:
-                trade_symbol(sym)
+                trade_symbol(sym, current_balance)
                 time.sleep(1)
 
             check_and_settle_trades()
