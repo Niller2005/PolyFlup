@@ -1,4 +1,4 @@
-<script>
+<script lang="ts">
     import { onMount } from 'svelte';
     import { Activity, TrendingUp, Award, ShieldAlert, Target, RefreshCw, Clock, Wallet, Percent, ArrowUpRight, ArrowDownRight, Sun, Moon } from 'lucide-svelte';
     import * as Card from "$lib/components/ui/card/index.js";
@@ -7,6 +7,7 @@
     import { Button } from "$lib/components/ui/button/index.js";
     import * as Chart from "$lib/components/ui/chart/index.js";
     import { AreaChart, BarChart } from "layerchart";
+    import { scaleBand } from "d3-scale";
     import { theme } from "$lib/stores/theme.js";
 
     let stats = null;
@@ -48,27 +49,32 @@
         let cumsum = 0;
         stats.pnl_history.forEach(h => {
             cumsum += h.pnl_usd;
-            data.push({ date: new Date(h.timestamp), pnl: cumsum });
+            data.push({ 
+                date: new Date(h.timestamp), 
+                pnl: cumsum,
+                color: cumsum >= 0 ? "var(--color-chart-2)" : "var(--color-chart-5)"
+            });
         });
         return data.slice(-50);
     })() : [];
 
     $: assetData = stats ? stats.per_symbol.map(s => ({
         symbol: s.symbol,
-        pnl: s.pnl
+        pnl: s.pnl,
+        color: s.pnl >= 0 ? "var(--color-chart-2)" : "var(--color-chart-5)"
     })) : [];
 
     const pnlConfig = {
         pnl: {
-            label: "PnL ($)",
-            color: "var(--color-primary)"
+            label: "Cumulative PnL",
+            color: "var(--color-chart-2)"
         }
     };
 
     const assetConfig = {
         pnl: {
-            label: "PnL ($)",
-            color: "var(--color-primary)"
+            label: "PnL",
+            color: "var(--color-chart-1)"
         }
     };
 </script>
@@ -199,9 +205,34 @@
                                     data={pnlData} 
                                     x="date" 
                                     y="pnl"
-                                    axis="y"
+                                    axis="x"
                                     grid
-                                />
+                                    props={{
+                                        xAxis: {
+                                            format: (d) => {
+                                                const date = new Date(d);
+                                                return `${date.getMonth() + 1}/${date.getDate()}`;
+                                            }
+                                        }
+                                    }}
+                                >
+                                    {#snippet tooltip()}
+                                        <Chart.Tooltip 
+                                            labelFormatter={(value) => {
+                                                if (value instanceof Date) {
+                                                    return value.toLocaleDateString('en-US', { 
+                                                        month: 'short', 
+                                                        day: 'numeric',
+                                                        hour: '2-digit',
+                                                        minute: '2-digit'
+                                                    });
+                                                }
+                                                return String(value);
+                                            }}
+                                            indicator="line"
+                                        />
+                                    {/snippet}
+                                </AreaChart>
                             </Chart.Container>
                         </div>
                     </Card.Content>
@@ -220,11 +251,26 @@
                             <Chart.Container config={assetConfig} class="h-full w-full">
                                 <BarChart 
                                     data={assetData} 
+                                    xScale={scaleBand().padding(0.3)}
                                     x="symbol" 
                                     y="pnl"
-                                    axis="y"
+                                    axis="x"
                                     grid
-                                />
+                                    props={{
+                                        xAxis: {
+                                            format: (d) => d.length > 10 ? d.slice(0, 10) + '...' : d
+                                        },
+                                        bar: {
+                                            fill: (d) => d.color
+                                        }
+                                    }}
+                                >
+                                    {#snippet tooltip()}
+                                        <Chart.Tooltip 
+                                            indicator="dot"
+                                        />
+                                    {/snippet}
+                                </BarChart>
                             </Chart.Container>
                         </div>
                     </Card.Content>
