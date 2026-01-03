@@ -168,83 +168,40 @@ def calculate_edge(symbol: str, up_token: str, client: ClobClient):
     # Clamp edge to reasonable range
     edge = max(0.0, min(1.0, edge))
 
-    log(f"[{symbol}] Edge calculation:")
-    log(
-        f"  Base: p_up={p_up:.4f} bid={best_bid:.4f} ask={best_ask:.4f} imb={imbalance:.4f}"
-    )
-
-    if ENABLE_MOMENTUM_FILTER and "momentum" in signals:
-        m = signals["momentum"]
-        log(
-            f"  Momentum: dir={m['direction']} str={m['strength']:.3f} adj={momentum_adjustment:+.4f}"
-        )
-
-    if ENABLE_ORDER_FLOW and "order_flow" in signals:
-        of = signals["order_flow"]
-        log(
-            f"  OrderFlow: buy_pressure={of['buy_pressure']:.3f} adj={flow_adjustment:+.4f}"
-        )
-
-    if ENABLE_DIVERGENCE and "divergence" in signals:
-        div = signals["divergence"]
-        log(
-            f"  Divergence: opp={div['opportunity']} div={div['divergence']:.3f} adj={divergence_adjustment:+.4f}"
-        )
-
-    if ENABLE_VWM and "vwm" in signals:
-        v = signals["vwm"]
-        log(
-            f"  VWM: dist={v['vwap_distance']:.3f}% quality={v['momentum_quality']:.3f} adj={vwm_adjustment:+.4f}"
-        )
-
-    log(f"  Final edge={edge:.4f}")
-
     return edge, "OK", p_up, best_bid, best_ask, imbalance, signals
 
 
-def adx_allows_trade(symbol: str) -> bool:
+def adx_allows_trade(symbol: str) -> tuple[bool, float]:
     """Check if ADX filter allows trade"""
     if not ADX_ENABLED:
-        log(f"[{symbol}]   ↳ ADX filter disabled")
-        return True
+        return True, -1.0
 
     adx_value = get_adx_from_binance(symbol)
 
     if adx_value < 0:
-        log(f"[{symbol}]   ↳ ADX calculation failed, allowing trade (fail-open)")
-        return True
+        return True, -1.0
 
     if adx_value >= ADX_THRESHOLD:
-        log(
-            f"[{symbol}]   ↳ ADX={adx_value:.2f} >= {ADX_THRESHOLD:.2f} ✅ Strong trend"
-        )
-        return True
+        return True, adx_value
     else:
-        log(f"[{symbol}]   ↳ ADX={adx_value:.2f} < {ADX_THRESHOLD:.2f} ❌ Weak trend")
-        return False
+        return False, adx_value
 
 
-def bfxd_allows_trade(symbol: str, direction: str) -> bool:
+def bfxd_allows_trade(symbol: str, direction: str) -> tuple[bool, str]:
     """
-    External BTC trend filter (LEGACY - mostly redundant with new Binance integration)
-
-    NOTE: This filter is now optional and disabled by default. The new Binance integration
-    (momentum, order flow, divergence) provides more comprehensive and granular trend analysis.
+    External BTC trend filter
     """
     if not ENABLE_BFXD:
-        log(f"[{symbol}]   ↳ BFXD filter disabled")
-        return True
+        return True, "DISABLED"
 
     symbol_u = symbol.upper()
     direction_u = direction.upper()
 
     if not BFXD_URL:
-        log(f"[{symbol}]   ↳ BFXD URL not set, skipping filter")
-        return True
+        return True, "NO_URL"
 
     if symbol_u != "BTC":
-        log(f"[{symbol}]   ↳ BFXD only applies to BTC, skipping for {symbol_u}")
-        return True
+        return True, "N/A"
 
     try:
         r = requests.get(BFXD_URL, timeout=5)
@@ -252,27 +209,17 @@ def bfxd_allows_trade(symbol: str, direction: str) -> bool:
         data = r.json()
 
         if not isinstance(data, dict):
-            log(f"[{symbol}]   ↳ BFXD invalid response, allowing trade")
-            return True
+            return True, "INVALID"
 
         trend = str(data.get("BTC/USDT", "")).upper()
         if not trend:
-            log(f"[{symbol}]   ↳ BFXD no trend data, allowing trade")
-            return True
+            return True, "NONE"
 
         if trend not in ("UP", "DOWN"):
-            log(f"[{symbol}]   ↳ BFXD unknown trend '{trend}', allowing trade")
-            return True
+            return True, f"UNK({trend})"
 
         match = trend == direction_u
-
-        if match:
-            log(f"[{symbol}]   ↳ BFXD trend={trend}, side={direction_u} ✅ Match")
-            return True
-        else:
-            log(f"[{symbol}]   ↳ BFXD trend={trend}, side={direction_u} ❌ Mismatch")
-            return False
+        return match, trend
 
     except Exception as e:
-        log(f"[{symbol}]   ↳ BFXD error ({e}), allowing trade")
-        return True
+        return True, f"ERR({str(e)[:10]})"

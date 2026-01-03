@@ -116,7 +116,7 @@ def check_open_positions(verbose: bool = True):
 
             if verbose:
                 log(
-                    f"  [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PriceChange={price_change_pct:+.1f}% PnL={pnl_pct:+.1f}%"
+                    f"  [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={pnl_pct:+.1f}%"
                 )
 
             # Calculate time left until window ends
@@ -166,9 +166,7 @@ def check_open_positions(verbose: bool = True):
             # Check stop loss using price change percentage
             # This correctly handles both UP (loss when price drops) and DOWN (loss when price rises)
             if ENABLE_STOP_LOSS and price_change_pct <= -STOP_LOSS_PERCENT:
-                log(
-                    f"🛑 STOP LOSS triggered for trade #{trade_id}: {price_change_pct:.1f}% price move against position"
-                )
+                log(f"🛑 STOP LOSS trade #{trade_id}: {price_change_pct:.1f}% move")
 
                 # Sell current position
                 sell_result = sell_position(token_id, size, current_price)
@@ -202,29 +200,22 @@ def check_open_positions(verbose: bool = True):
 
                             if side == "DOWN" and current_spot > target_price:
                                 should_reverse = True
-                                log(
-                                    f"🔄 DOWN position losing: current ${current_spot:,.2f} > target ${target_price:,.2f}"
-                                )
+                                reason = f"current ${current_spot:,.2f} > target ${target_price:,.2f}"
                             elif side == "UP" and current_spot < target_price:
                                 should_reverse = True
-                                log(
-                                    f"🔄 UP position losing: current ${current_spot:,.2f} < target ${target_price:,.2f}"
-                                )
+                                reason = f"current ${current_spot:,.2f} < target ${target_price:,.2f}"
                             else:
-                                log(
-                                    f"✋ Position is winning based on target price - NOT reversing"
-                                )
-                                log(
-                                    f"   Side: {side}, Current: ${current_spot:,.2f}, Target: ${target_price:,.2f}"
-                                )
+                                should_reverse = False
 
                             if should_reverse:
-                                log(f"🔄 Reversing position for [{symbol}]...")
+                                opposite_side = "DOWN" if side == "UP" else "UP"
+                                log(
+                                    f"🔄 Reversing [{symbol}] {side} → {opposite_side} (Current ${current_spot:,.0f} vs Target ${target_price:,.0f})"
+                                )
                                 # Get opposite token ID
                                 up_id, down_id = get_token_ids(symbol)
                                 if up_id and down_id:
                                     opposite_token = down_id if side == "UP" else up_id
-                                    opposite_side = "DOWN" if side == "UP" else "UP"
                                     opposite_price = 1.0 - current_price
 
                                     # Place reverse order with same size
@@ -232,9 +223,6 @@ def check_open_positions(verbose: bool = True):
                                         opposite_token, opposite_price, size
                                     )
                                     if reverse_result["success"]:
-                                        log(
-                                            f"✅ Reversed to {opposite_side} @ ${opposite_price:.4f}"
-                                        )
                                         send_discord(
                                             f"🔄 **REVERSED** [{symbol}] {side} → {opposite_side} (Target: ${target_price:,.2f}, Current: ${current_spot:,.2f})"
                                         )
@@ -269,9 +257,8 @@ def check_open_positions(verbose: bool = True):
                                                 is_reversal=True,
                                                 target_price=target_price,
                                             )
-                                            log(f"✓ Reversed trade saved to database")
                                         except Exception as e:
-                                            log(f"⚠️ Error saving reversed trade: {e}")
+                                            log(f"⚠️ DB Error (reversal): {e}")
                         else:
                             log(
                                 f"⚠️ Could not fetch current spot price for reversal decision"

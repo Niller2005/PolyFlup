@@ -21,9 +21,7 @@ def get_current_slug(symbol: str) -> str:
     window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0)
     window_start_utc = window_start_et.astimezone(ZoneInfo("UTC"))
     ts = int(window_start_utc.timestamp())
-    slug = f"{symbol.lower()}-updown-15m-{ts}"
-    log(f"[{symbol}] Window slug: {slug}")
-    return slug
+    return f"{symbol.lower()}-updown-15m-{ts}"
 
 
 def get_window_times(symbol: str):
@@ -53,9 +51,6 @@ def get_token_ids(symbol: str):
                             for x in clob_ids.strip("[]").split(",")
                         ]
                 if isinstance(clob_ids, list) and len(clob_ids) >= 2:
-                    log(
-                        f"[{symbol}] Tokens found: UP {clob_ids[0][:10]}... | DOWN {clob_ids[1][:10]}..."
-                    )
                     return clob_ids[0], clob_ids[1]
         except Exception as e:
             log(f"[{symbol}] Error fetching tokens: {e}")
@@ -324,10 +319,6 @@ def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
         direction = "UP" if velocity > 0 else "DOWN" if velocity < 0 else "NEUTRAL"
         strength = min(abs(velocity) / 2.0, 1.0)  # Normalize to 0-1 (2% = max strength)
 
-        log(
-            f"[{symbol}] Momentum: vel={velocity:.3f}% acc={acceleration:.3f}% RSI={rsi:.1f} dir={direction} str={strength:.3f}"
-        )
-
         return {
             "velocity": velocity,
             "acceleration": acceleration,
@@ -435,10 +426,6 @@ def get_order_flow_analysis(symbol: str) -> dict:
 
         # Calculate trade intensity (trades per minute)
         trade_intensity = df["trades"].mean()
-
-        log(
-            f"[{symbol}] OrderFlow: buy_pressure={buy_pressure:.3f} vol_ratio={volume_ratio:.3f} dir={large_trade_direction} intensity={trade_intensity:.0f}"
-        )
 
         return {
             "buy_pressure": buy_pressure,
@@ -566,10 +553,6 @@ def get_cross_exchange_divergence(symbol: str, polymarket_p_up: float) -> dict:
         else:
             opportunity = "NEUTRAL"
 
-        log(
-            f"[{symbol}] Divergence: Binance={binance_direction} ({binance_implied_p_up:.3f}) Poly={polymarket_direction} ({polymarket_p_up:.3f}) div={divergence:.3f} opp={opportunity}"
-        )
-
         return {
             "binance_direction": binance_direction,
             "polymarket_direction": polymarket_direction,
@@ -686,10 +669,6 @@ def get_volume_weighted_momentum(symbol: str) -> dict:
             min(abs(volume_normalized) / 2.0, 1.0)
             if price_direction * volume_normalized > 0
             else 0.0
-        )
-
-        log(
-            f"[{symbol}] VWM: vwap_dist={vwap_distance:.3f}% vol_trend={volume_trend} quality={momentum_quality:.3f}"
         )
 
         return {

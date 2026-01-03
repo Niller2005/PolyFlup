@@ -53,11 +53,9 @@ from src.trading.settlement import check_and_settle_trades
 
 def trade_symbol(symbol: str, balance: float):
     """Execute trading logic for a symbol"""
-    log(f"\n🔍 [{symbol}] EVALUATING MARKET...")
-
     up_id, down_id = get_token_ids(symbol)
     if not up_id or not down_id:
-        log(f"[{symbol}] ❌ Market not found, skipping")
+        log(f"[{symbol}] ❌ Market not found")
         return
 
     client = get_clob_client()
@@ -65,99 +63,63 @@ def trade_symbol(symbol: str, balance: float):
         symbol, up_id, client
     )
 
-    # ============================================================
-    # STRATEGY LOGIC
-    # ============================================================
-    # High edge (>= MIN_EDGE) = UP is overvalued -> Buy DOWN
-    # Low edge (<= 1-MIN_EDGE) = UP is undervalued -> Buy UP
-    # ============================================================
-
+    # Determine bias
     if edge <= (1.0 - MIN_EDGE):
-        token_id, side, price = up_id, "UP", p_up
-        log(
-            f"[{symbol}] 📉 LOW edge ({edge:.4f} <= {1.0 - MIN_EDGE:.4f}) -> UP is undervalued, buying UP"
-        )
+        token_id, side, price, bias_text = up_id, "UP", p_up, "UP Undervalued"
     elif edge >= MIN_EDGE:
-        token_id, side, price = down_id, "DOWN", 1.0 - p_up
-        log(
-            f"[{symbol}] 📈 HIGH edge ({edge:.4f} >= {MIN_EDGE:.4f}) -> UP is overvalued, buying DOWN"
-        )
+        token_id, side, price, bias_text = down_id, "DOWN", 1.0 - p_up, "UP Overvalued"
     else:
-        log(
-            f"[{symbol}] ⚪ BLOCKED: Edge {edge:.1%} in neutral zone ({1 - MIN_EDGE:.1%} - {MIN_EDGE:.1%}) - NO TRADE"
-        )
+        log(f"[{symbol}] ⚪ Edge: {edge:.1%} (Neutral) - NO TRADE")
         return
 
-    # LOG: what we want to buy before trend filter
-    log(f"[{symbol}] Direction decision: side={side}, edge={edge:.4f}, p_up={p_up:.4f}")
+    # Check filters
+    adx_ok, adx_val = adx_allows_trade(symbol)
+    bfxd_ok, bfxd_trend = bfxd_allows_trade(symbol, side)
 
-    # ADX trend strength filter
-    log(
-        f"[{symbol}] 📊 Checking ADX filter (enabled={ADX_ENABLED}, threshold={ADX_THRESHOLD})..."
-    )
-    if not adx_allows_trade(symbol):
-        log(
-            f"[{symbol}] ⛔ BLOCKED BY ADX: Weak trend detected (side={side}) - NO TRADE ⛔"
-        )
+    # RSI from signals
+    rsi = signals.get("momentum", {}).get("rsi", 50.0)
+
+    status_icon = "✅" if (adx_ok and bfxd_ok) else "❌"
+    filter_text = f"ADX: {adx_val:.1f} {'✅' if adx_ok else '❌'}"
+    if ENABLE_BFXD and symbol == "BTC":
+        filter_text += f" | BFXD: {bfxd_trend} {'✅' if bfxd_ok else '❌'}"
+
+    core_summary = f"Edge: {edge:.1%} ({bias_text}) | {filter_text} | RSI: {rsi:.1f}"
+
+    if not adx_ok or not bfxd_ok:
+        log(f"[{symbol}] ⛔ {core_summary} | status: BLOCKED")
         return
-    log(f"[{symbol}] ✅ PASSED ADX filter")
 
-    # BFXD trend filter (optional legacy filter)
-    if ENABLE_BFXD:
-        log(f"[{symbol}] 🔍 Checking BFXD trend filter (side={side})...")
-        if not bfxd_allows_trade(symbol, side):
-            log(
-                f"[{symbol}] ⛔ BLOCKED BY BFXD: Trend disagrees with {side} - NO TRADE ⛔"
-            )
-            return
-        log(f"[{symbol}] ✅ PASSED BFXD filter")
-    else:
-        log(f"[{symbol}] ↷ BFXD filter disabled (using Binance integration instead)")
+    log(f"[{symbol}] ✅ {core_summary} | status: ENTERING TRADE")
 
     if price <= 0:
         log(f"[{symbol}] ERROR: Invalid price {price}")
         return
 
     price = max(0.01, min(0.99, price))
-
-    # Use BET_PERCENT of available balance
     target_bet = balance * (BET_PERCENT / 100.0)
-    log(
-        f"[{symbol}] 🎯 Target bet: ${target_bet:.2f} ({BET_PERCENT}% of ${balance:.2f})"
-    )
-
     size = round(target_bet / price, 6)
 
     MIN_SIZE = 5.0
     bet_usd_effective = target_bet
 
     if size < MIN_SIZE:
-        old_size = size
         size = MIN_SIZE
         bet_usd_effective = round(size * price, 4)
-        log(
-            f"[{symbol}] Size {old_size:.4f} < min {MIN_SIZE}, bumping to {size:.4f}. "
-            f"Effective stake ≈ ${bet_usd_effective:.2f}"
-        )
 
-    log(f"[{symbol}] ✅ ALL FILTERS PASSED - ENTERING TRADE!")
     log(
-        f"[{symbol}] 🚀 TRADE: {side} ${bet_usd_effective:.2f} | Edge {edge:.1%} | "
-        f"Price {price:.4f} | Size {size} | Balance {balance:.2f}"
+        f"[{symbol}] 🚀 TRADE: {side} ${bet_usd_effective:.2f} @ {price:.4f} | Size {size}"
     )
     send_discord(
         f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Price {price:.4f}"
     )
 
     result = place_order(token_id, price, size)
-    log(f"[{symbol}] 📋 Order status: {result['status']}")
+    log(f"[{symbol}] 📋 Order: {result['status']} | ID: {result['order_id'][:10]}...")
 
     try:
         window_start, window_end = get_window_times(symbol)
-        # Get target price (price at window start) for UP/DOWN settlement
         target_price = get_current_spot_price(symbol)
-        if target_price > 0:
-            log(f"[{symbol}] Target price (settlement reference): ${target_price:,.2f}")
 
         save_trade(
             symbol=symbol,
@@ -180,7 +142,7 @@ def trade_symbol(symbol: str, balance: float):
             target_price=target_price if target_price > 0 else None,
         )
     except Exception as e:
-        log(f"[{symbol}] Database error: {e}")
+        log(f"[{symbol}] DB error: {e}")
 
 
 def main():
@@ -201,37 +163,10 @@ def main():
         log_addr_type = "Proxy"
 
     log("=" * 90)
-    log(f"🤖 POLYASTRA | Markets: {', '.join(MARKETS)}")
     log(
-        f"💼 Wallet ({log_addr_type}): {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC"
+        f"🤖 POLYASTRA | Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC"
     )
-    log(
-        f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: {BET_PERCENT}% of balance | MAX_SPREAD: {MAX_SPREAD:.1%}"
-    )
-    log(f"🕒 WINDOW_DELAY_SEC: {WINDOW_DELAY_SEC}s")
-    log(
-        f"📈 ADX: {'YES' if ADX_ENABLED else 'NO'} | Threshold: {ADX_THRESHOLD} | Period: {ADX_PERIOD} | Interval: {ADX_INTERVAL}"
-    )
-    log("=" * 90)
-    log("🔍 BINANCE INTEGRATION:")
-    log(f"  Momentum Filter: {'ENABLED' if ENABLE_MOMENTUM_FILTER else 'DISABLED'}")
-    log(f"  Order Flow: {'ENABLED' if ENABLE_ORDER_FLOW else 'DISABLED'}")
-    log(
-        f"  Cross-Exchange Divergence: {'ENABLED' if ENABLE_DIVERGENCE else 'DISABLED'}"
-    )
-    log(f"  Volume-Weighted Momentum: {'ENABLED' if ENABLE_VWM else 'DISABLED'}")
-    log(f"  BFXD Filter (Legacy): {'ENABLED' if ENABLE_BFXD else 'DISABLED'}")
-    log("=" * 90)
-    log(
-        f"🛡️  Stop Loss: {'ENABLED' if ENABLE_STOP_LOSS else 'DISABLED'} ({STOP_LOSS_PERCENT}%)"
-    )
-    log(
-        f"🎯 Take Profit: {'ENABLED' if ENABLE_TAKE_PROFIT else 'DISABLED'} ({TAKE_PROFIT_PERCENT}%)"
-    )
-    log(f"🔄 Auto Reverse: {'ENABLED' if ENABLE_REVERSAL else 'DISABLED'}")
-    log(
-        f"📈 Scale In: {'ENABLED' if ENABLE_SCALE_IN else 'DISABLED'} (${SCALE_IN_MIN_PRICE:.2f}-${SCALE_IN_MAX_PRICE:.2f}, {SCALE_IN_TIME_LEFT}s left, +{SCALE_IN_MULTIPLIER * 100:.0f}%)"
-    )
+    log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: {BET_PERCENT}% | ADX: {ADX_THRESHOLD}")
     log("=" * 90)
 
     cycle = 0
@@ -255,7 +190,8 @@ def main():
                 wait += 900
 
             # Wait in 1-second chunks so we can check positions
-            log(f"⏱️  Waiting {wait}s until next window + {WINDOW_DELAY_SEC}s delay...")
+            if cycle == 0 or wait > 30:
+                log(f"⏱️  Waiting {wait}s until next window...")
 
             remaining = wait + WINDOW_DELAY_SEC
             while remaining > 0:
@@ -277,8 +213,9 @@ def main():
 
             # Fetch balance once for the cycle
             current_balance = get_balance(addr)
-            log(f"💰 Current Balance: {current_balance:.2f} USDC")
-            log(f"🎯 Evaluating {len(MARKETS)} markets: {', '.join(MARKETS)}\n")
+            log(
+                f"💰 Balance: {current_balance:.2f} USDC | Evaluating {len(MARKETS)} markets"
+            )
 
             for sym in MARKETS:
                 trade_symbol(sym, current_balance)

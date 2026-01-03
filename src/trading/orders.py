@@ -65,8 +65,6 @@ def setup_api_creds() -> None:
 def place_order(token_id: str, price: float, size: float) -> dict:
     """Place BUY order on CLOB"""
     try:
-        log(f"Placing order: {size} shares at ${price:.4f}")
-
         order_client = client
 
         if not hasattr(order_client, "builder_config"):
@@ -99,7 +97,7 @@ def place_order(token_id: str, price: float, size: float) -> dict:
         status = resp.get("status", "UNKNOWN") if resp else "UNKNOWN"
         order_id = resp.get("orderID") if resp else None
 
-        log(f"✓ Order placed: {status} (ID: {order_id})")
+        log(f"✓ Order: {status} | ID: {order_id[:10]}...")
         return {"success": True, "status": status, "order_id": order_id, "error": None}
 
     except Exception as e:
@@ -115,10 +113,6 @@ def sell_position(token_id: str, size: float, current_price: float) -> dict:
     try:
         # Sell at slightly below current market price for quick fill
         sell_price = max(0.01, current_price - 0.01)
-
-        log(
-            f"💸 Selling {size} shares of token {token_id[:10]}... at ${sell_price:.4f}"
-        )
 
         sell_client = client
         if not hasattr(sell_client, "builder_config"):
@@ -153,7 +147,7 @@ def sell_position(token_id: str, size: float, current_price: float) -> dict:
         status = resp.get("status", "UNKNOWN") if resp else "UNKNOWN"
         order_id = resp.get("orderID") if resp else None
 
-        log(f"✓ SELL order placed: {status} (ID: {order_id})")
+        log(f"✓ SELL: {status} | ID: {order_id[:10]}...")
         return {
             "success": True,
             "sold": size,
