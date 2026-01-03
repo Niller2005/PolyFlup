@@ -263,8 +263,8 @@
                                     </Table.Cell>
                                     <Table.Cell class="font-bold text-slate-700 dark:text-slate-300">{trade.symbol}</Table.Cell>
                                     <Table.Cell>
-                                        <Badge variant={trade.side === 'UP' ? 'secondary' : 'destructive'} class="rounded-sm font-black px-1.5 py-0 text-[10px]">
-                                            {trade.side}
+                                        <Badge variant={trade.side === 'UP' ? 'default' : 'destructive'} class="rounded-sm font-bold px-2 py-0.5 text-[10px]">
+                                            {trade.side === 'UP' ? '📈' : '📉'} {trade.side}
                                         </Badge>
                                     </Table.Cell>
                                     <Table.Cell class="font-mono text-xs text-muted-foreground">{(trade.edge * 100).toFixed(1)}%</Table.Cell>
@@ -280,15 +280,15 @@
                                     </Table.Cell>
                                     <Table.Cell class="text-right pr-6">
                                         {#if !trade.settled}
-                                            <Badge class="bg-amber-500 hover:bg-amber-600 text-[9px] h-4 px-1.5 leading-none">⚡ LIVE</Badge>
+                                            <Badge class="bg-amber-500 hover:bg-amber-600 text-white text-[10px] px-2 py-0.5 font-semibold">⚡ LIVE</Badge>
                                         {:else if trade.final_outcome === 'STOP_LOSS'}
-                                            <Badge variant="destructive" class="text-[9px] h-4 px-1.5 leading-none">🛑 STOP LOSS</Badge>
+                                            <Badge variant="destructive" class="text-[10px] px-2 py-0.5 font-semibold">🛑 STOP LOSS</Badge>
                                         {:else if trade.final_outcome === 'TAKE_PROFIT'}
-                                            <Badge class="bg-emerald-500 hover:bg-emerald-600 text-[9px] h-4 px-1.5 leading-none">🎯 TAKE PROFIT</Badge>
+                                            <Badge class="bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] px-2 py-0.5 font-semibold">🎯 TAKE PROFIT</Badge>
                                         {:else if trade.exited_early}
-                                            <Badge variant="outline" class="text-[9px] h-4 px-1.5 border-primary text-primary leading-none">🔄 REVERSED</Badge>
+                                            <Badge variant="outline" class="text-[10px] px-2 py-0.5 border-primary text-primary font-semibold">🔄 REVERSED</Badge>
                                         {:else}
-                                            <Badge variant="secondary" class="text-[9px] h-4 px-1.5 font-bold tracking-tighter leading-none">✅ SETTLED</Badge>
+                                            <Badge variant="secondary" class="text-[10px] px-2 py-0.5 font-semibold">✅ SETTLED</Badge>
                                         {/if}
                                     </Table.Cell>
                                 </Table.Row>
