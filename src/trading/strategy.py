@@ -77,24 +77,22 @@ def calculate_edge(symbol: str, up_token: str, client: ClobClient):
 def adx_allows_trade(symbol: str) -> bool:
     """Check if ADX filter allows trade"""
     if not ADX_ENABLED:
-        log(f"[{symbol}] ADX: Filter disabled, allowing trade")
+        log(f"[{symbol}]   ↳ ADX filter disabled")
         return True
 
     adx_value = get_adx_from_binance(symbol)
 
     if adx_value < 0:
-        log(f"[{symbol}] ADX: Could not calculate ADX, allowing trade (fail-open)")
+        log(f"[{symbol}]   ↳ ADX calculation failed, allowing trade (fail-open)")
         return True
 
     if adx_value >= ADX_THRESHOLD:
         log(
-            f"[{symbol}] ADX: {adx_value:.2f} >= {ADX_THRESHOLD:.2f} threshold, ALLOWING trade"
+            f"[{symbol}]   ↳ ADX={adx_value:.2f} >= {ADX_THRESHOLD:.2f} ✅ Strong trend"
         )
         return True
     else:
-        log(
-            f"[{symbol}] ADX: {adx_value:.2f} < {ADX_THRESHOLD:.2f} threshold, BLOCKING trade (weak trend)"
-        )
+        log(f"[{symbol}]   ↳ ADX={adx_value:.2f} < {ADX_THRESHOLD:.2f} ❌ Weak trend")
         return False
 
 
@@ -104,56 +102,40 @@ def bfxd_allows_trade(symbol: str, direction: str) -> bool:
     direction_u = direction.upper()
 
     if not BFXD_URL:
-        log(f"[{symbol}] BFXD: URL not set, skipping trend filter (side={direction_u})")
+        log(f"[{symbol}]   ↳ BFXD URL not set, skipping filter")
         return True
 
     if symbol_u != "BTC":
-        log(
-            f"[{symbol}] BFXD: symbol {symbol_u} != BTC, skipping trend filter (side={direction_u})"
-        )
+        log(f"[{symbol}]   ↳ BFXD only applies to BTC, skipping for {symbol_u}")
         return True
 
     try:
-        log(
-            f"[{symbol}] BFXD: fetching trend from {BFXD_URL} for side={direction_u}..."
-        )
         r = requests.get(BFXD_URL, timeout=5)
         r.raise_for_status()
         data = r.json()
 
         if not isinstance(data, dict):
-            log(
-                f"[{symbol}] BFXD: invalid JSON (expected dict), allowing trade (side={direction_u})"
-            )
+            log(f"[{symbol}]   ↳ BFXD invalid response, allowing trade")
             return True
 
         trend = str(data.get("BTC/USDT", "")).upper()
         if not trend:
-            log(
-                f"[{symbol}] BFXD: no BTC/USDT entry, allowing trade (side={direction_u}, trend=None)"
-            )
+            log(f"[{symbol}]   ↳ BFXD no trend data, allowing trade")
             return True
 
         if trend not in ("UP", "DOWN"):
-            log(
-                f"[{symbol}] BFXD: unknown trend '{trend}', allowing trade (side={direction_u})"
-            )
+            log(f"[{symbol}]   ↳ BFXD unknown trend '{trend}', allowing trade")
             return True
 
         match = trend == direction_u
-        log(f"[{symbol}] BFXD: direction={direction_u}, trend={trend}, match={match}")
 
         if match:
-            log(f"[{symbol}] BFXD: trend agrees with side={direction_u}, trade allowed")
+            log(f"[{symbol}]   ↳ BFXD trend={trend}, side={direction_u} ✅ Match")
             return True
         else:
-            log(
-                f"[{symbol}] BFXD: trend disagrees (trend={trend}, side={direction_u}), trade BLOCKED"
-            )
+            log(f"[{symbol}]   ↳ BFXD trend={trend}, side={direction_u} ❌ Mismatch")
             return False
 
     except Exception as e:
-        log(
-            f"[{symbol}] BFXD: error fetching/parsing trend ({e}), allowing trade (side={direction_u})"
-        )
+        log(f"[{symbol}]   ↳ BFXD error ({e}), allowing trade")
         return True

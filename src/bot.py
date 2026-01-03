@@ -47,9 +47,11 @@ from src.trading.settlement import check_and_settle_trades
 
 def trade_symbol(symbol: str, balance: float):
     """Execute trading logic for a symbol"""
+    log(f"\n🔍 [{symbol}] EVALUATING MARKET...")
+
     up_id, down_id = get_token_ids(symbol)
     if not up_id or not down_id:
-        log(f"[{symbol}] Market not found, skipping")
+        log(f"[{symbol}] ❌ Market not found, skipping")
         return
 
     client = get_clob_client()
@@ -76,7 +78,7 @@ def trade_symbol(symbol: str, balance: float):
         )
     else:
         log(
-            f"[{symbol}] ⚪ PASS | Edge {edge:.1%} in neutral zone ({1 - MIN_EDGE:.1%} - {MIN_EDGE:.1%})"
+            f"[{symbol}] ⚪ BLOCKED: Edge {edge:.1%} in neutral zone ({1 - MIN_EDGE:.1%} - {MIN_EDGE:.1%}) - NO TRADE"
         )
         return
 
@@ -84,19 +86,22 @@ def trade_symbol(symbol: str, balance: float):
     log(f"[{symbol}] Direction decision: side={side}, edge={edge:.4f}, p_up={p_up:.4f}")
 
     # ADX trend strength filter
-    log(f"[{symbol}] 📊 ADX check: enabled={ADX_ENABLED}, threshold={ADX_THRESHOLD}")
+    log(
+        f"[{symbol}] 📊 Checking ADX filter (enabled={ADX_ENABLED}, threshold={ADX_THRESHOLD})..."
+    )
     if not adx_allows_trade(symbol):
         log(
-            f"[{symbol}] ⛔ ADX FILTER BLOCKED TRADE (symbol={symbol}, side={side}) - Weak Trend ⛔"
+            f"[{symbol}] ⛔ BLOCKED BY ADX: Weak trend detected (side={side}) - NO TRADE ⛔"
         )
         return
+    log(f"[{symbol}] ✅ PASSED ADX filter")
 
     # BFXD trend filter
+    log(f"[{symbol}] 🔍 Checking BFXD trend filter (side={side})...")
     if not bfxd_allows_trade(symbol, side):
-        log(
-            f"[{symbol}] ⛔ BFXD FILTER BLOCKED TRADE (symbol={symbol}, side={side}) ⛔"
-        )
+        log(f"[{symbol}] ⛔ BLOCKED BY BFXD: Trend disagrees with {side} - NO TRADE ⛔")
         return
+    log(f"[{symbol}] ✅ PASSED BFXD filter")
 
     if price <= 0:
         log(f"[{symbol}] ERROR: Invalid price {price}")
@@ -124,8 +129,9 @@ def trade_symbol(symbol: str, balance: float):
             f"Effective stake ≈ ${bet_usd_effective:.2f}"
         )
 
+    log(f"[{symbol}] ✅ ALL FILTERS PASSED - ENTERING TRADE!")
     log(
-        f"[{symbol}] 📈 {side} ${bet_usd_effective:.2f} | Edge {edge:.1%} | "
+        f"[{symbol}] 🚀 TRADE: {side} ${bet_usd_effective:.2f} | Edge {edge:.1%} | "
         f"Price {price:.4f} | Size {size} | Balance {balance:.2f}"
     )
     send_discord(
@@ -133,7 +139,7 @@ def trade_symbol(symbol: str, balance: float):
     )
 
     result = place_order(token_id, price, size)
-    log(f"[{symbol}] Order status: {result['status']}")
+    log(f"[{symbol}] 📋 Order status: {result['status']}")
 
     try:
         window_start, window_end = get_window_times(symbol)
@@ -268,10 +274,12 @@ def main():
             # Fetch balance once for the cycle
             current_balance = get_balance(addr)
             log(f"💰 Current Balance: {current_balance:.2f} USDC")
+            log(f"🎯 Evaluating {len(MARKETS)} markets: {', '.join(MARKETS)}\n")
 
             for sym in MARKETS:
-                log(f"\n{'=' * 30} {sym} {'=' * 30}")
+                log(f"{'=' * 70}")
                 trade_symbol(sym, current_balance)
+                log(f"{'=' * 70}\n")
                 time.sleep(1)
 
             check_and_settle_trades()
