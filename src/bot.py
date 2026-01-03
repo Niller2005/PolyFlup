@@ -34,6 +34,7 @@ from src.data.market_data import (
     get_current_slug,
     get_window_times,
     get_funding_bias,
+    get_current_spot_price,
 )
 from src.trading.strategy import (
     calculate_edge,
@@ -143,6 +144,11 @@ def trade_symbol(symbol: str, balance: float):
 
     try:
         window_start, window_end = get_window_times(symbol)
+        # Get target price (price at window start) for UP/DOWN settlement
+        target_price = get_current_spot_price(symbol)
+        if target_price > 0:
+            log(f"[{symbol}] Target price (settlement reference): ${target_price:,.2f}")
+
         save_trade(
             symbol=symbol,
             window_start=window_start.isoformat(),
@@ -161,6 +167,7 @@ def trade_symbol(symbol: str, balance: float):
             funding_bias=get_funding_bias(symbol),
             order_status=result["status"],
             order_id=result["order_id"],
+            target_price=target_price if target_price > 0 else None,
         )
     except Exception as e:
         log(f"[{symbol}] Database error: {e}")

@@ -23,6 +23,7 @@ from src.data.market_data import (
     get_current_slug,
     get_window_times,
     get_funding_bias,
+    get_current_spot_price,
 )
 from src.data.database import save_trade
 
@@ -43,7 +44,7 @@ def check_open_positions(verbose: bool = True):
 
     # Get unsettled trades that are still in their window
     c.execute(
-        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal 
+        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price 
            FROM trades 
            WHERE settled = 0 
            AND exited_early = 0
@@ -73,6 +74,7 @@ def check_open_positions(verbose: bool = True):
         window_end,
         scaled_in,
         is_reversal,
+        target_price,
     ) in open_positions:
         try:
             # Get current market price
@@ -187,61 +189,100 @@ def check_open_positions(verbose: bool = True):
                         f"🛑 **STOP LOSS** [{symbol}] {side} closed at {pnl_pct:+.1f}%"
                     )
 
-                    # Optionally reverse position (but not if this is already a reversed trade)
-                    if ENABLE_REVERSAL and not is_reversal:
-                        log(f"🔄 Reversing position for [{symbol}]...")
-                        # Get opposite token ID
-                        up_id, down_id = get_token_ids(symbol)
-                        if up_id and down_id:
-                            opposite_token = down_id if side == "UP" else up_id
-                            opposite_side = "DOWN" if side == "UP" else "UP"
-                            opposite_price = 1.0 - current_price
+                    # Optionally reverse position (but only if losing based on target price)
+                    if ENABLE_REVERSAL and not is_reversal and target_price is not None:
+                        # Get current spot price to determine if we're losing
+                        current_spot = get_current_spot_price(symbol)
 
-                            # Place reverse order with same size
-                            reverse_result = place_order(
-                                opposite_token, opposite_price, size
-                            )
-                            if reverse_result["success"]:
+                        if current_spot > 0:
+                            # Determine if we're losing based on target price
+                            # DOWN position: losing if current_spot > target_price
+                            # UP position: losing if current_spot < target_price
+                            should_reverse = False
+
+                            if side == "DOWN" and current_spot > target_price:
+                                should_reverse = True
                                 log(
-                                    f"✅ Reversed to {opposite_side} @ ${opposite_price:.4f}"
+                                    f"🔄 DOWN position losing: current ${current_spot:,.2f} > target ${target_price:,.2f}"
                                 )
-                                send_discord(
-                                    f"🔄 **REVERSED** [{symbol}] Now {opposite_side}"
+                            elif side == "UP" and current_spot < target_price:
+                                should_reverse = True
+                                log(
+                                    f"🔄 UP position losing: current ${current_spot:,.2f} < target ${target_price:,.2f}"
+                                )
+                            else:
+                                log(
+                                    f"✋ Position is winning based on target price - NOT reversing"
+                                )
+                                log(
+                                    f"   Side: {side}, Current: ${current_spot:,.2f}, Target: ${target_price:,.2f}"
                                 )
 
-                                # Save reversed trade to database
-                                try:
-                                    window_start, window_end = get_window_times(symbol)
-                                    bet_usd_effective = size * opposite_price
+                            if should_reverse:
+                                log(f"🔄 Reversing position for [{symbol}]...")
+                                # Get opposite token ID
+                                up_id, down_id = get_token_ids(symbol)
+                                if up_id and down_id:
+                                    opposite_token = down_id if side == "UP" else up_id
+                                    opposite_side = "DOWN" if side == "UP" else "UP"
+                                    opposite_price = 1.0 - current_price
 
-                                    save_trade(
-                                        symbol=symbol,
-                                        window_start=window_start.isoformat(),
-                                        window_end=window_end.isoformat(),
-                                        slug=get_current_slug(symbol),
-                                        token_id=opposite_token,
-                                        side=opposite_side,
-                                        edge=0.0,  # Reversal trade, no edge calculation
-                                        price=opposite_price,
-                                        size=size,
-                                        bet_usd=bet_usd_effective,
-                                        p_yes=opposite_price
-                                        if opposite_side == "UP"
-                                        else 1.0 - opposite_price,
-                                        best_bid=None,
-                                        best_ask=None,
-                                        imbalance=0.5,
-                                        funding_bias=get_funding_bias(symbol),
-                                        order_status=reverse_result["status"],
-                                        order_id=reverse_result["order_id"],
-                                        is_reversal=True,
+                                    # Place reverse order with same size
+                                    reverse_result = place_order(
+                                        opposite_token, opposite_price, size
                                     )
-                                    log(f"✓ Reversed trade saved to database")
-                                except Exception as e:
-                                    log(f"⚠️ Error saving reversed trade: {e}")
+                                    if reverse_result["success"]:
+                                        log(
+                                            f"✅ Reversed to {opposite_side} @ ${opposite_price:.4f}"
+                                        )
+                                        send_discord(
+                                            f"🔄 **REVERSED** [{symbol}] {side} → {opposite_side} (Target: ${target_price:,.2f}, Current: ${current_spot:,.2f})"
+                                        )
+
+                                        # Save reversed trade to database
+                                        try:
+                                            window_start, window_end = get_window_times(
+                                                symbol
+                                            )
+                                            bet_usd_effective = size * opposite_price
+                                            # Use same target price for reversed trade
+                                            save_trade(
+                                                symbol=symbol,
+                                                window_start=window_start.isoformat(),
+                                                window_end=window_end.isoformat(),
+                                                slug=get_current_slug(symbol),
+                                                token_id=opposite_token,
+                                                side=opposite_side,
+                                                edge=0.0,  # Reversal trade, no edge calculation
+                                                price=opposite_price,
+                                                size=size,
+                                                bet_usd=bet_usd_effective,
+                                                p_yes=opposite_price
+                                                if opposite_side == "UP"
+                                                else 1.0 - opposite_price,
+                                                best_bid=None,
+                                                best_ask=None,
+                                                imbalance=0.5,
+                                                funding_bias=get_funding_bias(symbol),
+                                                order_status=reverse_result["status"],
+                                                order_id=reverse_result["order_id"],
+                                                is_reversal=True,
+                                                target_price=target_price,
+                                            )
+                                            log(f"✓ Reversed trade saved to database")
+                                        except Exception as e:
+                                            log(f"⚠️ Error saving reversed trade: {e}")
+                        else:
+                            log(
+                                f"⚠️ Could not fetch current spot price for reversal decision"
+                            )
                     elif ENABLE_REVERSAL and is_reversal:
                         log(
                             f"⚠️ Trade #{trade_id} is already a reversed trade - not reversing again"
+                        )
+                    elif ENABLE_REVERSAL and target_price is None:
+                        log(
+                            f"⚠️ Trade #{trade_id} has no target price - cannot determine if reversing is appropriate"
                         )
 
             # Check take profit

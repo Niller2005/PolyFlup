@@ -89,6 +89,36 @@ def get_fear_greed() -> int:
         return 50
 
 
+def get_current_spot_price(symbol: str) -> float:
+    """
+    Get current spot price from Binance for the given symbol.
+
+    Args:
+        symbol: Trading symbol (e.g., 'BTC', 'ETH')
+
+    Returns:
+        Current spot price in USDT, or -1.0 on error
+    """
+    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    if not pair:
+        log(f"[{symbol}] No Binance mapping found for spot price")
+        return -1.0
+
+    # Convert futures symbol to spot symbol (e.g., BTCUSDT from BTCUSD)
+    spot_pair = pair.replace("USD", "USDT") if not pair.endswith("USDT") else pair
+
+    try:
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={spot_pair}"
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        price = float(data["price"])
+        return price
+    except Exception as e:
+        log(f"[{symbol}] Error fetching spot price: {e}")
+        return -1.0
+
+
 def get_adx_from_binance(symbol: str) -> float:
     """
     Fetch klines from Binance and calculate ADX for symbol/USDT pair using ta library.
