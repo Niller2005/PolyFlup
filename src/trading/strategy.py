@@ -12,6 +12,7 @@ from src.config.settings import (
     ENABLE_ORDER_FLOW,
     ENABLE_DIVERGENCE,
     ENABLE_VWM,
+    ENABLE_BFXD,
 )
 from src.utils.logger import log
 from src.data.market_data import (
@@ -224,7 +225,16 @@ def adx_allows_trade(symbol: str) -> bool:
 
 
 def bfxd_allows_trade(symbol: str, direction: str) -> bool:
-    """External BTC trend filter"""
+    """
+    External BTC trend filter (LEGACY - mostly redundant with new Binance integration)
+
+    NOTE: This filter is now optional and disabled by default. The new Binance integration
+    (momentum, order flow, divergence) provides more comprehensive and granular trend analysis.
+    """
+    if not ENABLE_BFXD:
+        log(f"[{symbol}]   ↳ BFXD filter disabled")
+        return True
+
     symbol_u = symbol.upper()
     direction_u = direction.upper()
 

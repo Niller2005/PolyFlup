@@ -45,6 +45,9 @@ ENABLE_ORDER_FLOW = os.getenv("ENABLE_ORDER_FLOW", "YES").upper() == "YES"
 ENABLE_DIVERGENCE = os.getenv("ENABLE_DIVERGENCE", "YES").upper() == "YES"
 ENABLE_VWM = os.getenv("ENABLE_VWM", "YES").upper() == "YES"
 
+# External Trend Filter (Legacy)
+ENABLE_BFXD = os.getenv("ENABLE_BFXD", "NO").upper() == "YES"
+
 # Timing
 WINDOW_DELAY_SEC = int(os.getenv("WINDOW_DELAY_SEC", "12"))
 if WINDOW_DELAY_SEC < 0:

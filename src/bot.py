@@ -29,6 +29,7 @@ from src.config.settings import (
     ENABLE_ORDER_FLOW,
     ENABLE_DIVERGENCE,
     ENABLE_VWM,
+    ENABLE_BFXD,
 )
 from src.utils.logger import log, send_discord
 from src.utils.web3_utils import get_balance
@@ -101,12 +102,17 @@ def trade_symbol(symbol: str, balance: float):
         return
     log(f"[{symbol}] ✅ PASSED ADX filter")
 
-    # BFXD trend filter
-    log(f"[{symbol}] 🔍 Checking BFXD trend filter (side={side})...")
-    if not bfxd_allows_trade(symbol, side):
-        log(f"[{symbol}] ⛔ BLOCKED BY BFXD: Trend disagrees with {side} - NO TRADE ⛔")
-        return
-    log(f"[{symbol}] ✅ PASSED BFXD filter")
+    # BFXD trend filter (optional legacy filter)
+    if ENABLE_BFXD:
+        log(f"[{symbol}] 🔍 Checking BFXD trend filter (side={side})...")
+        if not bfxd_allows_trade(symbol, side):
+            log(
+                f"[{symbol}] ⛔ BLOCKED BY BFXD: Trend disagrees with {side} - NO TRADE ⛔"
+            )
+            return
+        log(f"[{symbol}] ✅ PASSED BFXD filter")
+    else:
+        log(f"[{symbol}] ↷ BFXD filter disabled (using Binance integration instead)")
 
     if price <= 0:
         log(f"[{symbol}] ERROR: Invalid price {price}")
@@ -214,6 +220,7 @@ def main():
         f"  Cross-Exchange Divergence: {'ENABLED' if ENABLE_DIVERGENCE else 'DISABLED'}"
     )
     log(f"  Volume-Weighted Momentum: {'ENABLED' if ENABLE_VWM else 'DISABLED'}")
+    log(f"  BFXD Filter (Legacy): {'ENABLED' if ENABLE_BFXD else 'DISABLED'}")
     log("=" * 90)
     log(
         f"🛡️  Stop Loss: {'ENABLED' if ENABLE_STOP_LOSS else 'DISABLED'} ({STOP_LOSS_PERCENT}%)"
