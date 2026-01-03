@@ -97,7 +97,7 @@ app.get('/api/stats', (req, res) => {
 });
 
 // Serve the Svelte app for all non-API routes
-app.get('*', (req, res) => {
+app.use((req, res) => {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
