@@ -25,7 +25,7 @@ from py_clob_client.order_builder.constants import BUY
 try:
     load_dotenv()
 
-    BET_USD = float(os.getenv("BET_USD", "1.1"))
+    BET_PERCENT = float(os.getenv("BET_PERCENT", "5.0"))  # Percent of balance per trade
     MIN_EDGE = float(os.getenv("MIN_EDGE", "0.565"))
     MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.15"))
 
@@ -980,9 +980,11 @@ def trade_symbol(symbol: str, balance: float):
 
     price = max(0.01, min(0.99, price))
 
-    # Use 5% of available balance instead of fixed BET_USD
-    target_bet = balance * 0.05
-    log(f"[{symbol}] 🎯 Target bet: ${target_bet:.2f} (5% of ${balance:.2f})")
+    # Use BET_PERCENT of available balance
+    target_bet = balance * (BET_PERCENT / 100.0)
+    log(
+        f"[{symbol}] 🎯 Target bet: ${target_bet:.2f} ({BET_PERCENT}% of ${balance:.2f})"
+    )
 
     size = round(target_bet / price, 6)
 
@@ -1059,7 +1061,9 @@ def main():
     log(
         f"💼 Wallet ({log_addr_type}): {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC"
     )
-    log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: ${BET_USD} | MAX_SPREAD: {MAX_SPREAD:.1%}")
+    log(
+        f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: {BET_PERCENT}% of balance | MAX_SPREAD: {MAX_SPREAD:.1%}"
+    )
     log(f"🕒 WINDOW_DELAY_SEC: {WINDOW_DELAY_SEC}s")
     log(
         f"📈 ADX: {'YES' if ADX_ENABLED else 'NO'} | Threshold: {ADX_THRESHOLD} | Period: {ADX_PERIOD} | Interval: {ADX_INTERVAL}"
