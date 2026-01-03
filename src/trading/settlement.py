@@ -60,11 +60,9 @@ def check_and_settle_trades():
     unsettled = c.fetchall()
 
     if not unsettled:
-        log("ℹ No trades to settle")
         conn.close()
         return
 
-    log(f"📊 Checking settlement for {len(unsettled)} trades...")
     total_pnl = 0
     settled_count = 0
 
@@ -94,17 +92,12 @@ def check_and_settle_trades():
             # Determine outcome value
             final_price = 0.0
             if clob_ids and len(clob_ids) >= 2:
-                if str(token_id) == str(clob_ids[0]):
-                    final_price = float(prices[0])  # UP Price
-                elif str(token_id) == str(clob_ids[1]):
-                    final_price = float(prices[1])  # DOWN Price
-                else:
-                    log(
-                        f"⚠️ Trade #{trade_id}: Token ID mismatch (held: {token_id} vs {clob_ids}), cannot settle."
-                    )
-                    continue
+                final_price = (
+                    float(prices[0])
+                    if str(token_id) == str(clob_ids[0])
+                    else float(prices[1])
+                )
             else:
-                log(f"⚠️ Trade #{trade_id}: Could not parse clobTokenIds.")
                 continue
 
             exit_value = final_price
@@ -112,24 +105,21 @@ def check_and_settle_trades():
             roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
             # Auto-claim winnings if profitable
+            redeemed = False
             if pnl_usd > 0:
                 condition_id_hex = data.get("conditionId")
                 if condition_id_hex:
-                    log(
-                        f"💰 Trade #{trade_id} won ${pnl_usd:.2f}, attempting to redeem..."
-                    )
-                    redeem_winnings(condition_id_hex)
-                else:
-                    log(f"⚠️ Trade #{trade_id}: No conditionId found, cannot redeem")
+                    redeemed = redeem_winnings(condition_id_hex)
 
             c.execute(
                 "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=? WHERE id=?",
                 ("RESOLVED", final_price, pnl_usd, roi_pct, now.isoformat(), trade_id),
             )
 
-            emoji = "✅" if pnl_usd > 0 else "❌"
+            emoji = "💰" if pnl_usd > 0 else "💀"
+            status = "| Redeemed ✅" if redeemed else ""
             log(
-                f"{emoji} Trade #{trade_id} [{symbol}] {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%)"
+                f"{emoji} Settled #{trade_id} [{symbol}] {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%) {status}"
             )
             total_pnl += pnl_usd
             settled_count += 1

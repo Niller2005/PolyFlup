@@ -30,24 +30,11 @@ def get_balance(addr: str) -> float:
 
 def redeem_winnings(condition_id_hex: str, neg_risk: bool = False) -> bool:
     """
-    Redeem winnings from CTF contract for a resolved condition.
-
-    Args:
-        condition_id_hex: The condition ID (0x...)
-        neg_risk: Whether this is a negative risk market (not applicable for 15min crypto markets)
-
-    Returns:
-        True if redemption was successful, False otherwise
+    Redeem winnings from CTF contract
     """
     try:
-        # 15-minute crypto markets are NOT negative risk markets
         if neg_risk:
-            log(
-                "⚠️ Negative risk redemption not implemented (not needed for 15min markets)"
-            )
             return False
-
-        log(f"💰 Attempting to redeem condition {condition_id_hex}...")
 
         # Get contract instance
         ctf_contract = w3.eth.contract(
@@ -89,19 +76,16 @@ def redeem_winnings(condition_id_hex: str, neg_risk: bool = False) -> bool:
         # Send transaction
         tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
 
-        log(f"✅ Redeem TX sent: {w3.to_hex(tx_hash)}")
-
         # Wait for receipt
         try:
             receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
             if receipt["status"] == 1:
-                log(f"✅ Redemption successful! Gas used: {receipt['gasUsed']}")
                 return True
             else:
-                log("❌ Redemption transaction failed")
+                log("❌ Redemption failed")
                 return False
         except Exception as e:
-            log(f"⚠️ Could not get transaction receipt: {e}")
+            log(f"⚠️ TX receipt error: {e}")
             return False
 
     except Exception as e:
