@@ -284,9 +284,7 @@ def main():
             log(f"🎯 Evaluating {len(MARKETS)} markets: {', '.join(MARKETS)}\n")
 
             for sym in MARKETS:
-                log(f"{'=' * 70}")
                 trade_symbol(sym, current_balance)
-                log(f"{'=' * 70}\n")
                 time.sleep(1)
 
             check_and_settle_trades()
