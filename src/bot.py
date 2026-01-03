@@ -46,7 +46,13 @@ from src.trading.strategy import (
     adx_allows_trade,
     bfxd_allows_trade,
 )
-from src.trading.orders import setup_api_creds, place_order, get_clob_client
+from src.trading.orders import (
+    setup_api_creds,
+    place_order,
+    place_limit_order,
+    get_clob_client,
+    SELL,
+)
 from src.trading.position_manager import check_open_positions
 from src.trading.settlement import check_and_settle_trades
 
@@ -109,6 +115,19 @@ def trade_symbol(symbol: str, balance: float):
 
     result = place_order(token_id, price, size)
 
+    limit_sell_id = None
+    if result["success"]:
+        # NEW: Place limit sell order at 0.99 immediately after entry
+        log(f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units")
+        sell_limit_result = place_limit_order(token_id, 0.99, size, SELL)
+        if sell_limit_result["success"]:
+            limit_sell_id = sell_limit_result["order_id"]
+            log(f"[{symbol}] ✅ Limit sell order placed: {limit_sell_id}")
+        else:
+            log(
+                f"[{symbol}] ❌ Failed to place limit sell order: {sell_limit_result.get('error')}"
+            )
+
     send_discord(
         f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Price {price:.4f}"
     )
@@ -135,6 +154,7 @@ def trade_symbol(symbol: str, balance: float):
             funding_bias=get_funding_bias(symbol),
             order_status=result["status"],
             order_id=result["order_id"],
+            limit_sell_order_id=limit_sell_id,
             target_price=target_price if target_price > 0 else None,
         )
         log(
@@ -170,6 +190,7 @@ def main():
 
     cycle = 0
     last_position_check = time.time()
+    last_order_check = time.time()
     last_verbose_log = time.time()
 
     while True:
@@ -178,10 +199,13 @@ def main():
             now_ts = time.time()
             if now_ts - last_position_check >= 1:
                 verbose = now_ts - last_verbose_log >= 60
-                check_open_positions(verbose=verbose)
+                check_orders = now_ts - last_order_check >= 30
+                check_open_positions(verbose=verbose, check_orders=check_orders)
                 last_position_check = now_ts
                 if verbose:
                     last_verbose_log = now_ts
+                if check_orders:
+                    last_order_check = now_ts
 
             now = datetime.utcnow()
             wait = 900 - ((now.minute % 15) * 60 + now.second)
@@ -202,9 +226,12 @@ def main():
                 if remaining > 0:
                     now_ts = time.time()
                     verbose = now_ts - last_verbose_log >= 60
-                    check_open_positions(verbose=verbose)
+                    check_orders = now_ts - last_order_check >= 30
+                    check_open_positions(verbose=verbose, check_orders=check_orders)
                     if verbose:
                         last_verbose_log = now_ts
+                    if check_orders:
+                        last_order_check = now_ts
 
             log(
                 f"\n{'=' * 90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'=' * 90}\n"

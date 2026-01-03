@@ -62,8 +62,8 @@ def setup_api_creds() -> None:
         raise
 
 
-def place_order(token_id: str, price: float, size: float) -> dict:
-    """Place BUY order on CLOB"""
+def place_limit_order(token_id: str, price: float, size: float, side: str) -> dict:
+    """Place a limit order (BUY or SELL) on CLOB"""
     try:
         order_client = client
 
@@ -82,13 +82,13 @@ def place_order(token_id: str, price: float, size: float) -> dict:
                 )
                 order_client.set_api_creds(creds)
             except Exception as e:
-                log(f"⚠ Error setting API creds in place_order: {e}")
+                log(f"⚠ Error setting API creds in place_limit_order: {e}")
 
         order_args = OrderArgs(
             token_id=token_id,
             price=price,
             size=size,
-            side=BUY,
+            side=side,
         )
 
         signed_order = order_client.create_order(order_args)
@@ -100,11 +100,26 @@ def place_order(token_id: str, price: float, size: float) -> dict:
         return {"success": True, "status": status, "order_id": order_id, "error": None}
 
     except Exception as e:
-        log(f"❌ Order error: {e}")
+        log(f"❌ {side} Order error: {e}")
         import traceback
 
         log(traceback.format_exc())
         return {"success": False, "status": "ERROR", "order_id": None, "error": str(e)}
+
+
+def place_order(token_id: str, price: float, size: float) -> dict:
+    """Place BUY order on CLOB"""
+    return place_limit_order(token_id, price, size, BUY)
+
+
+def cancel_order(order_id: str) -> bool:
+    """Cancel an open order on CLOB"""
+    try:
+        resp = client.cancel_order(order_id)
+        return resp == "OK" or (isinstance(resp, dict) and resp.get("status") == "OK")
+    except Exception as e:
+        log(f"⚠️ Error cancelling order {order_id}: {e}")
+        return False
 
 
 def sell_position(token_id: str, size: float, current_price: float) -> dict:

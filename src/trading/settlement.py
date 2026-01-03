@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from src.config.settings import DB_FILE, GAMMA_API_BASE
 from src.utils.logger import log, send_discord
 from src.utils.web3_utils import redeem_winnings
+from src.trading.orders import cancel_order
 
 
 def get_market_resolution(slug: str):
@@ -54,7 +55,7 @@ def check_and_settle_trades():
 
     # Only check trades where window has ended
     c.execute(
-        "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)",
+        "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, limit_sell_order_id FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)",
         (now.isoformat(),),
     )
     unsettled = c.fetchall()
@@ -66,7 +67,17 @@ def check_and_settle_trades():
     total_pnl = 0
     settled_count = 0
 
-    for trade_id, symbol, slug, token_id, side, entry_price, size, bet_usd in unsettled:
+    for (
+        trade_id,
+        symbol,
+        slug,
+        token_id,
+        side,
+        entry_price,
+        size,
+        bet_usd,
+        limit_sell_order_id,
+    ) in unsettled:
         try:
             # 1. Get resolution from API
             is_resolved, prices = get_market_resolution(slug)
@@ -91,7 +102,7 @@ def check_and_settle_trades():
 
             # Determine outcome value
             final_price = 0.0
-            if clob_ids and len(clob_ids) >= 2:
+            if prices and clob_ids and len(clob_ids) >= 2:
                 final_price = (
                     float(prices[0])
                     if str(token_id) == str(clob_ids[0])
@@ -99,6 +110,10 @@ def check_and_settle_trades():
                 )
             else:
                 continue
+
+            # NEW: Cancel limit sell order if it exists (market is resolved now)
+            if limit_sell_order_id:
+                cancel_order(limit_sell_order_id)
 
             exit_value = final_price
             pnl_usd = (exit_value * size) - bet_usd

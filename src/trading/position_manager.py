@@ -17,7 +17,14 @@ from src.config.settings import (
     SCALE_IN_MULTIPLIER,
 )
 from src.utils.logger import log, send_discord
-from src.trading.orders import get_clob_client, sell_position, place_order
+from src.trading.orders import (
+    get_clob_client,
+    sell_position,
+    place_order,
+    place_limit_order,
+    cancel_order,
+    SELL,
+)
 from src.data.market_data import (
     get_token_ids,
     get_current_slug,
@@ -28,15 +35,17 @@ from src.data.market_data import (
 from src.data.database import save_trade
 
 
-def check_open_positions(verbose: bool = True):
+def check_open_positions(verbose: bool = True, check_orders: bool = False):
     """
     Check open positions and manage them
 
     Args:
         verbose: If True, log position checks. If False, only log actions (stop loss, etc.)
+        check_orders: If True, check status of limit sell orders
     """
     if not ENABLE_STOP_LOSS and not ENABLE_TAKE_PROFIT and not ENABLE_SCALE_IN:
-        return
+        if not check_orders:
+            return
 
     conn = sqlite3.connect(DB_FILE, timeout=30.0)
     c = conn.cursor()
@@ -44,7 +53,7 @@ def check_open_positions(verbose: bool = True):
 
     # Get unsettled trades that are still in their window
     c.execute(
-        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price 
+        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id
            FROM trades 
            WHERE settled = 0 
            AND exited_early = 0
@@ -75,9 +84,47 @@ def check_open_positions(verbose: bool = True):
         scaled_in,
         is_reversal,
         target_price,
+        limit_sell_order_id,
     ) in open_positions:
         try:
+            # 0. Check if limit sell order was filled
+            if check_orders and limit_sell_order_id:
+                try:
+                    order_data = client.get_order(limit_sell_order_id)
+                    # Handle both dict and object response
+                    if isinstance(order_data, dict):
+                        status = order_data.get("status")
+                    else:
+                        status = getattr(order_data, "status", None)
+
+                    if status == "FILLED":
+                        log(
+                            f"🎯 Limit sell order filled for trade #{trade_id} at 0.99!"
+                        )
+                        exit_price = 0.99
+                        pnl_usd = (exit_price * size) - bet_usd
+                        roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
+
+                        c.execute(
+                            """UPDATE trades 
+                               SET settled=1, exited_early=1, exit_price=?, 
+                                   pnl_usd=?, roi_pct=?, 
+                                   final_outcome='LIMIT_SELL_099', settled_at=? 
+                               WHERE id=?""",
+                            (exit_price, pnl_usd, roi_pct, now.isoformat(), trade_id),
+                        )
+                        conn.commit()
+                        send_discord(
+                            f"🎯 **LIMIT SELL FILLED** [{symbol}] {side} closed at 0.99"
+                        )
+                        continue
+                except Exception as e:
+                    # Order might be too old or other error, log if significant
+                    if "404" not in str(e):
+                        log(f"⚠️ Error checking order {limit_sell_order_id}: {e}")
+
             # Get current market price
+
             book = client.get_order_book(token_id)
             if isinstance(book, dict):
                 bids = book.get("bids", []) or []
@@ -148,11 +195,36 @@ def check_open_positions(verbose: bool = True):
                     new_total_bet = bet_usd + additional_bet
                     new_avg_price = new_total_bet / new_total_size
 
+                    # NEW: Update limit sell order at 0.99 to include new size
+                    new_limit_sell_id = limit_sell_order_id
+                    if limit_sell_order_id:
+                        cancel_order(limit_sell_order_id)
+
+                    log(
+                        f"[{symbol}] 📉 Updating limit sell order at 0.99 for {new_total_size} units"
+                    )
+                    new_sell_limit_result = place_limit_order(
+                        token_id, 0.99, new_total_size, SELL
+                    )
+                    if new_sell_limit_result["success"]:
+                        new_limit_sell_id = new_sell_limit_result["order_id"]
+                    else:
+                        new_limit_sell_id = None
+                        log(
+                            f"❌ Failed to update limit sell order: {new_sell_limit_result.get('error')}"
+                        )
+
                     c.execute(
                         """UPDATE trades 
-                           SET size=?, bet_usd=?, entry_price=?, scaled_in=1 
+                           SET size=?, bet_usd=?, entry_price=?, scaled_in=1, limit_sell_order_id=? 
                            WHERE id=?""",
-                        (new_total_size, new_total_bet, new_avg_price, trade_id),
+                        (
+                            new_total_size,
+                            new_total_bet,
+                            new_avg_price,
+                            new_limit_sell_id,
+                            trade_id,
+                        ),
                     )
 
                     log(
@@ -167,6 +239,10 @@ def check_open_positions(verbose: bool = True):
             # This correctly handles both UP (loss when price drops) and DOWN (loss when price rises)
             if ENABLE_STOP_LOSS and price_change_pct <= -STOP_LOSS_PERCENT:
                 log(f"🛑 STOP LOSS trade #{trade_id}: {price_change_pct:.1f}% move")
+
+                # Cancel existing limit sell order if it exists
+                if limit_sell_order_id:
+                    cancel_order(limit_sell_order_id)
 
                 # Sell current position
                 sell_result = sell_position(token_id, size, current_price)
@@ -277,6 +353,10 @@ def check_open_positions(verbose: bool = True):
                 log(
                     f"🎯 TAKE PROFIT triggered for trade #{trade_id}: {pnl_pct:.1f}% gain"
                 )
+
+                # Cancel existing limit sell order if it exists
+                if limit_sell_order_id:
+                    cancel_order(limit_sell_order_id)
 
                 # Sell current position
                 sell_result = sell_position(token_id, size, current_price)
