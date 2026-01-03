@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import Database from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -13,10 +14,31 @@ const port = 3001;
 app.use(cors());
 app.use(express.json());
 
-const db = new Database(dbPath, { readonly: true });
+// Serve static files from the dist directory
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// Ensure DB exists before opening or handle error
+let db;
+try {
+    if (!fs.existsSync(dbPath)) {
+        console.warn(`Warning: Database not found at ${dbPath}. Waiting for bot to create it...`);
+    }
+    db = new Database(dbPath, { readonly: true, fileMustExist: false });
+} catch (error) {
+    console.error("Failed to open database:", error);
+}
 
 app.get('/api/stats', (req, res) => {
     try {
+        if (!db || !fs.existsSync(dbPath)) {
+            return res.json({
+                summary: { total: 0, settled: 0, wins: 0, invested: 0, total_pnl: 0, avg_roi: 0 },
+                per_symbol: [],
+                recent_trades: [],
+                pnl_history: []
+            });
+        }
+        
         // Summary statistics
         const summary = db.prepare(`
             SELECT
@@ -74,6 +96,11 @@ app.get('/api/stats', (req, res) => {
     }
 });
 
+// Serve the Svelte app for all non-API routes
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
 app.listen(port, () => {
-    console.log(`Backend server running at http://localhost:${port}`);
+    console.log(`Server running at http://localhost:${port}`);
 });

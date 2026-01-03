@@ -1,4 +1,11 @@
-FROM node:20-slim
+FROM node:20-bookworm-slim
+
+# Install build dependencies for better-sqlite3
+RUN apt-get update && apt-get install -y \
+    python3 \
+    make \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -11,9 +18,11 @@ RUN npm install
 # Copy application code
 COPY . .
 
-# Expose ports for Vite (5173) and Express API (3001)
-EXPOSE 5173
+# Build the Svelte app
+RUN npm run build
+
+# Expose backend port
 EXPOSE 3001
 
-# Start both using the start script (concurrently)
-CMD ["npm", "start", "--", "--host"]
+# Start the backend server
+CMD ["node", "server.js"]

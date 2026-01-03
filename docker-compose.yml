@@ -15,10 +15,8 @@ services:
     build:
       context: ./ui
     ports:
-      - "5173:5173"
       - "3001:3001"
     volumes:
-      - ./ui:/app
       - ./trades.db:/trades.db:ro
     environment:
       - NODE_ENV=production

@@ -4,10 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"node server.js\" \"vite\"",
+    "dev": "concurrently \"node server.js\" \"vite --host\"",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "concurrently \"node server.js\" \"vite\""
+    "start": "concurrently \"node server.js\" \"vite --host\""
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
