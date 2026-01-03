@@ -87,6 +87,8 @@ POLYGON_RPC = "https://polygon-rpc.com"
 USDC_ADDRESS = (
     "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # Bridged USDC (Polymarket standard)
 )
+CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+CTF_ABI = '[{"constant":false,"inputs":[{"name":"collateralToken","type":"address"},{"name":"parentCollectionId","type":"bytes32"},{"name":"conditionId","type":"bytes32"},{"name":"indexSets","type":"uint256[]"}],"name":"redeemPositions","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"}]'
 
 # ========================== LOGGER ==========================
 
@@ -128,6 +130,51 @@ def get_balance(addr: str) -> float:
         return raw / 1e6
     except Exception:
         return 0.0
+
+
+def redeem_market(condition_id_hex: str, index_sets: list):
+    """Redeem winnings from CTF contract"""
+    try:
+        log(
+            f"💰 Attempting to redeem condition {condition_id_hex} with index sets {index_sets}..."
+        )
+
+        contract = w3.eth.contract(address=CTF_ADDRESS, abi=CTF_ABI)
+
+        # Account from PK
+        account = Account.from_key(PROXY_PK)
+        my_address = account.address
+
+        # Prepare transaction
+        parent_collection_id = b"\x00" * 32
+
+        # Parse condition_id
+        if condition_id_hex.startswith("0x"):
+            condition_id = bytes.fromhex(condition_id_hex[2:])
+        else:
+            condition_id = bytes.fromhex(condition_id_hex)
+
+        # Build tx
+        tx = contract.functions.redeemPositions(
+            USDC_ADDRESS, parent_collection_id, condition_id, index_sets
+        ).build_transaction(
+            {
+                "from": my_address,
+                "nonce": w3.eth.get_transaction_count(my_address),
+                "gasPrice": int(w3.eth.gas_price * 1.1),  # +10% buffer
+            }
+        )
+
+        # Sign and send
+        signed_tx = w3.eth.account.sign_transaction(tx, private_key=PROXY_PK)
+        tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+
+        log(f"✅ Redeem TX sent: {w3.to_hex(tx_hash)}")
+        return w3.to_hex(tx_hash)
+
+    except Exception as e:
+        log(f"❌ Redeem error: {e}")
+        return None
 
 
 # ========================== CLOB CLIENT ==========================
@@ -739,6 +786,18 @@ def check_and_settle_trades():
             exit_value = final_price
             pnl_usd = (exit_value * size) - bet_usd
             roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
+
+            # Auto-claim winnings if profitable
+            if pnl_usd > 0:
+                condition_id_hex = data.get("conditionId")
+                if condition_id_hex:
+                    # Map side to index set: UP(0)->[1], DOWN(1)->[2]
+                    idx_set = [1] if side == "UP" else [2]
+                    redeem_market(condition_id_hex, idx_set)
+                else:
+                    log(
+                        f"⚠️ Could not find conditionId for trade #{trade_id}, skipping redemption"
+                    )
 
             c.execute(
                 "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=? WHERE id=?",
