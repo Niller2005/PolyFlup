@@ -1,122 +1,110 @@
-# PolyAstra Polymarket Trading Bot
+# PolyAstra Trading Bot 🚀
 
-PolyAstra is a fully automated trading bot for **15-minute up/down crypto markets on Polymarket**.
+Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 
-It trades on markets like:
+## ✨ Key Features
 
-- `btc-updown-15m-<timestamp>`
-- `eth-updown-15m-<timestamp>`
-- `xrp-updown-15m-<timestamp>`
-- `sol-updown-15m-<timestamp>`
+### 📊 Trading Strategy
+- **Edge Calculation**: Analyzes price vs. implied probability (70% price + 30% imbalance)
+- **ADX Trend Filter**: Only trades when trend strength > 25 (configurable)
+- **BFXD Trend Filter**: External BTC trend confirmation
+- **Funding Rate Bias**: Adjusts edge based on Binance funding rates
+- **Dynamic Sizing**: Bets percentage of balance (default 5%)
 
-and places **UP / DOWN** bets based on:
+### 🛡️ Position Management
+- **🛑 Stop Loss**: Auto-exits losing positions (default -50%)
+- **🎯 Take Profit**: Auto-exits winning positions (default +80%)
+- **🔄 Auto Reversal**: Opens opposite position on stop loss (optional)
+- **📈 Scale In**: Doubles down on winning positions near expiry (70-90% probability)
+- **⚡ Real-Time Monitoring**: Checks positions every **1 second**
 
-- on-chain orderbook data from the Polymarket CLOB,
-- funding bias from Binance Futures,
-- the Fear & Greed Index,
-- an optional external trend filter (BFXD).
+### 💰 Automated Operations
+- **Auto-Claim**: Automatically redeems winnings via CTF contract
+- **Dashboard**: Interactive HTML dashboard with live stats
+- **Discord**: Real-time trade notifications
+- **Database**: Full SQLite tracking of all trades
 
----
+## 🛠️ Installation
 
-## Features
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/your-repo/polyastra.git
+   cd polyastra
+   ```
 
-- ✅ Automatic trading on 15-minute up/down crypto markets (default: BTC, ETH, XRP, SOL).
-- ✅ Edge-based decision-making using:
-  - mid price from the orderbook,
-  - bid/ask imbalance,
-  - funding rate bias (Binance Futures),
-  - Fear & Greed sentiment.
-- ✅ Direction logic:
-  - `edge >= MIN_EDGE` → buy **UP**,
-  - `edge <= 1 - MIN_EDGE` → buy **DOWN**,
-  - otherwise → **PASS**.
-- ✅ Enforces Polymarket’s **minimum order size** (5 tokens) by automatically increasing the size if necessary.
-- ✅ Configurable delay after each 15-minute window starts (`WINDOW_DELAY_SEC`).
-- ✅ External trend filter for BTC via `BFXD_URL`:
-  - `"BTC/USDT": "UP"` → only **UP** trades are allowed, **DOWN** trades are blocked.
-  - `"BTC/USDT": "DOWN"` → only **DOWN** trades are allowed, **UP** trades are blocked.
-  - missing / invalid / failing endpoint → no filtering (fails open).
-- ✅ SQLite database with full trade history (edge, PnL, ROI, etc.).
-- ✅ Periodic settlement: simulates exit at market price after the window ends and computes realized PnL.
-- ✅ Performance reports (win rate, total PnL, ROI) written to disk and optionally sent to Discord.
-- ✅ Discord notifications for entries, reports and critical errors (optional).
+2. **Install dependencies**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
----
+3. **Configure environment**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your private key (PROXY_PK) and settings
+   ```
 
-## Requirements
+## ⚙️ Configuration
 
-- **Option A (Docker):** Docker & Docker Compose installed.
-- **Option B (Local):** Python 3.10+ and [uv](https://github.com/astral-sh/uv) installed.
-- Access to Polymarket via:
-  - a **proxy wallet private key** on Polygon (`PROXY_PK`),
-  - optionally a `FUNDER_PROXY` address.
-- Sufficient **USDC on Polygon** on the proxy wallet.
+Key settings in `.env`:
 
----
+```env
+# Trading
+BET_PERCENT=5.0          # Percent of balance per trade
+MIN_EDGE=0.60            # Minimum edge to enter (60%)
+MAX_SPREAD=0.10          # Max allowed spread (10%)
+WINDOW_DELAY_SEC=30      # Seconds to wait after window opens
 
-## Installation & Usage
+# Position Management
+ENABLE_STOP_LOSS=YES     # Enable stop loss
+STOP_LOSS_PERCENT=50.0   # Exit at -50%
+ENABLE_TAKE_PROFIT=YES   # Enable take profit
+TAKE_PROFIT_PERCENT=80.0 # Exit at +80%
+ENABLE_REVERSAL=NO       # Reverse position on stop loss
 
-### 1. Configuration
-First, copy the example environment file and configure your credentials:
+# Scaling
+ENABLE_SCALE_IN=YES      # Add to winners near expiry
+SCALE_IN_MIN_PRICE=0.70  # Min price (70 cents)
+SCALE_IN_MAX_PRICE=0.90  # Max price (90 cents)
+SCALE_IN_TIME_LEFT=120   # Seconds before expiry
+SCALE_IN_MULTIPLIER=1.0  # Add 100% more (double position)
 
-```bash
-cp .env.example .env
-# Edit .env and fill in PROXY_PK and other settings
+# Filters
+ADX=YES
+ADX_THRESHOLD=25.0       # Strong trend only
+ADX_INTERVAL=15m         # Timeframe
+ADX_PERIOD=10            # Period
 ```
 
-### 2. Running with Docker (Recommended)
-This runs the bot, a background dashboard generator, and a local web dashboard.
+## 🚀 Running the Bot
 
+### Start Trading
 ```bash
-docker-compose up -d --build
+python polyastra.py
 ```
 
-- **View Logs:** `docker-compose logs -f polyastra`
-- **View Dashboard:** Open [http://localhost:8000](http://localhost:8000)
+### View Dashboard
+```bash
+# Generate dashboard
+python generate_dashboard.py
 
-### 3. Running Locally with uv
-If you prefer running directly on your machine:
+# Serve dashboard (view at http://localhost:8000)
+python -m http.server 8000
+```
 
-1. **Install dependencies:**
-   ```bash
-   uv sync
-   ```
+## 📂 Project Structure
 
-2. **Run the bot:**
-   ```bash
-   uv run polyastra.py
-   ```
+```
+polyastra/
+├── src/
+│   ├── config/          # Settings & constants
+│   ├── data/            # Database & market data API
+│   ├── trading/         # Strategy, orders, positions, settlement
+│   ├── utils/           # Logging & Web3 helpers
+│   └── bot.py           # Main application loop
+├── polyastra.py         # Entry point
+├── generate_dashboard.py # Stats generator
+└── trades.db            # SQLite database
+```
 
-3. **(Optional) Run dashboard generator:**
-   To generate the dashboard HTML file in the `public/` directory:
-   ```bash
-   uv run generate_dashboard.py
-   ```
-
----
-
-## How it works (high level)
-
-1. Time is divided into **15-minute slots**:  
-   `[HH:00–HH:15)`, `[HH:15–HH:30)`, `[HH:30–HH:45)`, `[HH:45–HH:60)`.
-
-2. For each cycle:
-   - the bot waits until the next 15-minute boundary (`:00 / :15 / :30 / :45`),
-   - then waits an additional `WINDOW_DELAY_SEC` seconds (configurable buffer),
-   - for each symbol in `MARKETS` (e.g. `BTC, ETH, XRP, SOL`):
-     - constructs the slug, e.g. `btc-updown-15m-<timestamp>`,
-     - fetches **UP** and **DOWN** token IDs from Gamma API,
-     - reads the orderbook for the **UP** token from the CLOB,
-     - calculates an **edge** score,
-     - decides: **UP / DOWN / PASS**,
-     - applies the BTC trend filter from `BFXD_URL` (if configured),
-     - computes order size (ensuring minimum 5 tokens),
-     - sends a **BUY** order to the Polymarket CLOB.
-3. After the 15-minute window ends:
-   - the bot considers trades on that market **settleable**,
-   - it re-reads the orderbook for the traded token,
-   - computes a final "exit" price using the mid price (bid/ask average),
-   - for an UP position: exit value ≈ `final_price`,  
-     for a DOWN position: exit value ≈ `1 - final_price`,
-   - calculates PnL in USDC and ROI, then marks trades as settled in SQLite.
-4. Every N cycles (e.g. every ~4 hours) and on shutdown, the bot generates a performance report.
+## ⚠️ Disclaimer
+This software is for educational purposes only. Use at your own risk. Crypto markets are volatile and you can lose money.
