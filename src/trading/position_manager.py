@@ -43,7 +43,7 @@ def check_open_positions(verbose: bool = True):
 
     # Get unsettled trades that are still in their window
     c.execute(
-        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in 
+        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal 
            FROM trades 
            WHERE settled = 0 
            AND exited_early = 0
@@ -72,6 +72,7 @@ def check_open_positions(verbose: bool = True):
         bet_usd,
         window_end,
         scaled_in,
+        is_reversal,
     ) in open_positions:
         try:
             # Get current market price
@@ -99,13 +100,21 @@ def check_open_positions(verbose: bool = True):
             current_price = (best_bid + best_ask) / 2.0
 
             # Calculate current P&L
+            # For UP: profit when price goes up (current > entry)
+            # For DOWN: profit when price goes down (current < entry)
+            if side == "UP":
+                price_change_pct = ((current_price - entry_price) / entry_price) * 100
+            else:  # DOWN
+                # For DOWN positions, lower prices are better
+                price_change_pct = ((entry_price - current_price) / entry_price) * 100
+
             current_value = current_price * size
             pnl_usd = current_value - bet_usd
             pnl_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
             if verbose:
                 log(
-                    f"  [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={pnl_pct:+.1f}%"
+                    f"  [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PriceChange={price_change_pct:+.1f}% PnL={pnl_pct:+.1f}%"
                 )
 
             # Calculate time left until window ends
@@ -152,10 +161,11 @@ def check_open_positions(verbose: bool = True):
                         f"📈 **SCALED IN** [{symbol}] {side} +${additional_bet:.2f} @ ${current_price:.2f} ({time_left_seconds:.0f}s left)"
                     )
 
-            # Check stop loss
-            if ENABLE_STOP_LOSS and pnl_pct <= -STOP_LOSS_PERCENT:
+            # Check stop loss using price change percentage
+            # This correctly handles both UP (loss when price drops) and DOWN (loss when price rises)
+            if ENABLE_STOP_LOSS and price_change_pct <= -STOP_LOSS_PERCENT:
                 log(
-                    f"🛑 STOP LOSS triggered for trade #{trade_id}: {pnl_pct:.1f}% loss"
+                    f"🛑 STOP LOSS triggered for trade #{trade_id}: {price_change_pct:.1f}% price move against position"
                 )
 
                 # Sell current position
@@ -177,8 +187,8 @@ def check_open_positions(verbose: bool = True):
                         f"🛑 **STOP LOSS** [{symbol}] {side} closed at {pnl_pct:+.1f}%"
                     )
 
-                    # Optionally reverse position
-                    if ENABLE_REVERSAL:
+                    # Optionally reverse position (but not if this is already a reversed trade)
+                    if ENABLE_REVERSAL and not is_reversal:
                         log(f"🔄 Reversing position for [{symbol}]...")
                         # Get opposite token ID
                         up_id, down_id = get_token_ids(symbol)
@@ -224,10 +234,15 @@ def check_open_positions(verbose: bool = True):
                                         funding_bias=get_funding_bias(symbol),
                                         order_status=reverse_result["status"],
                                         order_id=reverse_result["order_id"],
+                                        is_reversal=True,
                                     )
                                     log(f"✓ Reversed trade saved to database")
                                 except Exception as e:
                                     log(f"⚠️ Error saving reversed trade: {e}")
+                    elif ENABLE_REVERSAL and is_reversal:
+                        log(
+                            f"⚠️ Trade #{trade_id} is already a reversed trade - not reversing again"
+                        )
 
             # Check take profit
             elif ENABLE_TAKE_PROFIT and pnl_pct >= TAKE_PROFIT_PERCENT:
