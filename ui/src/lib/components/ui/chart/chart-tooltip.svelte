@@ -73,7 +73,7 @@
 
 {#snippet TooltipLabel()}
 	{#if formattedLabel}
-		<div class={cn("font-medium", labelClassName)}>
+		<div class={cn("font-medium text-slate-900 dark:text-slate-100", labelClassName)}>
 			{#if typeof formattedLabel === "function"}
 				{@render formattedLabel()}
 			{:else}
@@ -86,7 +86,7 @@
 <TooltipPrimitive.Root variant="none">
 	<div
 		class={cn(
-			"border-border/50 bg-background grid min-w-[9rem] items-start gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs shadow-xl",
+			"bg-white dark:bg-slate-800 grid min-w-[9rem] items-start gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 px-2.5 py-1.5 text-xs shadow-xl",
 			className
 		)}
 		{...restProps}
@@ -141,12 +141,12 @@
 								{#if nestLabel}
 									{@render TooltipLabel()}
 								{/if}
-								<span class="text-muted-foreground">
+								<span class="text-slate-600 dark:text-slate-400">
 									{itemConfig?.label || item.name}
 								</span>
 							</div>
 							{#if item.value !== undefined}
-								<span class="text-foreground font-mono font-medium tabular-nums">
+								<span class="text-slate-900 dark:text-slate-100 font-mono font-medium tabular-nums">
 									{item.value.toLocaleString()}
 								</span>
 							{/if}
