@@ -9,8 +9,12 @@ from src.utils.logger import log, send_discord
 
 def init_database():
     """Initialize SQLite database"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0)
     c = conn.cursor()
+
+    # Enable WAL mode for better concurrency
+    c.execute("PRAGMA journal_mode=WAL")
+
     c.execute("""
         CREATE TABLE IF NOT EXISTS trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,7 +36,7 @@ def init_database():
 
 def save_trade(**kwargs):
     """Save trade to database"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0)
     c = conn.cursor()
     c.execute(
         """
@@ -71,7 +75,7 @@ def save_trade(**kwargs):
 
 def generate_statistics():
     """Generate performance statistics report"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0)
     c = conn.cursor()
     c.execute(
         "SELECT COUNT(*), SUM(bet_usd), SUM(pnl_usd), AVG(roi_pct) FROM trades WHERE settled = 1"

@@ -48,7 +48,7 @@ def get_market_resolution(slug: str):
 
 def check_and_settle_trades():
     """Check and settle completed trades using definitive API resolution"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0)
     c = conn.cursor()
     now = datetime.now(tz=ZoneInfo("UTC"))
 

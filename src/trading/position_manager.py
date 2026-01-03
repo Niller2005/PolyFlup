@@ -37,7 +37,7 @@ def check_open_positions(verbose: bool = True):
     if not ENABLE_STOP_LOSS and not ENABLE_TAKE_PROFIT and not ENABLE_SCALE_IN:
         return
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, timeout=30.0)
     c = conn.cursor()
     now = datetime.now(tz=ZoneInfo("UTC"))
 
@@ -170,6 +170,9 @@ def check_open_positions(verbose: bool = True):
                            WHERE id=?""",
                         (current_price, pnl_usd, pnl_pct, now.isoformat(), trade_id),
                     )
+                    # Commit before calling save_trade() to avoid nested connection locks
+                    conn.commit()
+
                     send_discord(
                         f"🛑 **STOP LOSS** [{symbol}] {side} closed at {pnl_pct:+.1f}%"
                     )
@@ -243,6 +246,9 @@ def check_open_positions(verbose: bool = True):
                            WHERE id=?""",
                         (current_price, pnl_usd, pnl_pct, now.isoformat(), trade_id),
                     )
+                    # Commit immediately after take profit update
+                    conn.commit()
+
                     send_discord(
                         f"🎯 **TAKE PROFIT** [{symbol}] {side} closed at {pnl_pct:+.1f}%"
                     )
