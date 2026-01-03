@@ -58,10 +58,15 @@
         return data.slice(-50);
     })() : [];
 
-    $: assetData = stats ? stats.per_symbol.map(s => ({
+    $: assetData = stats ? stats.per_symbol.map((s, i) => ({
         symbol: s.symbol,
         pnl: s.pnl,
-        color: s.pnl >= 0 ? "var(--color-chart-2)" : "var(--color-chart-5)"
+        color: {
+            'BTC': 'rgb(255, 153, 0)',
+            'ETH': 'rgb(99, 127, 235)',
+            'SOL': 'rgb(153, 69, 255)',
+            'XRP': 'rgb(2, 140, 255)'
+        }[s.symbol] || `var(--color-chart-${(i % 5) + 1})`
     })) : [];
 
     const pnlConfig = {
@@ -254,14 +259,12 @@
                                     xScale={scaleBand().padding(0.3)}
                                     x="symbol" 
                                     y="pnl"
+                                    c="color"
                                     axis="x"
                                     grid
                                     props={{
                                         xAxis: {
                                             format: (d) => d.length > 10 ? d.slice(0, 10) + '...' : d
-                                        },
-                                        bar: {
-                                            fill: (d) => d.color
                                         }
                                     }}
                                 >
