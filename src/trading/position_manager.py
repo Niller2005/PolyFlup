@@ -31,6 +31,7 @@ from src.data.market_data import (
     get_window_times,
     get_funding_bias,
     get_current_spot_price,
+    get_window_start_price,
 )
 from src.data.database import save_trade
 
@@ -266,20 +267,22 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     # Optionally reverse position (but only if losing based on target price)
                     if ENABLE_REVERSAL and not is_reversal and target_price is not None:
                         # Get current spot price to determine if we're losing
+                        # NOTE: We fetch fresh current price here, not the window start price
+                        # because we want to know the CURRENT market direction
                         current_spot = get_current_spot_price(symbol)
 
                         if current_spot > 0:
                             # Determine if we're losing based on target price
-                            # DOWN position: losing if current_spot > target_price
-                            # UP position: losing if current_spot < target_price
+                            # UP position: losing if current_spot < target_price (price went down)
+                            # DOWN position: losing if current_spot > target_price (price went up)
                             should_reverse = False
 
-                            if side == "DOWN" and current_spot > target_price:
-                                should_reverse = True
-                                reason = f"current ${current_spot:,.2f} > target ${target_price:,.2f}"
-                            elif side == "UP" and current_spot < target_price:
+                            if side == "UP" and current_spot < target_price:
                                 should_reverse = True
                                 reason = f"current ${current_spot:,.2f} < target ${target_price:,.2f}"
+                            elif side == "DOWN" and current_spot > target_price:
+                                should_reverse = True
+                                reason = f"current ${current_spot:,.2f} > target ${target_price:,.2f}"
                             else:
                                 should_reverse = False
 

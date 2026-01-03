@@ -13,6 +13,9 @@ from src.config.settings import (
 )
 from src.utils.logger import log
 
+# Cache for window start prices (key: "symbol_timestamp", value: price)
+_window_start_prices = {}
+
 
 def get_current_slug(symbol: str) -> str:
     """Generate slug for current 15-minute window"""
@@ -84,9 +87,66 @@ def get_fear_greed() -> int:
         return 50
 
 
+def get_window_start_price(symbol: str) -> float:
+    """
+    Get the spot price at the START of the current 15-minute window.
+    This is cached per window so all trades in the same window use the same target price.
+
+    Args:
+        symbol: Trading symbol (e.g., 'BTC', 'ETH')
+
+    Returns:
+        Window start spot price in USDT, or -1.0 on error
+    """
+    # Generate cache key based on window start timestamp
+    now_et = datetime.now(tz=ZoneInfo("America/New_York"))
+    minute_slot = (now_et.minute // 15) * 15
+    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0)
+    window_start_utc = window_start_et.astimezone(ZoneInfo("UTC"))
+    cache_key = f"{symbol}_{int(window_start_utc.timestamp())}"
+
+    # Return cached price if available
+    if cache_key in _window_start_prices:
+        return _window_start_prices[cache_key]
+
+    # Fetch current spot price as the window start price
+    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    if not pair:
+        log(f"[{symbol}] No Binance mapping found for spot price")
+        return -1.0
+
+    try:
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={pair}"
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        price = float(data["price"])
+
+        # Cache this price for the current window
+        _window_start_prices[cache_key] = price
+
+        # Clean up old cache entries (keep only last 10 windows)
+        if len(_window_start_prices) > 10:
+            oldest_key = min(_window_start_prices.keys())
+            del _window_start_prices[oldest_key]
+
+        log(
+            f"[{symbol}] 🎯 Window start price cached: ${price:,.2f} (window: {cache_key})"
+        )
+        return price
+    except Exception as e:
+        log(f"[{symbol}] Error fetching window start price: {e}")
+        return -1.0
+
+
 def get_current_spot_price(symbol: str) -> float:
     """
     Get current spot price from Binance for the given symbol.
+
+    DEPRECATED: Use get_window_start_price() for target price tracking.
+    This function is kept for backward compatibility but should not be used
+    for settlement target price as it returns the CURRENT price, not the
+    window start price.
 
     Args:
         symbol: Trading symbol (e.g., 'BTC', 'ETH')
@@ -99,11 +159,8 @@ def get_current_spot_price(symbol: str) -> float:
         log(f"[{symbol}] No Binance mapping found for spot price")
         return -1.0
 
-    # Convert futures symbol to spot symbol (e.g., BTCUSDT from BTCUSD)
-    spot_pair = pair.replace("USD", "USDT") if not pair.endswith("USDT") else pair
-
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={spot_pair}"
+        url = f"https://api.binance.com/api/v3/ticker/price?symbol={pair}"
         response = requests.get(url, timeout=5)
         response.raise_for_status()
         data = response.json()

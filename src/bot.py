@@ -39,7 +39,7 @@ from src.data.market_data import (
     get_current_slug,
     get_window_times,
     get_funding_bias,
-    get_current_spot_price,
+    get_window_start_price,
 )
 from src.trading.strategy import (
     calculate_edge,
@@ -134,7 +134,7 @@ def trade_symbol(symbol: str, balance: float):
 
     try:
         window_start, window_end = get_window_times(symbol)
-        target_price = get_current_spot_price(symbol)
+        target_price = get_window_start_price(symbol)
 
         trade_id = save_trade(
             symbol=symbol,
