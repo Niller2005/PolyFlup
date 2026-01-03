@@ -127,28 +127,45 @@ def get_balance(addr: str) -> float:
     """Get USDC balance for address"""
     try:
         abi = '[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"","type":"uint256"}],"type":"function"}]'
-        contract = w3.eth.contract(address=USDC_ADDRESS, abi=abi)
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(USDC_ADDRESS), abi=abi
+        )
         raw = contract.functions.balanceOf(Web3.to_checksum_address(addr)).call()
         return raw / 1e6
     except Exception:
         return 0.0
 
 
-def redeem_market(condition_id_hex: str, index_sets: list):
-    """Redeem winnings from CTF contract"""
+def redeem_winnings(condition_id_hex: str, neg_risk: bool = False) -> bool:
+    """
+    Redeem winnings from CTF contract for a resolved condition.
+
+    Args:
+        condition_id_hex: The condition ID (0x...)
+        neg_risk: Whether this is a negative risk market (not applicable for 15min crypto markets)
+
+    Returns:
+        True if redemption was successful, False otherwise
+    """
     try:
-        log(
-            f"💰 Attempting to redeem condition {condition_id_hex} with index sets {index_sets}..."
+        # 15-minute crypto markets are NOT negative risk markets
+        # They are standard binary CTF markets
+        if neg_risk:
+            log(
+                f"⚠️ Negative risk redemption not implemented (not needed for 15min markets)"
+            )
+            return False
+
+        log(f"💰 Attempting to redeem condition {condition_id_hex}...")
+
+        # Get contract instance
+        ctf_contract = w3.eth.contract(
+            address=Web3.to_checksum_address(CTF_ADDRESS), abi=CTF_ABI
         )
 
-        contract = w3.eth.contract(address=CTF_ADDRESS, abi=CTF_ABI)
-
-        # Account from PK
+        # Get account
         account = Account.from_key(PROXY_PK)
         my_address = account.address
-
-        # Prepare transaction
-        parent_collection_id = b"\x00" * 32
 
         # Parse condition_id
         if condition_id_hex.startswith("0x"):
@@ -156,40 +173,56 @@ def redeem_market(condition_id_hex: str, index_sets: list):
         else:
             condition_id = bytes.fromhex(condition_id_hex)
 
-        # Build tx
-        tx = contract.functions.redeemPositions(
-            USDC_ADDRESS, parent_collection_id, condition_id, index_sets
+        # Polymarket standard parameters:
+        # - collateralToken: USDC address
+        # - parentCollectionId: bytes32(0) (null for Polymarket)
+        # - conditionId: the market's condition ID
+        # - indexSets: [1, 2] for binary markets (represents outcome A and B)
+        parent_collection_id = bytes(32)  # null bytes32
+        index_sets = [1, 2]  # Standard for Polymarket binary markets
+
+        # Build transaction
+        tx = ctf_contract.functions.redeemPositions(
+            Web3.to_checksum_address(USDC_ADDRESS),
+            parent_collection_id,
+            condition_id,
+            index_sets,
         ).build_transaction(
             {
                 "from": my_address,
                 "nonce": w3.eth.get_transaction_count(my_address),
-                "gasPrice": int(w3.eth.gas_price * 1.1),  # +10% buffer
+                "gas": 200000,  # Set reasonable gas limit
+                "gasPrice": w3.eth.gas_price,
             }
         )
 
-        # Sign and send
+        # Sign transaction
         signed_tx = w3.eth.account.sign_transaction(tx, private_key=PROXY_PK)
 
-        # Handle different web3.py/eth_account versions
-        if hasattr(signed_tx, "rawTransaction"):
-            raw_tx = signed_tx.rawTransaction
-        elif hasattr(signed_tx, "raw_transaction"):
-            raw_tx = signed_tx.raw_transaction
-        else:
-            # Fallback for NamedTuple (rawTransaction is usually index 0)
-            raw_tx = signed_tx[0]
-
-        tx_hash = w3.eth.send_raw_transaction(raw_tx)
+        # Send transaction
+        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
 
         log(f"✅ Redeem TX sent: {w3.to_hex(tx_hash)}")
-        return w3.to_hex(tx_hash)
+
+        # Wait for receipt (with timeout)
+        try:
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            if receipt["status"] == 1:
+                log(f"✅ Redemption successful! Gas used: {receipt['gasUsed']}")
+                return True
+            else:
+                log(f"❌ Redemption transaction failed")
+                return False
+        except Exception as e:
+            log(f"⚠️ Could not get transaction receipt: {e}")
+            return False
 
     except Exception as e:
         log(f"❌ Redeem error: {e}")
         import traceback
 
         log(traceback.format_exc())
-        return None
+        return False
 
 
 # ========================== CLOB CLIENT ==========================
@@ -806,16 +839,12 @@ def check_and_settle_trades():
             if pnl_usd > 0:
                 condition_id_hex = data.get("conditionId")
                 if condition_id_hex:
-                    # Map side to index set: UP(0)->[1], DOWN(1)->[2]
-                    # Polymarket standard for binary: Yes=1 (1<<0), No=2 (1<<1)
-                    # We redeem BOTH index sets [1, 2] to ensure we catch the winning side.
-                    # The contract allows redeeming multiple sets; if you don't hold one, it just does nothing for that one.
-                    idx_set = [1, 2]
-                    redeem_market(condition_id_hex, idx_set)
-                else:
                     log(
-                        f"⚠️ Could not find conditionId for trade #{trade_id}, skipping redemption"
+                        f"💰 Trade #{trade_id} won ${pnl_usd:.2f}, attempting to redeem..."
                     )
+                    redeem_winnings(condition_id_hex)
+                else:
+                    log(f"⚠️ Trade #{trade_id}: No conditionId found, cannot redeem")
 
             c.execute(
                 "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=? WHERE id=?",
