@@ -19,6 +19,19 @@ ENABLE_TAKE_PROFIT = os.getenv("ENABLE_TAKE_PROFIT", "NO").upper() == "YES"
 TAKE_PROFIT_PERCENT = float(os.getenv("TAKE_PROFIT_PERCENT", "80.0"))
 ENABLE_REVERSAL = os.getenv("ENABLE_REVERSAL", "NO").upper() == "YES"
 
+# Position Scaling
+ENABLE_SCALE_IN = os.getenv("ENABLE_SCALE_IN", "YES").upper() == "YES"
+SCALE_IN_MIN_PRICE = float(
+    os.getenv("SCALE_IN_MIN_PRICE", "0.70")
+)  # Min 70 cents (70%+ win probability)
+SCALE_IN_MAX_PRICE = float(os.getenv("SCALE_IN_MAX_PRICE", "0.90"))  # Max 90 cents
+SCALE_IN_TIME_LEFT = int(
+    os.getenv("SCALE_IN_TIME_LEFT", "120")
+)  # 2 minutes (120 seconds)
+SCALE_IN_MULTIPLIER = float(
+    os.getenv("SCALE_IN_MULTIPLIER", "1.0")
+)  # Add 100% more (double position)
+
 # ADX Filter
 ADX_ENABLED = os.getenv("ADX", "NO").upper() == "YES"
 ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "20.0"))

@@ -20,6 +20,11 @@ from src.config.settings import (
     ENABLE_TAKE_PROFIT,
     TAKE_PROFIT_PERCENT,
     ENABLE_REVERSAL,
+    ENABLE_SCALE_IN,
+    SCALE_IN_MIN_PRICE,
+    SCALE_IN_MAX_PRICE,
+    SCALE_IN_TIME_LEFT,
+    SCALE_IN_MULTIPLIER,
 )
 from src.utils.logger import log, send_discord
 from src.utils.web3_utils import get_balance
@@ -192,6 +197,9 @@ def main():
         f"🎯 Take Profit: {'ENABLED' if ENABLE_TAKE_PROFIT else 'DISABLED'} ({TAKE_PROFIT_PERCENT}%)"
     )
     log(f"🔄 Auto Reverse: {'ENABLED' if ENABLE_REVERSAL else 'DISABLED'}")
+    log(
+        f"📈 Scale In: {'ENABLED' if ENABLE_SCALE_IN else 'DISABLED'} (${SCALE_IN_MIN_PRICE:.2f}-${SCALE_IN_MAX_PRICE:.2f}, {SCALE_IN_TIME_LEFT}s left, +{SCALE_IN_MULTIPLIER * 100:.0f}%)"
+    )
     log("=" * 90)
 
     cycle = 0

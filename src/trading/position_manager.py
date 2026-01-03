@@ -10,6 +10,11 @@ from src.config.settings import (
     ENABLE_TAKE_PROFIT,
     TAKE_PROFIT_PERCENT,
     ENABLE_REVERSAL,
+    ENABLE_SCALE_IN,
+    SCALE_IN_MIN_PRICE,
+    SCALE_IN_MAX_PRICE,
+    SCALE_IN_TIME_LEFT,
+    SCALE_IN_MULTIPLIER,
 )
 from src.utils.logger import log, send_discord
 from src.trading.orders import get_clob_client, sell_position, place_order
@@ -24,7 +29,7 @@ from src.data.database import save_trade
 
 def check_open_positions():
     """Check open positions every minute and manage them"""
-    if not ENABLE_STOP_LOSS and not ENABLE_TAKE_PROFIT:
+    if not ENABLE_STOP_LOSS and not ENABLE_TAKE_PROFIT and not ENABLE_SCALE_IN:
         return
 
     conn = sqlite3.connect(DB_FILE)
@@ -33,7 +38,7 @@ def check_open_positions():
 
     # Get unsettled trades that are still in their window
     c.execute(
-        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end 
+        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in 
            FROM trades 
            WHERE settled = 0 
            AND exited_early = 0
@@ -59,6 +64,7 @@ def check_open_positions():
         size,
         bet_usd,
         window_end,
+        scaled_in,
     ) in open_positions:
         try:
             # Get current market price
@@ -93,6 +99,50 @@ def check_open_positions():
             log(
                 f"  [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={pnl_pct:+.1f}%"
             )
+
+            # Calculate time left until window ends
+            window_end_dt = datetime.fromisoformat(window_end)
+            time_left_seconds = (window_end_dt - now).total_seconds()
+
+            # Check if we should scale into position
+            if (
+                ENABLE_SCALE_IN
+                and not scaled_in
+                and time_left_seconds <= SCALE_IN_TIME_LEFT
+                and time_left_seconds > 0
+                and SCALE_IN_MIN_PRICE <= current_price <= SCALE_IN_MAX_PRICE
+            ):
+                log(
+                    f"📈 SCALE IN triggered for trade #{trade_id}: price=${current_price:.2f}, {time_left_seconds:.0f}s left"
+                )
+
+                # Calculate additional size
+                additional_size = size * SCALE_IN_MULTIPLIER
+                additional_bet = additional_size * current_price
+
+                # Place additional order
+                scale_result = place_order(token_id, current_price, additional_size)
+
+                if scale_result["success"]:
+                    # Update trade with new size and bet
+                    new_total_size = size + additional_size
+                    new_total_bet = bet_usd + additional_bet
+                    new_avg_price = new_total_bet / new_total_size
+
+                    c.execute(
+                        """UPDATE trades 
+                           SET size=?, bet_usd=?, entry_price=?, scaled_in=1 
+                           WHERE id=?""",
+                        (new_total_size, new_total_bet, new_avg_price, trade_id),
+                    )
+
+                    log(
+                        f"✅ Scaled in! Size: {size:.2f} → {new_total_size:.2f} (+{additional_size:.2f})"
+                    )
+                    log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
+                    send_discord(
+                        f"📈 **SCALED IN** [{symbol}] {side} +${additional_bet:.2f} @ ${current_price:.2f} ({time_left_seconds:.0f}s left)"
+                    )
 
             # Check stop loss
             if ENABLE_STOP_LOSS and pnl_pct <= -STOP_LOSS_PERCENT:
