@@ -28,7 +28,7 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/your-repo/polyastra.git
+   git clone https://github.com/Niller2005/polyastra.git
    cd polyastra
    ```
 
