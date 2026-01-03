@@ -807,7 +807,10 @@ def check_and_settle_trades():
                 condition_id_hex = data.get("conditionId")
                 if condition_id_hex:
                     # Map side to index set: UP(0)->[1], DOWN(1)->[2]
-                    idx_set = [1] if side == "UP" else [2]
+                    # Polymarket standard for binary: Yes=1 (1<<0), No=2 (1<<1)
+                    # We redeem BOTH index sets [1, 2] to ensure we catch the winning side.
+                    # The contract allows redeeming multiple sets; if you don't hold one, it just does nothing for that one.
+                    idx_set = [1, 2]
                     redeem_market(condition_id_hex, idx_set)
                 else:
                     log(
