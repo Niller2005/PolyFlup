@@ -1,0 +1,112 @@
+"""Web3 utilities for blockchain interactions"""
+
+from web3 import Web3
+from eth_account import Account
+from src.config.settings import (
+    POLYGON_RPC,
+    USDC_ADDRESS,
+    CTF_ADDRESS,
+    CTF_ABI,
+    PROXY_PK,
+)
+from src.utils.logger import log
+
+
+w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
+
+
+def get_balance(addr: str) -> float:
+    """Get USDC balance for address"""
+    try:
+        abi = '[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"","type":"uint256"}],"type":"function"}]'
+        contract = w3.eth.contract(
+            address=Web3.to_checksum_address(USDC_ADDRESS), abi=abi
+        )
+        raw = contract.functions.balanceOf(Web3.to_checksum_address(addr)).call()
+        return raw / 1e6
+    except Exception:
+        return 0.0
+
+
+def redeem_winnings(condition_id_hex: str, neg_risk: bool = False) -> bool:
+    """
+    Redeem winnings from CTF contract for a resolved condition.
+
+    Args:
+        condition_id_hex: The condition ID (0x...)
+        neg_risk: Whether this is a negative risk market (not applicable for 15min crypto markets)
+
+    Returns:
+        True if redemption was successful, False otherwise
+    """
+    try:
+        # 15-minute crypto markets are NOT negative risk markets
+        if neg_risk:
+            log(
+                "⚠️ Negative risk redemption not implemented (not needed for 15min markets)"
+            )
+            return False
+
+        log(f"💰 Attempting to redeem condition {condition_id_hex}...")
+
+        # Get contract instance
+        ctf_contract = w3.eth.contract(
+            address=Web3.to_checksum_address(CTF_ADDRESS), abi=CTF_ABI
+        )
+
+        # Get account
+        account = Account.from_key(PROXY_PK)
+        my_address = account.address
+
+        # Parse condition_id
+        if condition_id_hex.startswith("0x"):
+            condition_id = bytes.fromhex(condition_id_hex[2:])
+        else:
+            condition_id = bytes.fromhex(condition_id_hex)
+
+        # Polymarket standard parameters
+        parent_collection_id = bytes(32)  # null bytes32
+        index_sets = [1, 2]  # Standard for Polymarket binary markets
+
+        # Build transaction
+        tx = ctf_contract.functions.redeemPositions(
+            Web3.to_checksum_address(USDC_ADDRESS),
+            parent_collection_id,
+            condition_id,
+            index_sets,
+        ).build_transaction(
+            {
+                "from": my_address,
+                "nonce": w3.eth.get_transaction_count(my_address),
+                "gas": 200000,
+                "gasPrice": w3.eth.gas_price,
+            }
+        )
+
+        # Sign transaction
+        signed_tx = w3.eth.account.sign_transaction(tx, private_key=PROXY_PK)
+
+        # Send transaction
+        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+
+        log(f"✅ Redeem TX sent: {w3.to_hex(tx_hash)}")
+
+        # Wait for receipt
+        try:
+            receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            if receipt["status"] == 1:
+                log(f"✅ Redemption successful! Gas used: {receipt['gasUsed']}")
+                return True
+            else:
+                log("❌ Redemption transaction failed")
+                return False
+        except Exception as e:
+            log(f"⚠️ Could not get transaction receipt: {e}")
+            return False
+
+    except Exception as e:
+        log(f"❌ Redeem error: {e}")
+        import traceback
+
+        log(traceback.format_exc())
+        return False
