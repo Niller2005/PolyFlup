@@ -280,15 +280,15 @@
                                     </Table.Cell>
                                     <Table.Cell class="text-right pr-6">
                                         {#if !trade.settled}
-                                            <Badge class="bg-amber-500 hover:bg-amber-600 text-[9px] h-4 px-1.5 leading-none">LIVE</Badge>
+                                            <Badge class="bg-amber-500 hover:bg-amber-600 text-[9px] h-4 px-1.5 leading-none">⚡ LIVE</Badge>
                                         {:else if trade.final_outcome === 'STOP_LOSS'}
-                                            <Badge variant="destructive" class="text-[9px] h-4 px-1.5 leading-none">STOP LOSS</Badge>
+                                            <Badge variant="destructive" class="text-[9px] h-4 px-1.5 leading-none">🛑 STOP LOSS</Badge>
                                         {:else if trade.final_outcome === 'TAKE_PROFIT'}
-                                            <Badge class="bg-emerald-500 hover:bg-emerald-600 text-[9px] h-4 px-1.5 leading-none">TAKE PROFIT</Badge>
+                                            <Badge class="bg-emerald-500 hover:bg-emerald-600 text-[9px] h-4 px-1.5 leading-none">🎯 TAKE PROFIT</Badge>
                                         {:else if trade.exited_early}
-                                            <Badge variant="outline" class="text-[9px] h-4 px-1.5 border-primary text-primary leading-none">REVERSED</Badge>
+                                            <Badge variant="outline" class="text-[9px] h-4 px-1.5 border-primary text-primary leading-none">🔄 REVERSED</Badge>
                                         {:else}
-                                            <Badge variant="secondary" class="text-[9px] h-4 px-1.5 font-bold tracking-tighter leading-none">SETTLED</Badge>
+                                            <Badge variant="secondary" class="text-[9px] h-4 px-1.5 font-bold tracking-tighter leading-none">✅ SETTLED</Badge>
                                         {/if}
                                     </Table.Cell>
                                 </Table.Row>
