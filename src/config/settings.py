@@ -38,6 +38,13 @@ ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "20.0"))
 ADX_INTERVAL = os.getenv("ADX_INTERVAL", "15m")
 ADX_PERIOD = int(os.getenv("ADX_PERIOD", "10"))
 
+# Enhanced Binance Integration
+MOMENTUM_LOOKBACK_MINUTES = int(os.getenv("MOMENTUM_LOOKBACK_MINUTES", "15"))
+ENABLE_MOMENTUM_FILTER = os.getenv("ENABLE_MOMENTUM_FILTER", "YES").upper() == "YES"
+ENABLE_ORDER_FLOW = os.getenv("ENABLE_ORDER_FLOW", "YES").upper() == "YES"
+ENABLE_DIVERGENCE = os.getenv("ENABLE_DIVERGENCE", "YES").upper() == "YES"
+ENABLE_VWM = os.getenv("ENABLE_VWM", "YES").upper() == "YES"
+
 # Timing
 WINDOW_DELAY_SEC = int(os.getenv("WINDOW_DELAY_SEC", "12"))
 if WINDOW_DELAY_SEC < 0:

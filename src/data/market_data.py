@@ -210,3 +210,494 @@ def get_adx_from_binance(symbol: str) -> float:
 
         log(traceback.format_exc())
         return -1.0
+
+
+def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
+    """
+    Calculate price momentum from Binance spot data.
+
+    Args:
+        symbol: Trading symbol (e.g., 'BTC', 'ETH')
+        lookback_minutes: Minutes to look back for momentum calculation
+
+    Returns:
+        dict with momentum metrics or error values
+        {
+            'velocity': float,  # % change over period
+            'acceleration': float,  # rate of change of velocity
+            'rsi': float,  # RSI indicator
+            'direction': str,  # 'UP' or 'DOWN'
+            'strength': float,  # 0-1, magnitude of momentum
+        }
+    """
+    try:
+        import pandas as pd
+        from ta.momentum import RSIIndicator
+    except ImportError:
+        log(f"[{symbol}] Momentum: Missing required libraries")
+        return {
+            "velocity": 0.0,
+            "acceleration": 0.0,
+            "rsi": 50.0,
+            "direction": "NEUTRAL",
+            "strength": 0.0,
+        }
+
+    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    if not pair:
+        log(f"[{symbol}] Momentum: No Binance mapping found")
+        return {
+            "velocity": 0.0,
+            "acceleration": 0.0,
+            "rsi": 50.0,
+            "direction": "NEUTRAL",
+            "strength": 0.0,
+        }
+
+    try:
+        # Fetch 1-minute klines for precise momentum
+        limit = max(30, lookback_minutes + 20)  # Extra for RSI calculation
+        url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&limit={limit}"
+
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        klines = response.json()
+
+        if not klines or len(klines) < lookback_minutes:
+            log(f"[{symbol}] Momentum: Insufficient data")
+            return {
+                "velocity": 0.0,
+                "acceleration": 0.0,
+                "rsi": 50.0,
+                "direction": "NEUTRAL",
+                "strength": 0.0,
+            }
+
+        df = pd.DataFrame(
+            klines,
+            columns=[
+                "open_time",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "close_time",
+                "quote_volume",
+                "trades",
+                "taker_buy_base",
+                "taker_buy_quote",
+                "ignore",
+            ],
+        )
+
+        df["close"] = pd.to_numeric(df["close"])
+        df["open"] = pd.to_numeric(df["open"])
+
+        # Calculate velocity (% change over lookback period)
+        current_price = df["close"].iloc[-1]
+        past_price = (
+            df["close"].iloc[-lookback_minutes]
+            if len(df) >= lookback_minutes
+            else df["close"].iloc[0]
+        )
+        velocity = ((current_price - past_price) / past_price) * 100.0
+
+        # Calculate acceleration (change in velocity)
+        mid_point = max(1, lookback_minutes // 2)
+        if len(df) >= lookback_minutes:
+            mid_price = df["close"].iloc[-mid_point]
+            recent_velocity = ((current_price - mid_price) / mid_price) * 100.0
+            early_velocity = ((mid_price - past_price) / past_price) * 100.0
+            acceleration = recent_velocity - early_velocity
+        else:
+            acceleration = 0.0
+
+        # Calculate RSI (14 period)
+        if len(df) >= 15:
+            rsi_indicator = RSIIndicator(close=df["close"], window=14, fillna=True)
+            rsi = float(rsi_indicator.rsi().iloc[-1])
+        else:
+            rsi = 50.0
+
+        # Determine direction and strength
+        direction = "UP" if velocity > 0 else "DOWN" if velocity < 0 else "NEUTRAL"
+        strength = min(abs(velocity) / 2.0, 1.0)  # Normalize to 0-1 (2% = max strength)
+
+        log(
+            f"[{symbol}] Momentum: vel={velocity:.3f}% acc={acceleration:.3f}% RSI={rsi:.1f} dir={direction} str={strength:.3f}"
+        )
+
+        return {
+            "velocity": velocity,
+            "acceleration": acceleration,
+            "rsi": rsi,
+            "direction": direction,
+            "strength": strength,
+        }
+
+    except Exception as e:
+        log(f"[{symbol}] Momentum: Error calculating: {e}")
+        return {
+            "velocity": 0.0,
+            "acceleration": 0.0,
+            "rsi": 50.0,
+            "direction": "NEUTRAL",
+            "strength": 0.0,
+        }
+
+
+def get_order_flow_analysis(symbol: str) -> dict:
+    """
+    Analyze Binance order flow for buy/sell pressure.
+
+    Args:
+        symbol: Trading symbol (e.g., 'BTC', 'ETH')
+
+    Returns:
+        dict with order flow metrics
+        {
+            'buy_pressure': float,  # 0-1, higher = more buying
+            'volume_ratio': float,  # taker buy volume / total volume
+            'large_trade_direction': str,  # 'BUY', 'SELL', or 'NEUTRAL'
+            'trade_intensity': float,  # trades per minute
+        }
+    """
+    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    if not pair:
+        log(f"[{symbol}] OrderFlow: No Binance mapping found")
+        return {
+            "buy_pressure": 0.5,
+            "volume_ratio": 0.5,
+            "large_trade_direction": "NEUTRAL",
+            "trade_intensity": 0.0,
+        }
+
+    try:
+        import pandas as pd
+
+        # Fetch recent klines with volume data (5 minutes of 1m candles)
+        url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&limit=5"
+
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        klines = response.json()
+
+        if not klines:
+            log(f"[{symbol}] OrderFlow: No data")
+            return {
+                "buy_pressure": 0.5,
+                "volume_ratio": 0.5,
+                "large_trade_direction": "NEUTRAL",
+                "trade_intensity": 0.0,
+            }
+
+        df = pd.DataFrame(
+            klines,
+            columns=[
+                "open_time",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "close_time",
+                "quote_volume",
+                "trades",
+                "taker_buy_base",
+                "taker_buy_quote",
+                "ignore",
+            ],
+        )
+
+        df["volume"] = pd.to_numeric(df["volume"])
+        df["taker_buy_base"] = pd.to_numeric(df["taker_buy_base"])
+        df["trades"] = pd.to_numeric(df["trades"])
+
+        # Calculate buy pressure (taker buy / total volume)
+        total_volume = df["volume"].sum()
+        buy_volume = df["taker_buy_base"].sum()
+
+        if total_volume > 0:
+            volume_ratio = buy_volume / total_volume
+            buy_pressure = volume_ratio  # 0.5 = balanced, >0.5 = buy pressure, <0.5 = sell pressure
+        else:
+            volume_ratio = 0.5
+            buy_pressure = 0.5
+
+        # Determine large trade direction
+        if volume_ratio > 0.55:
+            large_trade_direction = "BUY"
+        elif volume_ratio < 0.45:
+            large_trade_direction = "SELL"
+        else:
+            large_trade_direction = "NEUTRAL"
+
+        # Calculate trade intensity (trades per minute)
+        trade_intensity = df["trades"].mean()
+
+        log(
+            f"[{symbol}] OrderFlow: buy_pressure={buy_pressure:.3f} vol_ratio={volume_ratio:.3f} dir={large_trade_direction} intensity={trade_intensity:.0f}"
+        )
+
+        return {
+            "buy_pressure": buy_pressure,
+            "volume_ratio": volume_ratio,
+            "large_trade_direction": large_trade_direction,
+            "trade_intensity": trade_intensity,
+        }
+
+    except Exception as e:
+        log(f"[{symbol}] OrderFlow: Error: {e}")
+        return {
+            "buy_pressure": 0.5,
+            "volume_ratio": 0.5,
+            "large_trade_direction": "NEUTRAL",
+            "trade_intensity": 0.0,
+        }
+
+
+def get_cross_exchange_divergence(symbol: str, polymarket_p_up: float) -> dict:
+    """
+    Compare Polymarket implied probability vs Binance price movement.
+
+    Args:
+        symbol: Trading symbol (e.g., 'BTC', 'ETH')
+        polymarket_p_up: Current Polymarket UP token price (probability of upward move)
+
+    Returns:
+        dict with divergence analysis
+        {
+            'binance_direction': str,  # Expected Binance direction based on recent movement
+            'polymarket_direction': str,  # Direction Polymarket is pricing in
+            'divergence': float,  # -1 to 1, negative = Polymarket too bearish, positive = too bullish
+            'opportunity': str,  # 'BUY_UP', 'BUY_DOWN', or 'NEUTRAL'
+        }
+    """
+    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    if not pair:
+        log(f"[{symbol}] Divergence: No Binance mapping found")
+        return {
+            "binance_direction": "NEUTRAL",
+            "polymarket_direction": "NEUTRAL",
+            "divergence": 0.0,
+            "opportunity": "NEUTRAL",
+        }
+
+    try:
+        import pandas as pd
+
+        # Fetch 15-minute window worth of 1m klines
+        url = (
+            f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&limit=15"
+        )
+
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        klines = response.json()
+
+        if not klines or len(klines) < 10:
+            log(f"[{symbol}] Divergence: Insufficient data")
+            return {
+                "binance_direction": "NEUTRAL",
+                "polymarket_direction": "NEUTRAL",
+                "divergence": 0.0,
+                "opportunity": "NEUTRAL",
+            }
+
+        df = pd.DataFrame(
+            klines,
+            columns=[
+                "open_time",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "close_time",
+                "quote_volume",
+                "trades",
+                "taker_buy_base",
+                "taker_buy_quote",
+                "ignore",
+            ],
+        )
+
+        df["close"] = pd.to_numeric(df["close"])
+        df["open"] = pd.to_numeric(df["open"])
+
+        # Calculate Binance movement trend
+        start_price = df["open"].iloc[0]
+        current_price = df["close"].iloc[-1]
+        price_change_pct = ((current_price - start_price) / start_price) * 100.0
+
+        # Determine Binance implied direction (based on recent movement)
+        # Strong uptrend = high probability of UP, strong downtrend = high probability of DOWN
+        if price_change_pct > 0.5:
+            binance_direction = "UP"
+            binance_implied_p_up = 0.55 + min(
+                price_change_pct / 10.0, 0.3
+            )  # 0.55-0.85 range
+        elif price_change_pct < -0.5:
+            binance_direction = "DOWN"
+            binance_implied_p_up = 0.45 - min(
+                abs(price_change_pct) / 10.0, 0.3
+            )  # 0.15-0.45 range
+        else:
+            binance_direction = "NEUTRAL"
+            binance_implied_p_up = 0.5
+
+        # Determine Polymarket direction
+        if polymarket_p_up > 0.55:
+            polymarket_direction = "UP"
+        elif polymarket_p_up < 0.45:
+            polymarket_direction = "DOWN"
+        else:
+            polymarket_direction = "NEUTRAL"
+
+        # Calculate divergence (negative = Polymarket underpricing UP, positive = overpricing UP)
+        divergence = polymarket_p_up - binance_implied_p_up
+
+        # Determine opportunity
+        if divergence < -0.1:  # Polymarket too bearish vs Binance trend
+            opportunity = "BUY_UP"
+        elif divergence > 0.1:  # Polymarket too bullish vs Binance trend
+            opportunity = "BUY_DOWN"
+        else:
+            opportunity = "NEUTRAL"
+
+        log(
+            f"[{symbol}] Divergence: Binance={binance_direction} ({binance_implied_p_up:.3f}) Poly={polymarket_direction} ({polymarket_p_up:.3f}) div={divergence:.3f} opp={opportunity}"
+        )
+
+        return {
+            "binance_direction": binance_direction,
+            "polymarket_direction": polymarket_direction,
+            "divergence": divergence,
+            "opportunity": opportunity,
+            "binance_implied_p_up": binance_implied_p_up,
+        }
+
+    except Exception as e:
+        log(f"[{symbol}] Divergence: Error: {e}")
+        return {
+            "binance_direction": "NEUTRAL",
+            "polymarket_direction": "NEUTRAL",
+            "divergence": 0.0,
+            "opportunity": "NEUTRAL",
+        }
+
+
+def get_volume_weighted_momentum(symbol: str) -> dict:
+    """
+    Calculate volume-weighted momentum indicators.
+
+    Args:
+        symbol: Trading symbol (e.g., 'BTC', 'ETH')
+
+    Returns:
+        dict with volume-weighted metrics
+        {
+            'vwap_distance': float,  # % distance from VWAP (+ = above, - = below)
+            'volume_trend': str,  # 'INCREASING', 'DECREASING', 'STABLE'
+            'momentum_quality': float,  # 0-1, higher = higher volume confirming trend
+        }
+    """
+    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    if not pair:
+        log(f"[{symbol}] VWM: No Binance mapping found")
+        return {"vwap_distance": 0.0, "volume_trend": "STABLE", "momentum_quality": 0.0}
+
+    try:
+        import pandas as pd
+
+        # Fetch 15-minute window of 1m klines
+        url = (
+            f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&limit=15"
+        )
+
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        klines = response.json()
+
+        if not klines or len(klines) < 10:
+            log(f"[{symbol}] VWM: Insufficient data")
+            return {
+                "vwap_distance": 0.0,
+                "volume_trend": "STABLE",
+                "momentum_quality": 0.0,
+            }
+
+        df = pd.DataFrame(
+            klines,
+            columns=[
+                "open_time",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "close_time",
+                "quote_volume",
+                "trades",
+                "taker_buy_base",
+                "taker_buy_quote",
+                "ignore",
+            ],
+        )
+
+        df["close"] = pd.to_numeric(df["close"])
+        df["high"] = pd.to_numeric(df["high"])
+        df["low"] = pd.to_numeric(df["low"])
+        df["volume"] = pd.to_numeric(df["volume"])
+
+        # Calculate VWAP (Volume Weighted Average Price)
+        df["typical_price"] = (df["high"] + df["low"] + df["close"]) / 3
+        df["vwap_component"] = df["typical_price"] * df["volume"]
+        vwap = (
+            df["vwap_component"].sum() / df["volume"].sum()
+            if df["volume"].sum() > 0
+            else df["close"].iloc[-1]
+        )
+
+        # Distance from VWAP
+        current_price = df["close"].iloc[-1]
+        vwap_distance = ((current_price - vwap) / vwap) * 100.0
+
+        # Volume trend
+        early_vol = df["volume"].iloc[:5].mean()
+        recent_vol = df["volume"].iloc[-5:].mean()
+
+        if recent_vol > early_vol * 1.2:
+            volume_trend = "INCREASING"
+        elif recent_vol < early_vol * 0.8:
+            volume_trend = "DECREASING"
+        else:
+            volume_trend = "STABLE"
+
+        # Momentum quality (high volume on trend moves = high quality)
+        price_direction = 1 if df["close"].iloc[-1] > df["close"].iloc[0] else -1
+        volume_normalized = (
+            (recent_vol - df["volume"].mean()) / df["volume"].std()
+            if df["volume"].std() > 0
+            else 0
+        )
+        momentum_quality = (
+            min(abs(volume_normalized) / 2.0, 1.0)
+            if price_direction * volume_normalized > 0
+            else 0.0
+        )
+
+        log(
+            f"[{symbol}] VWM: vwap_dist={vwap_distance:.3f}% vol_trend={volume_trend} quality={momentum_quality:.3f}"
+        )
+
+        return {
+            "vwap_distance": vwap_distance,
+            "volume_trend": volume_trend,
+            "momentum_quality": momentum_quality,
+        }
+
+    except Exception as e:
+        log(f"[{symbol}] VWM: Error: {e}")
+        return {"vwap_distance": 0.0, "volume_trend": "STABLE", "momentum_quality": 0.0}

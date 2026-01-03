@@ -25,6 +25,10 @@ from src.config.settings import (
     SCALE_IN_MAX_PRICE,
     SCALE_IN_TIME_LEFT,
     SCALE_IN_MULTIPLIER,
+    ENABLE_MOMENTUM_FILTER,
+    ENABLE_ORDER_FLOW,
+    ENABLE_DIVERGENCE,
+    ENABLE_VWM,
 )
 from src.utils.logger import log, send_discord
 from src.utils.web3_utils import get_balance
@@ -56,7 +60,7 @@ def trade_symbol(symbol: str, balance: float):
         return
 
     client = get_clob_client()
-    edge, reason, p_up, best_bid, best_ask, imbalance = calculate_edge(
+    edge, reason, p_up, best_bid, best_ask, imbalance, signals = calculate_edge(
         symbol, up_id, client
     )
 
@@ -202,6 +206,14 @@ def main():
     log(
         f"📈 ADX: {'YES' if ADX_ENABLED else 'NO'} | Threshold: {ADX_THRESHOLD} | Period: {ADX_PERIOD} | Interval: {ADX_INTERVAL}"
     )
+    log("=" * 90)
+    log("🔍 BINANCE INTEGRATION:")
+    log(f"  Momentum Filter: {'ENABLED' if ENABLE_MOMENTUM_FILTER else 'DISABLED'}")
+    log(f"  Order Flow: {'ENABLED' if ENABLE_ORDER_FLOW else 'DISABLED'}")
+    log(
+        f"  Cross-Exchange Divergence: {'ENABLED' if ENABLE_DIVERGENCE else 'DISABLED'}"
+    )
+    log(f"  Volume-Weighted Momentum: {'ENABLED' if ENABLE_VWM else 'DISABLED'}")
     log("=" * 90)
     log(
         f"🛡️  Stop Loss: {'ENABLED' if ENABLE_STOP_LOSS else 'DISABLED'} ({STOP_LOSS_PERCENT}%)"
