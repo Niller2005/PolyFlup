@@ -153,8 +153,17 @@ def trade_symbol(symbol: str, balance: float):
                 )
                 time.sleep(retry_delays[attempt - 1])
 
-            log(f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units")
-            sell_limit_result = place_limit_order(token_id, 0.99, size, SELL)
+            if attempt == 0:
+                log(f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units")
+
+            # Suppress error logging on retries for balance errors
+            sell_limit_result = place_limit_order(
+                token_id,
+                0.99,
+                size,
+                SELL,
+                silent_on_balance_error=(attempt < max_retries - 1),
+            )
 
             if sell_limit_result["success"]:
                 limit_sell_id = sell_limit_result["order_id"]

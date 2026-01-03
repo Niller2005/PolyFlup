@@ -62,7 +62,13 @@ def setup_api_creds() -> None:
         raise
 
 
-def place_limit_order(token_id: str, price: float, size: float, side: str) -> dict:
+def place_limit_order(
+    token_id: str,
+    price: float,
+    size: float,
+    side: str,
+    silent_on_balance_error: bool = False,
+) -> dict:
     """Place a limit order (BUY or SELL) on CLOB"""
     try:
         order_client = client
@@ -100,11 +106,19 @@ def place_limit_order(token_id: str, price: float, size: float, side: str) -> di
         return {"success": True, "status": status, "order_id": order_id, "error": None}
 
     except Exception as e:
-        log(f"❌ {side} Order error: {e}")
-        import traceback
+        error_str = str(e)
+        # Only log if not a balance error during retry, or if we want full logging
+        if not (silent_on_balance_error and "not enough balance" in error_str.lower()):
+            log(f"❌ {side} Order error: {e}")
+            import traceback
 
-        log(traceback.format_exc())
-        return {"success": False, "status": "ERROR", "order_id": None, "error": str(e)}
+            log(traceback.format_exc())
+        return {
+            "success": False,
+            "status": "ERROR",
+            "order_id": None,
+            "error": error_str,
+        }
 
 
 def place_order(token_id: str, price: float, size: float) -> dict:
