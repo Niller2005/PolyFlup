@@ -13,7 +13,13 @@ from src.config.settings import (
 )
 from src.utils.logger import log, send_discord
 from src.trading.orders import get_clob_client, sell_position, place_order
-from src.data.market_data import get_token_ids
+from src.data.market_data import (
+    get_token_ids,
+    get_current_slug,
+    get_window_times,
+    get_funding_bias,
+)
+from src.data.database import save_trade
 
 
 def check_open_positions():
@@ -131,6 +137,36 @@ def check_open_positions():
                                 send_discord(
                                     f"🔄 **REVERSED** [{symbol}] Now {opposite_side}"
                                 )
+
+                                # Save reversed trade to database
+                                try:
+                                    window_start, window_end = get_window_times(symbol)
+                                    bet_usd_effective = size * opposite_price
+
+                                    save_trade(
+                                        symbol=symbol,
+                                        window_start=window_start.isoformat(),
+                                        window_end=window_end.isoformat(),
+                                        slug=get_current_slug(symbol),
+                                        token_id=opposite_token,
+                                        side=opposite_side,
+                                        edge=0.0,  # Reversal trade, no edge calculation
+                                        price=opposite_price,
+                                        size=size,
+                                        bet_usd=bet_usd_effective,
+                                        p_yes=opposite_price
+                                        if opposite_side == "UP"
+                                        else 1.0 - opposite_price,
+                                        best_bid=None,
+                                        best_ask=None,
+                                        imbalance=0.5,
+                                        funding_bias=get_funding_bias(symbol),
+                                        order_status=reverse_result["status"],
+                                        order_id=reverse_result["order_id"],
+                                    )
+                                    log(f"✓ Reversed trade saved to database")
+                                except Exception as e:
+                                    log(f"⚠️ Error saving reversed trade: {e}")
 
             # Check take profit
             elif ENABLE_TAKE_PROFIT and pnl_pct >= TAKE_PROFIT_PERCENT:
