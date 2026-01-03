@@ -35,7 +35,12 @@ from src.config.settings import (
 )
 from src.utils.logger import log, send_discord
 from src.utils.web3_utils import get_balance
-from src.data.database import init_database, save_trade, generate_statistics, get_total_exposure
+from src.data.database import (
+    init_database,
+    save_trade,
+    generate_statistics,
+    get_total_exposure,
+)
 from src.data.market_data import (
     get_token_ids,
     get_current_slug,
@@ -70,9 +75,10 @@ def trade_symbol(symbol: str, balance: float):
     total_exposure = get_total_exposure()
     exposure_pct = total_exposure / balance if balance > 0 else 0
     if exposure_pct >= MAX_PORTFOLIO_EXPOSURE:
-        log(f"[{symbol}] ⚠️ Max portfolio exposure reached ({exposure_pct:.1%}) - SKIPPING")
+        log(
+            f"[{symbol}] ⚠️ Max portfolio exposure reached ({exposure_pct:.1%}) - SKIPPING"
+        )
         return
-
 
     client = get_clob_client()
     edge, reason, p_up, best_bid, best_ask, imbalance, signals = calculate_edge(
@@ -119,8 +125,8 @@ def trade_symbol(symbol: str, balance: float):
     raw_edge = edge if edge > 0.5 else (1.0 - edge)
     edge_delta = max(0.0, raw_edge - MIN_EDGE)
     confidence_multiplier = 1.0 + (edge_delta * CONFIDENCE_SCALING_FACTOR)
-    confidence_multiplier = min(confidence_multiplier, 3.0) # Cap at 3x
-    
+    confidence_multiplier = min(confidence_multiplier, 3.0)  # Cap at 3x
+
     target_bet = base_bet * confidence_multiplier
     size = round(target_bet / price, 6)
 
@@ -133,18 +139,38 @@ def trade_symbol(symbol: str, balance: float):
 
     result = place_order(token_id, price, size)
 
-    # Place sell limit order immediately after buy order (no need to wait for settlement)
+    # Place sell limit order after buy order with retry logic
     limit_sell_id = None
     if result["success"]:
-        log(f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units")
-        sell_limit_result = place_limit_order(token_id, 0.99, size, SELL)
-        if sell_limit_result["success"]:
-            limit_sell_id = sell_limit_result["order_id"]
-            log(f"[{symbol}] ✅ Limit sell order placed: {limit_sell_id}")
-        else:
-            log(
-                f"[{symbol}] ❌ Failed to place limit sell order: {sell_limit_result.get('error')}"
-            )
+        # Retry placing the sell order with exponential backoff
+        max_retries = 3
+        retry_delays = [2, 3, 5]  # seconds
+
+        for attempt in range(max_retries):
+            if attempt > 0:
+                log(
+                    f"[{symbol}] 🔄 Retry {attempt}/{max_retries - 1} - waiting {retry_delays[attempt - 1]}s..."
+                )
+                time.sleep(retry_delays[attempt - 1])
+
+            log(f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units")
+            sell_limit_result = place_limit_order(token_id, 0.99, size, SELL)
+
+            if sell_limit_result["success"]:
+                limit_sell_id = sell_limit_result["order_id"]
+                log(f"[{symbol}] ✅ Limit sell order placed: {limit_sell_id}")
+                break
+            else:
+                error_msg = str(sell_limit_result.get("error", ""))
+                if (
+                    "not enough balance" in error_msg.lower()
+                    and attempt < max_retries - 1
+                ):
+                    log(f"[{symbol}] ⏳ Balance not yet available, will retry...")
+                    continue
+                else:
+                    log(f"[{symbol}] ❌ Failed to place limit sell order: {error_msg}")
+                    break
 
     send_discord(
         f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Price {price:.4f}"
