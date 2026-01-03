@@ -31,11 +31,13 @@ try:
 
     # ADX Filter Configuration
     ADX_ENABLED = os.getenv("ADX", "NO").upper() == "YES"
-    ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "25.0"))
+    ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "20.0"))
     ADX_INTERVAL = os.getenv(
         "ADX_INTERVAL", "15m"
     )  # Kline interval for ADX calculation
-    ADX_PERIOD = int(os.getenv("ADX_PERIOD", "14"))  # ADX period (default 14)
+    ADX_PERIOD = int(
+        os.getenv("ADX_PERIOD", "10")
+    )  # ADX period (default 10 for faster reaction)
 
     # How many seconds after a 15m window starts we begin trading (default 12)
     WINDOW_DELAY_SEC = int(os.getenv("WINDOW_DELAY_SEC", "12"))
