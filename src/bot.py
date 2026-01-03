@@ -107,21 +107,17 @@ def trade_symbol(symbol: str, balance: float):
         size = MIN_SIZE
         bet_usd_effective = round(size * price, 4)
 
-    log(
-        f"[{symbol}] 🚀 TRADE: {side} ${bet_usd_effective:.2f} @ {price:.4f} | Size {size}"
-    )
+    result = place_order(token_id, price, size)
+
     send_discord(
         f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Price {price:.4f}"
     )
-
-    result = place_order(token_id, price, size)
-    log(f"[{symbol}] 📋 Order: {result['status']} | ID: {result['order_id'][:10]}...")
 
     try:
         window_start, window_end = get_window_times(symbol)
         target_price = get_current_spot_price(symbol)
 
-        save_trade(
+        trade_id = save_trade(
             symbol=symbol,
             window_start=window_start.isoformat(),
             window_end=window_end.isoformat(),
@@ -140,6 +136,9 @@ def trade_symbol(symbol: str, balance: float):
             order_status=result["status"],
             order_id=result["order_id"],
             target_price=target_price if target_price > 0 else None,
+        )
+        log(
+            f"[{symbol}] 🚀 #{trade_id} {side} ${bet_usd_effective:.2f} @ {price:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
         )
     except Exception as e:
         log(f"[{symbol}] DB error: {e}")

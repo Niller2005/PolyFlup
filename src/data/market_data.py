@@ -141,10 +141,6 @@ def get_adx_from_binance(symbol: str) -> float:
         limit = ADX_PERIOD * 3 + 10
         url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval={ADX_INTERVAL}&limit={limit}"
 
-        log(
-            f"[{symbol}] ADX: Fetching klines from Binance ({pair}, {ADX_INTERVAL}, limit={limit})..."
-        )
-
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         klines = response.json()
@@ -190,10 +186,8 @@ def get_adx_from_binance(symbol: str) -> float:
         adx_value = adx_series.iloc[-1]
 
         if pd.isna(adx_value):
-            log(f"[{symbol}] ADX: Calculated value is NaN")
             return -1.0
 
-        log(f"[{symbol}] ADX: Calculated value = {adx_value:.2f}")
         return float(adx_value)
 
     except requests.RequestException as e:

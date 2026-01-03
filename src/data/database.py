@@ -71,7 +71,6 @@ def save_trade(**kwargs):
     trade_id = c.lastrowid
     conn.commit()
     conn.close()
-    log(f"✓ Trade #{trade_id} saved to database")
     return trade_id
 
 

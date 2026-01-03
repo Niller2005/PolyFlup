@@ -97,7 +97,6 @@ def place_order(token_id: str, price: float, size: float) -> dict:
         status = resp.get("status", "UNKNOWN") if resp else "UNKNOWN"
         order_id = resp.get("orderID") if resp else None
 
-        log(f"✓ Order: {status} | ID: {order_id[:10]}...")
         return {"success": True, "status": status, "order_id": order_id, "error": None}
 
     except Exception as e:
@@ -147,7 +146,6 @@ def sell_position(token_id: str, size: float, current_price: float) -> dict:
         status = resp.get("status", "UNKNOWN") if resp else "UNKNOWN"
         order_id = resp.get("orderID") if resp else None
 
-        log(f"✓ SELL: {status} | ID: {order_id[:10]}...")
         return {
             "success": True,
             "sold": size,
