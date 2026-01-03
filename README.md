@@ -92,10 +92,10 @@ ADX_PERIOD=10                  # Period
 This runs both the bot and the real-time Svelte dashboard in containers.
 
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
-- **Dashboard**: [http://localhost:5173](http://localhost:5173)
+- **Dashboard**: [http://localhost:3001](http://localhost:3001)
 - **API Stats**: [http://localhost:3001/api/stats](http://localhost:3001/api/stats)
 - **Bot Logs**: `docker logs -f polyastra-bot`
 
