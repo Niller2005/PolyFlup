@@ -169,13 +169,26 @@ def redeem_market(condition_id_hex: str, index_sets: list):
 
         # Sign and send
         signed_tx = w3.eth.account.sign_transaction(tx, private_key=PROXY_PK)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+
+        # Handle different web3.py/eth_account versions
+        if hasattr(signed_tx, "rawTransaction"):
+            raw_tx = signed_tx.rawTransaction
+        elif hasattr(signed_tx, "raw_transaction"):
+            raw_tx = signed_tx.raw_transaction
+        else:
+            # Fallback for NamedTuple (rawTransaction is usually index 0)
+            raw_tx = signed_tx[0]
+
+        tx_hash = w3.eth.send_raw_transaction(raw_tx)
 
         log(f"✅ Redeem TX sent: {w3.to_hex(tx_hash)}")
         return w3.to_hex(tx_hash)
 
     except Exception as e:
         log(f"❌ Redeem error: {e}")
+        import traceback
+
+        log(traceback.format_exc())
         return None
 
 
