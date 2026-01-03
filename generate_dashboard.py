@@ -31,7 +31,10 @@ def get_stats():
             SUM(CASE WHEN settled = 1 AND pnl_usd > 0 THEN 1 ELSE 0 END) as wins,
             SUM(bet_usd) as invested,
             SUM(CASE WHEN settled = 1 THEN pnl_usd ELSE 0 END) as total_pnl,
-            AVG(CASE WHEN settled = 1 THEN roi_pct ELSE NULL END) as avg_roi
+            AVG(CASE WHEN settled = 1 THEN roi_pct ELSE NULL END) as avg_roi,
+            SUM(CASE WHEN final_outcome = 'STOP_LOSS' THEN 1 ELSE 0 END) as stop_losses,
+            SUM(CASE WHEN final_outcome = 'TAKE_PROFIT' THEN 1 ELSE 0 END) as take_profits,
+            SUM(CASE WHEN final_outcome = 'STOP_LOSS' AND exited_early = 1 THEN 1 ELSE 0 END) as reversed
         FROM trades
     """)
     summary = c.fetchone()
@@ -66,7 +69,7 @@ def get_stats():
     # Recent trades
     c.execute("""
         SELECT id, timestamp, symbol, side, edge, entry_price,
-               pnl_usd, roi_pct, settled, order_status
+               pnl_usd, roi_pct, settled, order_status, final_outcome, exited_early
         FROM trades
         ORDER BY id DESC
         LIMIT 50
@@ -96,7 +99,17 @@ def get_stats():
 def generate_html(stats):
     """Generate HTML dashboard"""
 
-    total, settled, wins, invested, total_pnl, avg_roi = stats["summary"]
+    (
+        total,
+        settled,
+        wins,
+        invested,
+        total_pnl,
+        avg_roi,
+        stop_losses,
+        take_profits,
+        reversed,
+    ) = stats["summary"]
 
     # Handle None values
     total = total or 0
@@ -105,6 +118,9 @@ def generate_html(stats):
     invested = invested or 0.0
     total_pnl = total_pnl or 0.0
     avg_roi = avg_roi or 0.0
+    stop_losses = stop_losses or 0
+    take_profits = take_profits or 0
+    reversed = reversed or 0
 
     win_rate = (wins / settled * 100) if settled > 0 else 0
     total_roi = (total_pnl / invested * 100) if invested > 0 else 0
@@ -284,6 +300,21 @@ def generate_html(stats):
             color: #92400e;
         }}
 
+        .badge.stop-loss {{
+            background: #fee2e2;
+            color: #991b1b;
+        }}
+
+        .badge.take-profit {{
+            background: #dcfce7;
+            color: #15803d;
+        }}
+
+        .badge.reversed {{
+            background: #e0e7ff;
+            color: #3730a3;
+        }}
+
         .refresh-btn {{
             position: fixed;
             bottom: 30px;
@@ -336,6 +367,18 @@ def generate_html(stats):
             <div class="stat-card">
                 <div class="stat-label">Avg ROI</div>
                 <div class="stat-value">{avg_roi:.1f}%</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">🛑 Stop Losses</div>
+                <div class="stat-value negative">{stop_losses}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">🎯 Take Profits</div>
+                <div class="stat-value positive">{take_profits}</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">🔄 Reversals</div>
+                <div class="stat-value">{reversed}</div>
             </div>
         </div>
 
@@ -416,11 +459,30 @@ def generate_html(stats):
         roi,
         settled,
         status,
+        final_outcome,
+        exited_early,
     ) in stats["recent_trades"]:
         pnl_display = f"${pnl:.2f}" if settled else "-"
         roi_display = f"{roi:.1f}%" if settled else "-"
         pnl_class = "positive" if (pnl and pnl > 0) else "negative"
-        status_badge = "settled" if settled else "pending"
+
+        # Determine status badge
+        if not settled:
+            status_badge = "pending"
+            status_text = "⏳"
+        elif final_outcome == "STOP_LOSS":
+            status_badge = "stop-loss"
+            status_text = "🛑 SL"
+        elif final_outcome == "TAKE_PROFIT":
+            status_badge = "take-profit"
+            status_text = "🎯 TP"
+        elif exited_early:
+            status_badge = "reversed"
+            status_text = "🔄"
+        else:
+            status_badge = "settled"
+            status_text = "✓"
+
         time_str = timestamp.split("T")[1][:8] if "T" in timestamp else timestamp
 
         html += f'''
@@ -433,7 +495,7 @@ def generate_html(stats):
                         <td>${price:.4f}</td>
                         <td class="{pnl_class}">{pnl_display}</td>
                         <td>{roi_display}</td>
-                        <td><span class="badge {status_badge}">{"✓" if settled else "⏳"}</span></td>
+                        <td><span class="badge {status_badge}">{status_text}</span></td>
                     </tr>
 '''
 
