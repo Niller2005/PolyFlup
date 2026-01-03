@@ -204,32 +204,62 @@ def main():
 
     cycle = 0
     last_position_check = time.time()
+    last_verbose_log = time.time()
 
     while True:
         try:
-            # Check positions every 60 seconds
+            # Check positions every 1 second (verbose log every 60 seconds)
             now_ts = time.time()
-            if now_ts - last_position_check >= 60:
-                check_open_positions()
+            if now_ts - last_position_check >= 1:
+                verbose = now_ts - last_verbose_log >= 60
+                check_open_positions(verbose=verbose)
                 last_position_check = now_ts
+                if verbose:
+                    last_verbose_log = now_ts
 
             now = datetime.utcnow()
             wait = 900 - ((now.minute % 15) * 60 + now.second)
             if wait <= 0:
                 wait += 900
 
-            # Wait in 60-second chunks so we can check positions
+            # Wait in 1-second chunks so we can check positions
             log(f"⏱️  Waiting {wait}s until next window + {WINDOW_DELAY_SEC}s delay...")
 
             remaining = wait + WINDOW_DELAY_SEC
             while remaining > 0:
-                sleep_time = min(60, remaining)
+                sleep_time = min(1, remaining)
                 time.sleep(sleep_time)
                 remaining -= sleep_time
 
-                # Check positions during wait
+                # Check positions during wait (silent unless it's been 60s)
                 if remaining > 0:
-                    check_open_positions()
+                    now_ts = time.time()
+                    verbose = now_ts - last_verbose_log >= 60
+                    check_open_positions(verbose=verbose)
+                    if verbose:
+                        last_verbose_log = now_ts
+
+            now = datetime.utcnow()
+            wait = 900 - ((now.minute % 15) * 60 + now.second)
+            if wait <= 0:
+                wait += 900
+
+            # Wait in 10-second chunks so we can check positions
+            log(f"⏱️  Waiting {wait}s until next window + {WINDOW_DELAY_SEC}s delay...")
+
+            remaining = wait + WINDOW_DELAY_SEC
+            while remaining > 0:
+                sleep_time = min(10, remaining)
+                time.sleep(sleep_time)
+                remaining -= sleep_time
+
+                # Check positions during wait (silent unless it's been 60s)
+                if remaining > 0:
+                    now_ts = time.time()
+                    verbose = now_ts - last_verbose_log >= 60
+                    check_open_positions(verbose=verbose)
+                    if verbose:
+                        last_verbose_log = now_ts
 
             log(
                 f"\n{'=' * 90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'=' * 90}\n"

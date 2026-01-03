@@ -27,8 +27,13 @@ from src.data.market_data import (
 from src.data.database import save_trade
 
 
-def check_open_positions():
-    """Check open positions every minute and manage them"""
+def check_open_positions(verbose: bool = True):
+    """
+    Check open positions and manage them
+
+    Args:
+        verbose: If True, log position checks. If False, only log actions (stop loss, etc.)
+    """
     if not ENABLE_STOP_LOSS and not ENABLE_TAKE_PROFIT and not ENABLE_SCALE_IN:
         return
 
@@ -51,7 +56,9 @@ def check_open_positions():
         conn.close()
         return
 
-    log(f"🔍 Checking {len(open_positions)} open positions...")
+    if verbose:
+        log(f"🔍 Checking {len(open_positions)} open positions...")
+
     client = get_clob_client()
 
     for (
@@ -96,9 +103,10 @@ def check_open_positions():
             pnl_usd = current_value - bet_usd
             pnl_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
-            log(
-                f"  [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={pnl_pct:+.1f}%"
-            )
+            if verbose:
+                log(
+                    f"  [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={pnl_pct:+.1f}%"
+                )
 
             # Calculate time left until window ends
             window_end_dt = datetime.fromisoformat(window_end)
