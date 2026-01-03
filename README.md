@@ -6,7 +6,12 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 
 ### 📊 Trading Strategy
 - **Edge Calculation**: Analyzes price vs. implied probability (70% price + 30% imbalance)
-- **ADX Trend Filter**: Only trades when trend strength > 25 (configurable)
+- **Advanced Strategy**: Integrates Binance data for enhanced decision making:
+  - **Momentum Filter**: Tracks price momentum over configurable lookback periods
+  - **Order Flow**: Analyzes Binance order flow for volume-weighted confirmation
+  - **Divergence Analysis**: Identifies price/momentum divergences
+  - **Volume-Weighted Metrics**: Sophisticated entry signals based on real-time volume
+- **ADX Trend Filter**: Only trades when trend strength > 20 (configurable)
 - **BFXD Trend Filter**: External BTC trend confirmation
 - **Funding Rate Bias**: Adjusts edge based on Binance funding rates
 - **Dynamic Sizing**: Bets percentage of balance (default 5%)
@@ -14,9 +19,9 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 ### 🛡️ Position Management
 - **🛑 Stop Loss**: Auto-exits losing positions (default -50%)
 - **🎯 Take Profit**: Auto-exits winning positions (default +80%)
-- **🔄 Auto Reversal**: Opens opposite position on stop loss (optional)
+- **🔄 Auto Reversal**: Automatically flips position with target price tracking on stop loss
 - **📈 Scale In**: Doubles down on winning positions near expiry (70-90% probability)
-- **⚡ Real-Time Monitoring**: Checks positions every **1 second**
+- **⚡ Real-Time Monitoring**: High-frequency position checking every **1 second**
 
 ### 💰 Automated Operations
 - **Auto-Claim**: Automatically redeems winnings via CTF contract
@@ -49,30 +54,36 @@ Key settings in `.env`:
 
 ```env
 # Trading
-BET_PERCENT=5.0          # Percent of balance per trade
-MIN_EDGE=0.60            # Minimum edge to enter (60%)
-MAX_SPREAD=0.10          # Max allowed spread (10%)
-WINDOW_DELAY_SEC=30      # Seconds to wait after window opens
+BET_PERCENT=5.0                # Percent of balance per trade
+MIN_EDGE=0.565                 # Minimum edge to enter (56.5%)
+MAX_SPREAD=0.15                # Max allowed spread (15%)
+WINDOW_DELAY_SEC=12            # Seconds to wait after window opens
+
+# Binance Advanced Strategy
+ENABLE_MOMENTUM_FILTER=YES     # Filter trades by price momentum
+ENABLE_ORDER_FLOW=YES          # Analyze Binance order flow
+ENABLE_DIVERGENCE=YES          # Use price/momentum divergence
+ENABLE_VWM=YES                 # Volume-Weighted Metrics
 
 # Position Management
-ENABLE_STOP_LOSS=YES     # Enable stop loss
-STOP_LOSS_PERCENT=50.0   # Exit at -50%
-ENABLE_TAKE_PROFIT=YES   # Enable take profit
-TAKE_PROFIT_PERCENT=80.0 # Exit at +80%
-ENABLE_REVERSAL=NO       # Reverse position on stop loss
+ENABLE_STOP_LOSS=YES           # Enable stop loss
+STOP_LOSS_PERCENT=50.0         # Exit at -50%
+ENABLE_TAKE_PROFIT=NO          # Enable take profit
+TAKE_PROFIT_PERCENT=80.0       # Exit at +80%
+ENABLE_REVERSAL=NO             # Reverse position on stop loss
 
 # Scaling
-ENABLE_SCALE_IN=YES      # Add to winners near expiry
-SCALE_IN_MIN_PRICE=0.70  # Min price (70 cents)
-SCALE_IN_MAX_PRICE=0.90  # Max price (90 cents)
-SCALE_IN_TIME_LEFT=120   # Seconds before expiry
-SCALE_IN_MULTIPLIER=1.0  # Add 100% more (double position)
+ENABLE_SCALE_IN=YES            # Add to winners near expiry
+SCALE_IN_MIN_PRICE=0.70        # Min price (70 cents)
+SCALE_IN_MAX_PRICE=0.90        # Max price (90 cents)
+SCALE_IN_TIME_LEFT=120         # Seconds before expiry
+SCALE_IN_MULTIPLIER=1.0        # Add 100% more (double position)
 
 # Filters
-ADX=YES
-ADX_THRESHOLD=25.0       # Strong trend only
-ADX_INTERVAL=15m         # Timeframe
-ADX_PERIOD=10            # Period
+ADX=NO
+ADX_THRESHOLD=20.0             # Trend strength threshold
+ADX_INTERVAL=15m               # Timeframe
+ADX_PERIOD=10                  # Period
 ```
 
 ## 🚀 Running the Bot
