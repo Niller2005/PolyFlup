@@ -11,6 +11,8 @@ load_dotenv()
 BET_PERCENT = float(os.getenv("BET_PERCENT", "5.0"))
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.565"))
 MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.15"))
+CONFIDENCE_SCALING_FACTOR = float(os.getenv("CONFIDENCE_SCALING_FACTOR", "5.0"))
+MAX_PORTFOLIO_EXPOSURE = float(os.getenv("MAX_PORTFOLIO_EXPOSURE", "0.20"))
 
 # Position Management
 ENABLE_STOP_LOSS = os.getenv("ENABLE_STOP_LOSS", "YES").upper() == "YES"

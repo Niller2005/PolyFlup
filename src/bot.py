@@ -30,10 +30,12 @@ from src.config.settings import (
     ENABLE_DIVERGENCE,
     ENABLE_VWM,
     ENABLE_BFXD,
+    CONFIDENCE_SCALING_FACTOR,
+    MAX_PORTFOLIO_EXPOSURE,
 )
 from src.utils.logger import log, send_discord
 from src.utils.web3_utils import get_balance
-from src.data.database import init_database, save_trade, generate_statistics
+from src.data.database import init_database, save_trade, generate_statistics, get_total_exposure
 from src.data.market_data import (
     get_token_ids,
     get_current_slug,
@@ -63,6 +65,14 @@ def trade_symbol(symbol: str, balance: float):
     if not up_id or not down_id:
         log(f"[{symbol}] ❌ Market not found")
         return
+
+    # Check portfolio exposure before expensive calculations
+    total_exposure = get_total_exposure()
+    exposure_pct = total_exposure / balance if balance > 0 else 0
+    if exposure_pct >= MAX_PORTFOLIO_EXPOSURE:
+        log(f"[{symbol}] ⚠️ Max portfolio exposure reached ({exposure_pct:.1%}) - SKIPPING")
+        return
+
 
     client = get_clob_client()
     edge, reason, p_up, best_bid, best_ask, imbalance, signals = calculate_edge(
@@ -103,7 +113,15 @@ def trade_symbol(symbol: str, balance: float):
         return
 
     price = max(0.01, min(0.99, price))
-    target_bet = balance * (BET_PERCENT / 100.0)
+    base_bet = balance * (BET_PERCENT / 100.0)
+    # Scale bet based on edge strength
+    # Edge is between MIN_EDGE (e.g. 0.565) and 1.0
+    raw_edge = edge if edge > 0.5 else (1.0 - edge)
+    edge_delta = max(0.0, raw_edge - MIN_EDGE)
+    confidence_multiplier = 1.0 + (edge_delta * CONFIDENCE_SCALING_FACTOR)
+    confidence_multiplier = min(confidence_multiplier, 3.0) # Cap at 3x
+    
+    target_bet = base_bet * confidence_multiplier
     size = round(target_bet / price, 6)
 
     MIN_SIZE = 5.0

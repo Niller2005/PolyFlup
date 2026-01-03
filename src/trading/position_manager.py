@@ -238,8 +238,30 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
             # Check stop loss using price change percentage
             # This correctly handles both UP (loss when price drops) and DOWN (loss when price rises)
-            if ENABLE_STOP_LOSS and price_change_pct <= -STOP_LOSS_PERCENT:
-                log(f"🛑 STOP LOSS trade #{trade_id}: {price_change_pct:.1f}% move")
+            # Smart Breakeven Protection
+            stop_threshold = -STOP_LOSS_PERCENT
+            sl_label = "STOP LOSS"
+
+            if ENABLE_STOP_LOSS and pnl_pct >= 20.0:
+                # Only activate breakeven if market is moving AGAINST our position
+                # UP position: price is dropping (current_price < entry_price)
+                # DOWN position: price is rising (current_price > entry_price)
+                is_moving_against = False
+                if side == "UP" and current_price < entry_price:
+                    is_moving_against = True
+                elif side == "DOWN" and current_price > entry_price:
+                    is_moving_against = True
+
+                if is_moving_against:
+                    stop_threshold = (
+                        -5.0
+                    )  # Allow 5% drawback from peak before breakeven exit
+                    sl_label = "BREAKEVEN PROTECTION"
+
+            if ENABLE_STOP_LOSS and price_change_pct <= stop_threshold:
+                log(
+                    f"🛑 {sl_label} trade #{trade_id}: {price_change_pct:.1f}% move (Threshold: {stop_threshold}%)"
+                )
 
                 # Cancel existing limit sell order if it exists
                 if limit_sell_order_id:
@@ -253,9 +275,16 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     c.execute(
                         """UPDATE trades 
                            SET exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, 
-                               final_outcome='STOP_LOSS', settled=1, settled_at=? 
+                               final_outcome=?, settled=1, settled_at=? 
                            WHERE id=?""",
-                        (current_price, pnl_usd, pnl_pct, now.isoformat(), trade_id),
+                        (
+                            current_price,
+                            pnl_usd,
+                            pnl_pct,
+                            sl_label,
+                            now.isoformat(),
+                            trade_id,
+                        ),
                     )
                     # Commit before calling save_trade() to avoid nested connection locks
                     conn.commit()

@@ -117,3 +117,12 @@ def generate_statistics():
 
     send_discord(f"📊 **PERFORMANCE REPORT**\n```\n{report_text}\n```")
     conn.close()
+
+def get_total_exposure() -> float:
+    """Get total USD exposure of open trades"""
+    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    c = conn.cursor()
+    c.execute("SELECT SUM(bet_usd) FROM trades WHERE settled = 0 AND exited_early = 0")
+    result = c.fetchone()
+    conn.close()
+    return result[0] or 0.0
