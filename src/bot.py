@@ -115,9 +115,9 @@ def trade_symbol(symbol: str, balance: float):
 
     result = place_order(token_id, price, size)
 
+    # Place sell limit order immediately after buy order (no need to wait for settlement)
     limit_sell_id = None
     if result["success"]:
-        # NEW: Place limit sell order at 0.99 immediately after entry
         log(f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units")
         sell_limit_result = place_limit_order(token_id, 0.99, size, SELL)
         if sell_limit_result["success"]:
@@ -161,7 +161,7 @@ def trade_symbol(symbol: str, balance: float):
             f"[{symbol}] 🚀 #{trade_id} {side} ${bet_usd_effective:.2f} @ {price:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
         )
     except Exception as e:
-        log(f"[{symbol}] DB error: {e}")
+        log(f"[{symbol}] Trade completion error: {e}")
 
 
 def main():
