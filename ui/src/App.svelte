@@ -1,12 +1,13 @@
 <script>
     import { onMount } from 'svelte';
-    import { Activity, TrendingUp, Award, ShieldAlert, Target, RefreshCw, Clock, Wallet, Percent, ArrowUpRight, ArrowDownRight } from 'lucide-svelte';
+    import { Activity, TrendingUp, Award, ShieldAlert, Target, RefreshCw, Clock, Wallet, Percent, ArrowUpRight, ArrowDownRight, Sun, Moon } from 'lucide-svelte';
     import * as Card from "$lib/components/ui/card/index.js";
     import * as Table from "$lib/components/ui/table/index.js";
     import { Badge } from "$lib/components/ui/badge/index.js";
     import { Button } from "$lib/components/ui/button/index.js";
     import * as Chart from "$lib/components/ui/chart/index.js";
     import { AreaChart, BarChart } from "layerchart";
+    import { theme } from "$lib/stores/theme.js";
 
     let stats = null;
     let lastUpdate = new Date().toLocaleTimeString();
@@ -28,6 +29,9 @@
     }
 
     onMount(() => {
+        // Initialize theme
+        theme.init();
+        
         fetchStats();
         const interval = setInterval(fetchStats, 5000);
         return () => clearInterval(interval);
@@ -69,12 +73,12 @@
     };
 </script>
 
-<div class="min-h-screen bg-slate-50 p-4 md:p-8 font-sans">
+<div class="min-h-screen bg-slate-50 dark:bg-slate-900 p-4 md:p-8 font-sans">
     <div class="max-w-7xl mx-auto space-y-8">
         <!-- Header -->
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
-                <h1 class="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-3">
+                <h1 class="text-3xl font-bold tracking-tight text-slate-900 dark:text-slate-100 flex items-center gap-3">
                     <div class="p-2 bg-primary rounded-lg text-primary-foreground">
                         <Activity size={24} />
                     </div>
@@ -82,14 +86,23 @@
                 </h1>
                 <p class="text-muted-foreground mt-1 font-medium text-sm">Automated Trading Intelligence</p>
             </div>
-            <div class="flex items-center gap-3 bg-white p-2 pl-4 rounded-full shadow-sm border border-border">
-                <div class="flex flex-col">
-                    <span class="text-[10px] text-muted-foreground uppercase font-bold tracking-wider leading-none">Last sync</span>
-                    <span class="text-sm font-mono font-bold text-slate-700">{lastUpdate}</span>
-                </div>
-                <Button variant="ghost" size="icon" on:click={fetchStats} class="rounded-full h-10 w-10">
-                    <RefreshCw size={18} class="text-primary" />
+            <div class="flex items-center gap-3">
+                <Button variant="ghost" size="icon" on:click={() => theme.toggle()} class="rounded-full h-10 w-10">
+                    {#if $theme === 'dark'}
+                        <Sun size={18} class="text-primary" />
+                    {:else}
+                        <Moon size={18} class="text-primary" />
+                    {/if}
                 </Button>
+                <div class="flex items-center gap-3 bg-white dark:bg-slate-800 p-2 pl-4 rounded-full shadow-sm border border-border">
+                    <div class="flex flex-col">
+                        <span class="text-[10px] text-muted-foreground uppercase font-bold tracking-wider leading-none">Last sync</span>
+                        <span class="text-sm font-mono font-bold text-slate-700 dark:text-slate-300">{lastUpdate}</span>
+                    </div>
+                    <Button variant="ghost" size="icon" on:click={fetchStats} class="rounded-full h-10 w-10">
+                        <RefreshCw size={18} class="text-primary" />
+                    </Button>
+                </div>
             </div>
         </div>
 
@@ -248,7 +261,7 @@
                                     <Table.Cell class="text-xs font-medium">
                                         {trade.timestamp.split('T')[1]?.slice(0, 8) || trade.timestamp}
                                     </Table.Cell>
-                                    <Table.Cell class="font-bold text-slate-700">{trade.symbol}</Table.Cell>
+                                    <Table.Cell class="font-bold text-slate-700 dark:text-slate-300">{trade.symbol}</Table.Cell>
                                     <Table.Cell>
                                         <Badge variant={trade.side === 'UP' ? 'secondary' : 'destructive'} class="rounded-sm font-black px-1.5 py-0 text-[10px]">
                                             {trade.side}
