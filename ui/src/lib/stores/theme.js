@@ -1,10 +1,12 @@
 import { writable } from 'svelte/store';
-import { browser } from '$app/environment';
+
+// Check if we're in a browser environment
+const isBrowser = typeof window !== 'undefined';
 
 function createThemeStore() {
     // Initialize with system preference or fallback to 'light'
     const getInitialTheme = () => {
-        if (!browser) return 'light';
+        if (!isBrowser) return 'light';
         
         // Check localStorage first
         const stored = localStorage.getItem('theme');
@@ -27,7 +29,7 @@ function createThemeStore() {
         toggle: () => {
             update(current => {
                 const newTheme = current === 'dark' ? 'light' : 'dark';
-                if (browser) {
+                if (isBrowser) {
                     localStorage.setItem('theme', newTheme);
                     // Update the document class
                     if (newTheme === 'dark') {
@@ -40,7 +42,7 @@ function createThemeStore() {
             });
         },
         set: (value) => {
-            if (browser) {
+            if (isBrowser) {
                 localStorage.setItem('theme', value);
                 // Update the document class
                 if (value === 'dark') {
@@ -52,7 +54,7 @@ function createThemeStore() {
             set(value);
         },
         init: () => {
-            if (browser) {
+            if (isBrowser) {
                 const theme = getInitialTheme();
                 if (theme === 'dark') {
                     document.documentElement.classList.add('dark');
