@@ -77,33 +77,39 @@ ADX_PERIOD=10            # Period
 
 ## 🚀 Running the Bot
 
-### Start Trading
+### Option 1: Docker (Recommended)
+This runs both the bot and the real-time Svelte dashboard in containers.
+
+```bash
+docker-compose up -d --build
+```
+
+- **Dashboard**: [http://localhost:5173](http://localhost:5173)
+- **API Stats**: [http://localhost:3001/api/stats](http://localhost:3001/api/stats)
+- **Bot Logs**: `docker logs -f polyastra-bot`
+
+### Option 2: Local Installation
+#### Start Trading
 ```bash
 python polyastra.py
 ```
 
-### View Dashboard
+#### Start Dashboard
 ```bash
-# Generate dashboard
-python generate_dashboard.py
-
-# Serve dashboard (view at http://localhost:8000)
-python -m http.server 8000
+cd ui
+npm install
+npm start
 ```
+*The dashboard will be available at [http://localhost:5173](http://localhost:5173)*
 
 ## 📂 Project Structure
 
 ```
 polyastra/
-├── src/
-│   ├── config/          # Settings & constants
-│   ├── data/            # Database & market data API
-│   ├── trading/         # Strategy, orders, positions, settlement
-│   ├── utils/           # Logging & Web3 helpers
-│   └── bot.py           # Main application loop
-├── polyastra.py         # Entry point
-├── generate_dashboard.py # Stats generator
-└── trades.db            # SQLite database
+├── src/          # Bot source code
+├── ui/           # Real-time Svelte dashboard
+├── polyastra.py  # Bot entry point
+└── trades.db     # Shared SQLite database
 ```
 
 ## ⚠️ Disclaimer

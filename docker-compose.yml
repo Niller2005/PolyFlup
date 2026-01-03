@@ -2,10 +2,8 @@ services:
   polyastra:
     container_name: polyastra-bot
     build: .
-    # Mount the current directory to /app so logs and DB are persisted locally
     volumes:
       - .:/app
-    # Load environment variables
     env_file:
       - .env
     environment:
@@ -13,25 +11,16 @@ services:
     restart: unless-stopped
 
   dashboard:
-    container_name: polyastra-generate-dashboard
-    build: .
-    volumes:
-      - .:/app
-    # Loop generating dashboard every 60s
-    command: >
-      bash -c "while true; do
-        python generate_dashboard.py;
-        sleep 60;
-      done"
-    environment:
-      - PYTHONUNBUFFERED=1
-    restart: unless-stopped
-
-  nginx:
     container_name: polyastra-dashboard
-    image: nginx:alpine
+    build:
+      context: ./ui
     ports:
-      - "8000:80"
+      - "5173:5173"
+      - "3001:3001"
     volumes:
-      - ./public:/usr/share/nginx/html:ro
+      - ./ui:/app
+      - ./trades.db:/trades.db:ro
+    environment:
+      - NODE_ENV=production
+      - DB_PATH=/trades.db
     restart: unless-stopped
