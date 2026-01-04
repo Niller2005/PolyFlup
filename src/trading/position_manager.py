@@ -697,20 +697,22 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         if not check_orders:
             return
 
-    with db_connection() as conn:
+    # For frequent position checks, disable syncing to reduce network overhead
+    # Sync happens automatically every 30s on first connection after interval
+    with db_connection(sync_on_connect=True, sync_on_close=False) as conn:
         c = conn.cursor()
-    now = datetime.now(tz=ZoneInfo("UTC"))
+        now = datetime.now(tz=ZoneInfo("UTC"))
 
-    # Get unsettled trades that are still in their window
-    c.execute(
-        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status, timestamp, scale_in_order_id
-           FROM trades 
-           WHERE settled = 0 
-           AND exited_early = 0
-           AND datetime(window_end) > datetime(?)""",
-        (now.isoformat(),),
-    )
-    open_positions = c.fetchall()
+        # Get unsettled trades that are still in their window
+        c.execute(
+            """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status, timestamp, scale_in_order_id
+               FROM trades 
+               WHERE settled = 0 
+               AND exited_early = 0
+               AND datetime(window_end) > datetime(?)""",
+            (now.isoformat(),),
+        )
+        open_positions = c.fetchall()
 
     if not open_positions:
         return

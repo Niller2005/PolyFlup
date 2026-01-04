@@ -1,6 +1,7 @@
 """Database connection context manager - supports SQLite, Turso, and Embedded Replicas"""
 
 import sqlite3
+import time
 from contextlib import contextmanager
 from src.config.settings import (
     DB_FILE,
@@ -12,9 +13,13 @@ from src.config.settings import (
 )
 from src.utils.logger import log
 
+# Track last sync time for embedded replica (sync every 30 seconds max)
+_last_sync_time = 0
+_sync_interval = 30  # seconds
+
 
 @contextmanager
-def db_connection():
+def db_connection(sync_on_connect=True, sync_on_close=True):
     """
     Context manager for database connections with automatic cleanup.
     Supports three modes:
@@ -27,11 +32,20 @@ def db_connection():
     - USE_EMBEDDED_REPLICA=YES: Use local replica that syncs with Turso (recommended for dev)
     - Neither: Use local SQLite file
 
+    Args:
+        sync_on_connect: For embedded replica, sync before yielding connection (default: True)
+        sync_on_close: For embedded replica, sync after commit (default: True)
+
     Usage:
+        # For frequent reads (like position monitoring), disable syncing:
+        with db_connection(sync_on_connect=False, sync_on_close=False) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM trades WHERE settled = 0")
+
+        # For writes, keep syncing enabled (default):
         with db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM trades")
-            results = cursor.fetchall()
+            cursor.execute("INSERT INTO trades (...) VALUES (...)")
     """
     if USE_EMBEDDED_REPLICA:
         # Use Embedded Replica (local file synced with remote Turso)
@@ -47,7 +61,7 @@ def db_connection():
                 "TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set when USE_EMBEDDED_REPLICA=YES"
             )
 
-        log(f"📡 Using embedded replica: {EMBEDDED_REPLICA_FILE}")
+        global _last_sync_time
 
         # Connect with embedded replica configuration
         # The libsql Python SDK uses .connect() with sync_url parameter
@@ -58,16 +72,20 @@ def db_connection():
         )
 
         try:
-            # Sync on connection to get latest data
-            log("🔄 Syncing with remote database...")
-            conn.sync()
-            log("✅ Sync completed")
+            # Sync on connect if requested (for reads, sync periodically; for writes, always sync)
+            if sync_on_connect:
+                current_time = time.time()
+                # For reads, only sync every 30s to reduce network overhead
+                if current_time - _last_sync_time >= _sync_interval:
+                    conn.sync()
+                    _last_sync_time = current_time
 
             yield conn
             conn.commit()
 
-            # Sync after commit to push changes to remote
-            conn.sync()
+            # Sync after commit if requested (to push writes to remote)
+            if sync_on_close:
+                conn.sync()
         except Exception:
             conn.rollback()
             raise
