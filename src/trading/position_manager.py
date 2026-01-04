@@ -1141,5 +1141,3 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
         except Exception as e:
             log(f"⚠️ Error checking position #{trade_id}: {e}")
-
-        conn.commit()
