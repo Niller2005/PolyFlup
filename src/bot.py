@@ -61,7 +61,11 @@ from src.trading.orders import (
     place_order,
     get_clob_client,
 )
-from src.trading.position_manager import check_open_positions, recover_open_positions
+from src.trading.position_manager import (
+    check_open_positions,
+    recover_open_positions,
+    get_exit_plan_stats,
+)
 from src.trading.settlement import check_and_settle_trades
 
 
@@ -109,18 +113,25 @@ def trade_symbol(symbol: str, balance: float):
 
     if target_price > 0 and current_spot > 0:
         # Determine if we are on the 'winning' or 'losing' side
-        # UP is winning if current_spot > target_price
-        # DOWN is winning if current_spot < target_price
+        # Use buffer to handle 'exactly at target' or 'near target' cases
+        from src.config.settings import WINDOW_START_PRICE_BUFFER_PCT
+
+        buffer = target_price * (WINDOW_START_PRICE_BUFFER_PCT / 100.0)
+
         is_winning_side = False
-        if side == "UP" and current_spot > target_price:
-            is_winning_side = True
-        elif side == "DOWN" and current_spot < target_price:
-            is_winning_side = True
+        if side == "UP":
+            # Winning if spot >= (target - buffer)
+            if current_spot >= (target_price - buffer):
+                is_winning_side = True
+        elif side == "DOWN":
+            # Winning if spot <= (target + buffer)
+            if current_spot <= (target_price + buffer):
+                is_winning_side = True
 
         if not is_winning_side:
             # We are on the 'losing' side - check if confidence is high enough to bypass
-            # High confidence threshold for entering 'losing' side (e.g. 60%)
-            LOSING_SIDE_BYPASS_CONFIDENCE = 0.60
+            # Threshold for entering 'losing' side (lowered to 45% for new system)
+            LOSING_SIDE_BYPASS_CONFIDENCE = 0.45
             if confidence < LOSING_SIDE_BYPASS_CONFIDENCE:
                 log(
                     f"[{symbol}] ⚠️ {side} is on LOSING side (Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_BYPASS_CONFIDENCE:.0%}. SKIPPING."
@@ -261,6 +272,7 @@ def main():
     last_position_check = time.time()
     last_order_check = time.time()
     last_verbose_log = time.time()
+    last_exit_stats_log = time.time()
 
     while True:
         try:
@@ -279,6 +291,19 @@ def main():
                     last_verbose_log = now_ts
                 if is_order_check_cycle:
                     last_order_check = now_ts
+
+                # Log exit plan stats every 15 minutes (every 15th verbose cycle)
+                if (
+                    is_verbose_cycle and now_ts - last_exit_stats_log >= 900
+                ):  # 15 minutes
+                    exit_stats = get_exit_plan_stats()
+                    if exit_stats:
+                        log(
+                            f"📈 Exit Plan Performance: {exit_stats['exit_success_rate']:.1f}% success rate "
+                            f"({exit_stats['exit_plan_successes']}/{exit_stats['exit_plan_successes'] + exit_stats['natural_settlements'] + exit_stats['legacy_limit_sells']}) "
+                            f"| Avg ROI: Exit {exit_stats['avg_exit_plan_roi']:.1f}%, Natural {exit_stats['avg_natural_roi']:.1f}%"
+                        )
+                    last_exit_stats_log = now_ts
 
             now = datetime.utcnow()
             wait = 900 - ((now.minute % 15) * 60 + now.second)

@@ -18,6 +18,11 @@ from src.config.settings import (
     SCALE_IN_MULTIPLIER,
     CANCEL_UNFILLED_ORDERS,
     UNFILLED_CANCEL_THRESHOLD,
+    ENABLE_EXIT_PLAN,
+    EXIT_PRICE_TARGET,
+    EXIT_MIN_POSITION_AGE,
+    EXIT_CHECK_INTERVAL,
+    EXIT_AGGRESSIVE_MODE,
 )
 from src.utils.logger import log, send_discord
 from src.trading.orders import (
@@ -39,6 +44,63 @@ from src.data.market_data import (
 from src.data.database import save_trade
 
 
+def get_exit_plan_stats():
+    """Get statistics on exit plan performance"""
+    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    c = conn.cursor()
+
+    try:
+        # Count exit plan successes vs natural settlements
+        c.execute("""
+            SELECT 
+                COUNT(CASE WHEN final_outcome = 'EXIT_PLAN_FILLED' THEN 1 END) as exit_plan_successes,
+                COUNT(CASE WHEN final_outcome = 'RESOLVED' AND exited_early = 0 THEN 1 END) as natural_settlements,
+                COUNT(CASE WHEN final_outcome = 'LIMIT_SELL_099' THEN 1 END) as legacy_limit_sells,
+                AVG(CASE WHEN final_outcome = 'EXIT_PLAN_FILLED' THEN roi_pct END) as avg_exit_plan_roi,
+                AVG(CASE WHEN final_outcome = 'RESOLVED' AND exited_early = 0 THEN roi_pct END) as avg_natural_roi
+            FROM trades 
+            WHERE settled = 1 
+            AND datetime(created_at) >= datetime('now', '-7 days')
+        """)
+
+        stats = c.fetchone()
+        conn.close()
+
+        if stats and any(stats):
+            (
+                exit_successes,
+                natural_settlements,
+                legacy_sells,
+                avg_exit_roi,
+                avg_natural_roi,
+            ) = stats
+            total_exits = exit_successes + natural_settlements + legacy_sells
+
+            if total_exits > 0:
+                exit_rate = (exit_successes / total_exits) * 100
+                log(
+                    f"📊 EXIT PLAN STATS (7d): {exit_successes} successful exits ({exit_rate:.1f}%), "
+                    f"{natural_settlements} natural settlements, {legacy_sells} legacy | "
+                    f"Avg ROI: Exit {avg_exit_roi or 0:.1f}%, Natural {avg_natural_roi or 0:.1f}%"
+                )
+
+                return {
+                    "exit_plan_successes": exit_successes,
+                    "natural_settlements": natural_settlements,
+                    "legacy_limit_sells": legacy_sells,
+                    "exit_success_rate": exit_rate,
+                    "avg_exit_plan_roi": avg_exit_roi or 0,
+                    "avg_natural_roi": avg_natural_roi or 0,
+                }
+
+        return None
+
+    except Exception as e:
+        log(f"⚠️ Error getting exit plan stats: {e}")
+        conn.close()
+        return None
+
+
 def recover_open_positions():
     """
     Recover and log open positions from database on bot startup
@@ -50,7 +112,7 @@ def recover_open_positions():
 
     # Get all unsettled trades that are still in their window
     c.execute(
-        """SELECT id, symbol, side, entry_price, size, bet_usd, window_end, order_status
+        """SELECT id, symbol, side, entry_price, size, bet_usd, window_end, order_status, timestamp
            FROM trades 
            WHERE settled = 0 
            AND exited_early = 0
@@ -77,6 +139,7 @@ def recover_open_positions():
         bet_usd,
         window_end,
         order_status,
+        timestamp,
     ) in open_positions:
         window_end_dt = datetime.fromisoformat(window_end)
         time_left = (window_end_dt - now).total_seconds() / 60.0  # minutes
@@ -110,7 +173,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
     # Get unsettled trades that are still in their window
     c.execute(
-        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status
+        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status, timestamp
            FROM trades 
            WHERE settled = 0 
            AND exited_early = 0
@@ -144,6 +207,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         limit_sell_order_id,
         buy_order_id,
         buy_order_status,
+        timestamp,
     ) in open_positions:
         try:
             # 0. Check buy order status if not filled
@@ -170,7 +234,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
             # Note: Limit sell order placement moved to 60-second mark (after price checks below)
 
-            # 2. Check if limit sell order was filled
+            # 2. Check if limit sell order was filled (EXIT PLAN MONITORING)
             if check_orders and limit_sell_order_id:
                 try:
                     order_data = client.get_order(limit_sell_order_id)
@@ -181,10 +245,10 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         status = getattr(order_data, "status", None)
 
                     if status == "FILLED":
+                        exit_price = EXIT_PRICE_TARGET if ENABLE_EXIT_PLAN else 0.99
                         log(
-                            f"🎯 Limit sell order filled for trade #{trade_id} at 0.99!"
+                            f"🎯 EXIT PLAN SUCCESS: Trade #{trade_id} filled at {exit_price}!"
                         )
-                        exit_price = 0.99
                         pnl_usd = (exit_price * size) - bet_usd
                         roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
@@ -192,19 +256,21 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                             """UPDATE trades 
                                SET settled=1, exited_early=1, exit_price=?, 
                                    pnl_usd=?, roi_pct=?, 
-                                   final_outcome='LIMIT_SELL_099', settled_at=? 
+                                   final_outcome='EXIT_PLAN_FILLED', settled_at=? 
                                WHERE id=?""",
                             (exit_price, pnl_usd, roi_pct, now.isoformat(), trade_id),
                         )
                         conn.commit()
                         send_discord(
-                            f"🎯 **LIMIT SELL FILLED** [{symbol}] {side} closed at 0.99"
+                            f"🎯 **EXIT PLAN SUCCESS** [{symbol}] {side} closed at {exit_price} ({roi_pct:+.1f}%)"
                         )
                         continue
                 except Exception as e:
                     # Order might be too old or other error, log if significant
                     if "404" not in str(e):
-                        log(f"⚠️ Error checking order {limit_sell_order_id}: {e}")
+                        log(
+                            f"⚠️ Error checking exit plan order {limit_sell_order_id}: {e}"
+                        )
 
             # Get current market price
             book = client.get_order_book(token_id)
@@ -386,33 +452,61 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
             time_left_seconds = (window_end_dt - now).total_seconds()
 
-            # Place 0.99 limit sell order when 1 minute left (after scale-in/reversals complete)
-            if (
-                current_buy_status == "FILLED"
-                and not limit_sell_order_id
-                and time_left_seconds <= 60
-                and time_left_seconds > 0
-            ):
-                log(
-                    f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units ({time_left_seconds:.0f}s left)"
-                )
-                sell_limit_result = place_limit_order(
-                    token_id, 0.99, size, SELL, silent_on_balance_error=True
-                )
-                if sell_limit_result["success"]:
-                    limit_sell_order_id = sell_limit_result["order_id"]
+            # ============================================================
+            # EXIT PLAN: Aggressive limit sell implementation
+            # ============================================================
+            if ENABLE_EXIT_PLAN and current_buy_status == "FILLED" and size > 0:
+                # Determine exit check interval based on aggressive mode
+                check_interval = EXIT_CHECK_INTERVAL
+                if EXIT_AGGRESSIVE_MODE:
+                    # In aggressive mode, check more frequently (half the interval)
+                    check_interval = max(EXIT_CHECK_INTERVAL // 2, 30)  # Min 30 seconds
+
+                # Place limit sell order when position is old enough
+                position_age_seconds = (
+                    now - datetime.fromisoformat(timestamp)
+                ).total_seconds()
+                if (
+                    not limit_sell_order_id
+                    and position_age_seconds >= EXIT_MIN_POSITION_AGE
+                    and position_age_seconds
+                    > 60  # Additional safety: position must be at least 1 minute old
+                ):
                     log(
-                        f"[{symbol}] ✅ Limit sell order placed at 0.99: {limit_sell_order_id}"
+                        f"[{symbol}] 📉 EXIT PLAN: Placing limit sell order at {EXIT_PRICE_TARGET} for {size} units (position age: {position_age_seconds:.0f}s, min age: {EXIT_MIN_POSITION_AGE}s)"
                     )
-                    c.execute(
-                        "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
-                        (limit_sell_order_id, trade_id),
+                    sell_limit_result = place_limit_order(
+                        token_id,
+                        EXIT_PRICE_TARGET,
+                        size,
+                        SELL,
+                        silent_on_balance_error=True,
                     )
-                    conn.commit()
-                else:
+                    if sell_limit_result["success"]:
+                        limit_sell_order_id = sell_limit_result["order_id"]
+                        log(
+                            f"[{symbol}] ✅ EXIT PLAN: Limit sell order placed at {EXIT_PRICE_TARGET}: {limit_sell_order_id}"
+                        )
+                        c.execute(
+                            "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                            (limit_sell_order_id, trade_id),
+                        )
+                        conn.commit()
+                    else:
+                        log(
+                            f"[{symbol}] ⚠️ EXIT PLAN: Failed to place limit sell at {EXIT_PRICE_TARGET} (will retry next cycle)"
+                        )
+
+                # Monitor existing limit sell order based on position age
+                elif (
+                    limit_sell_order_id
+                    and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60
+                ):
+                    # Position is mature, monitor the exit order
                     log(
-                        f"[{symbol}] ⚠️ Failed to place limit sell at 0.99 (will retry next cycle)"
+                        f"[{symbol}] ⏰ EXIT PLAN: Position age {position_age_seconds:.0f}s - monitoring limit sell order {limit_sell_order_id}"
                     )
+                    # The order check logic above will handle if it gets filled
 
             # Check if we should scale into position
             if (
