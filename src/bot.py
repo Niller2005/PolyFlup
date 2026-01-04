@@ -139,6 +139,11 @@ def trade_symbol(symbol: str, balance: float):
 
     result = place_order(token_id, price, size)
 
+    # Only proceed if order was successful
+    if not result["success"]:
+        log(f"[{symbol}] ❌ Order failed, skipping trade tracking")
+        return
+
     send_discord(
         f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Price {price:.4f}"
     )
