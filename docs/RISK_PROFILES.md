@@ -13,10 +13,11 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MIN_EDGE` | 0.58 | Higher threshold = fewer, higher quality trades |
 | `MAX_SPREAD` | 0.12 | Only enter liquid markets with tight spreads |
 | `CONFIDENCE_SCALING_FACTOR` | 3.0 | Moderate scaling (max 2.4x base bet) |
-| `MAX_PORTFOLIO_EXPOSURE` | 15% | Never risk more than 15% of total capital |
 | `STOP_LOSS_PERCENT` | 40% | Tighter stop loss to limit losses |
 | `ENABLE_TAKE_PROFIT` | YES | Lock in profits at 60% gain |
 | `TAKE_PROFIT_PERCENT` | 60% | Conservative profit target |
+| `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
+| `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
 | `SCALE_IN_MULTIPLIER` | 0.5 | Add 50% more (1.5x total position) |
 
 **Expected Results:**
@@ -36,10 +37,11 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MIN_EDGE` | 0.565 | Balanced threshold for good opportunities |
 | `MAX_SPREAD` | 0.15 | Accept reasonable spreads |
 | `CONFIDENCE_SCALING_FACTOR` | 5.0 | Standard scaling (max 3x base bet) |
-| `MAX_PORTFOLIO_EXPOSURE` | 20% | Reasonable portfolio risk cap |
 | `STOP_LOSS_PERCENT` | 50% | Standard stop loss with breakeven protection |
 | `ENABLE_TAKE_PROFIT` | NO | Let winners run (breakeven protection active) |
 | `TAKE_PROFIT_PERCENT` | 80% | Not used (take profit disabled) |
+| `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
+| `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
 | `SCALE_IN_MULTIPLIER` | 1.0 | Double position size (2x total) |
 
 **Expected Results:**
@@ -59,10 +61,11 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MIN_EDGE` | 0.55 | Lower threshold = more trades, more action |
 | `MAX_SPREAD` | 0.18 | Accept wider spreads for more opportunities |
 | `CONFIDENCE_SCALING_FACTOR` | 7.0 | Aggressive scaling (max 4.2x base bet) |
-| `MAX_PORTFOLIO_EXPOSURE` | 30% | Higher portfolio concentration allowed |
 | `STOP_LOSS_PERCENT` | 60% | Wider stop loss to avoid noise |
 | `ENABLE_TAKE_PROFIT` | NO | Let all winners run |
 | `TAKE_PROFIT_PERCENT` | 100% | Not used |
+| `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
+| `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
 | `SCALE_IN_MULTIPLIER` | 1.5 | Add 150% more (2.5x total position) |
 
 **Expected Results:**
@@ -82,10 +85,11 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MIN_EDGE` | 0.54 | Lowest threshold = maximum trade frequency |
 | `MAX_SPREAD` | 0.20 | Enter almost any liquid market |
 | `CONFIDENCE_SCALING_FACTOR` | 10.0 | Extreme scaling (max 6x base bet) |
-| `MAX_PORTFOLIO_EXPOSURE` | 40% | High portfolio concentration |
 | `STOP_LOSS_PERCENT` | 70% | Very wide stop loss |
 | `ENABLE_TAKE_PROFIT` | NO | Never cap upside |
 | `TAKE_PROFIT_PERCENT` | 150% | Not used |
+| `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
+| `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
 | `SCALE_IN_MULTIPLIER` | 2.0 | Triple position size (3x total) |
 
 **Expected Results:**
@@ -121,12 +125,20 @@ Choose the risk profile that matches your trading style and account size. Each p
 
 ## 📊 Key Features Across All Profiles
 
+### Exit Plan (Aggressive Profit Taking)
+All profiles include **Exit Plan** by default:
+- After position ages (default 5 minutes), places limit sell order at EXIT_PRICE_TARGET (99 cents)
+- Near-guaranteed profitable exit if market reaches 99 cents before expiry
+- Order is automatically cancelled if stop loss or other exit triggers first
+- Can be disabled with `ENABLE_EXIT_PLAN=NO` to only use market resolution
+
 ### Smart Breakeven Protection
 All profiles include **Smart Breakeven Protection**:
 - Activates when position is up 20%+ in PnL
 - **Only** triggers if market moves AGAINST your position direction
 - Allows 5% drawback from peak before exiting
 - **Does NOT cap upside** if market continues in your favor
+- Works in conjunction with Exit Plan for multi-layered protection
 
 ### Dynamic Position Sizing
 All profiles use **Confidence-Based Sizing**:
@@ -158,9 +170,10 @@ BET_PERCENT=6.0
 MIN_EDGE=0.56
 MAX_SPREAD=0.16
 CONFIDENCE_SCALING_FACTOR=6.0
-MAX_PORTFOLIO_EXPOSURE=0.25
 STOP_LOSS_PERCENT=55.0
 ENABLE_TAKE_PROFIT=NO
+ENABLE_EXIT_PLAN=YES
+EXIT_PRICE_TARGET=0.99
 SCALE_IN_MULTIPLIER=1.2
 ```
 
