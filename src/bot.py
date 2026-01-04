@@ -170,67 +170,15 @@ def trade_symbol(symbol: str, balance: float):
             funding_bias=get_funding_bias(symbol),
             order_status=result["status"],
             order_id=result["order_id"],
-            limit_sell_order_id=None,  # Will be set after
+            limit_sell_order_id=None,  # Will be set by position manager once buy is filled
             target_price=target_price if target_price > 0 else None,
         )
         log(
             f"[{symbol}] 🚀 #{trade_id} {side} ${bet_usd_effective:.2f} @ {price:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
         )
+    except Exception as e:
+        log(f"[{symbol}] Trade completion error: {e}")
 
-        # Place sell limit order after logging trade confirmation
-        if result["success"]:
-            log(f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units")
-
-            # Retry placing the sell order with exponential backoff
-            max_retries = 3
-            retry_delays = [2, 3, 5]  # seconds
-            limit_sell_id = None
-
-            for attempt in range(max_retries):
-                if attempt > 0:
-                    log(
-                        f"[{symbol}] 🔄 Retry {attempt}/{max_retries - 1} - waiting {retry_delays[attempt - 1]}s..."
-                    )
-                    time.sleep(retry_delays[attempt - 1])
-
-                # Suppress error logging on retries for balance errors
-                sell_limit_result = place_limit_order(
-                    token_id,
-                    0.99,
-                    size,
-                    SELL,
-                    silent_on_balance_error=(attempt < max_retries - 1),
-                )
-
-                if sell_limit_result["success"]:
-                    limit_sell_id = sell_limit_result["order_id"]
-                    log(f"[{symbol}] ✅ Limit sell order placed: {limit_sell_id}")
-
-                    # Update trade record with limit sell order ID
-                    from src.config.settings import DB_FILE
-                    import sqlite3
-
-                    conn = sqlite3.connect(DB_FILE, timeout=30.0)
-                    conn.execute(
-                        "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
-                        (limit_sell_id, trade_id),
-                    )
-                    conn.commit()
-                    conn.close()
-                    break
-                else:
-                    error_msg = str(sell_limit_result.get("error", ""))
-                    if (
-                        "not enough balance" in error_msg.lower()
-                        and attempt < max_retries - 1
-                    ):
-                        log(f"[{symbol}] ⏳ Balance not yet available, will retry...")
-                        continue
-                    else:
-                        log(
-                            f"[{symbol}] ❌ Failed to place limit sell order: {error_msg}"
-                        )
-                        break
     except Exception as e:
         log(f"[{symbol}] Trade completion error: {e}")
 

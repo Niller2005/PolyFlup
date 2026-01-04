@@ -126,9 +126,28 @@ def place_order(token_id: str, price: float, size: float) -> dict:
     return place_limit_order(token_id, price, size, BUY)
 
 
+def get_order_status(order_id: str) -> str:
+    """Get current status of an order"""
+    try:
+        order_data = client.get_order(order_id)
+        if isinstance(order_data, dict):
+            return order_data.get("status", "UNKNOWN")
+        return getattr(order_data, "status", "UNKNOWN")
+    except Exception as e:
+        if "404" in str(e):
+            return "NOT_FOUND"
+        log(f"⚠️ Error checking order status {order_id}: {e}")
+        return "ERROR"
+
+
 def cancel_order(order_id: str) -> bool:
     """Cancel an open order on CLOB"""
     try:
+        # Check status first to avoid unnecessary calls
+        status = get_order_status(order_id)
+        if status in ["FILLED", "CANCELED", "EXPIRED"]:
+            return True
+
         resp = client.cancel(order_id)
         return resp == "OK" or (isinstance(resp, dict) and resp.get("status") == "OK")
     except Exception as e:

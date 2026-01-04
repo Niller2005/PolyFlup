@@ -4,6 +4,7 @@ from .orders import (
     place_order,
     place_limit_order,
     cancel_order,
+    get_order_status,
     sell_position,
     get_clob_client,
     BUY,

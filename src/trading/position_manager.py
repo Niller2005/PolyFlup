@@ -1,6 +1,7 @@
 """Position monitoring and management"""
 
 import sqlite3
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from src.config.settings import (
@@ -23,6 +24,7 @@ from src.trading.orders import (
     place_order,
     place_limit_order,
     cancel_order,
+    get_order_status,
     SELL,
 )
 from src.data.market_data import (
@@ -54,7 +56,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
     # Get unsettled trades that are still in their window
     c.execute(
-        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id
+        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status
            FROM trades 
            WHERE settled = 0 
            AND exited_early = 0
@@ -86,9 +88,55 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         is_reversal,
         target_price,
         limit_sell_order_id,
+        buy_order_id,
+        buy_order_status,
     ) in open_positions:
         try:
-            # 0. Check if limit sell order was filled
+            # 0. Check buy order status if not filled
+            current_buy_status = buy_order_status
+            if buy_order_status != "FILLED" and buy_order_id:
+                current_buy_status = get_order_status(buy_order_id)
+                if current_buy_status == "FILLED":
+                    log(f"✅ BUY order for trade #{trade_id} has been FILLED")
+                    c.execute(
+                        "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
+                        (trade_id,),
+                    )
+                    conn.commit()
+                elif current_buy_status in ["CANCELED", "EXPIRED"]:
+                    log(
+                        f"⚠️ BUY order for trade #{trade_id} was {current_buy_status}. Settling trade."
+                    )
+                    c.execute(
+                        "UPDATE trades SET settled = 1, final_outcome = ? WHERE id = ?",
+                        (current_buy_status, trade_id),
+                    )
+                    conn.commit()
+                    continue
+
+            # 1. Place limit sell order if filled but missing sell order
+            if current_buy_status == "FILLED" and not limit_sell_order_id:
+                log(
+                    f"[{symbol}] 📉 Placing delayed limit sell order at 0.99 for {size} units"
+                )
+                sell_limit_result = place_limit_order(
+                    token_id, 0.99, size, SELL, silent_on_balance_error=True
+                )
+                if sell_limit_result["success"]:
+                    limit_sell_order_id = sell_limit_result["order_id"]
+                    log(
+                        f"[{symbol}] ✅ Delayed limit sell order placed: {limit_sell_order_id}"
+                    )
+                    c.execute(
+                        "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                        (limit_sell_order_id, trade_id),
+                    )
+                    conn.commit()
+                else:
+                    # Balance might still be settling, will try again next cycle
+                    pass
+
+            # 2. Check if limit sell order was filled
             if check_orders and limit_sell_order_id:
                 try:
                     order_data = client.get_order(limit_sell_order_id)
@@ -263,10 +311,11 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             stop_threshold = -STOP_LOSS_PERCENT
             sl_label = "STOP LOSS"
 
-            if ENABLE_STOP_LOSS and pnl_pct >= 20.0:
+            # For unfilled orders, we only care about price_change_pct to cancel the bid
+            # For filled orders, we use the full stop loss logic
+
+            if ENABLE_STOP_LOSS and pnl_pct >= 20.0 and current_buy_status == "FILLED":
                 # Only activate breakeven if market is moving AGAINST our position
-                # UP position: price is dropping (current_price < entry_price)
-                # DOWN position: price is rising (current_price > entry_price)
                 is_moving_against = False
                 if side == "UP" and current_price < entry_price:
                     is_moving_against = True
@@ -280,22 +329,34 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     sl_label = "BREAKEVEN PROTECTION"
 
             if ENABLE_STOP_LOSS and price_change_pct <= stop_threshold:
-                log(
-                    f"🛑 {sl_label} trade #{trade_id}: {price_change_pct:.1f}% move (Threshold: {stop_threshold}%)"
-                )
-
-                # Cancel existing limit sell order if it exists
-                if limit_sell_order_id:
-                    if cancel_order(limit_sell_order_id):
-                        log(
-                            f"[{symbol}] ⏳ Limit sell order cancelled, waiting for tokens to be freed..."
+                if current_buy_status != "FILLED":
+                    log(
+                        f"🛑 Price moved away from unfilled bid for trade #{trade_id} ({price_change_pct:.1f}%). CANCELLING BUY ORDER."
+                    )
+                    if cancel_order(buy_order_id):
+                        c.execute(
+                            "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_SL' WHERE id = ?",
+                            (trade_id,),
                         )
-                        import time
+                        conn.commit()
+                        continue
+                else:
+                    log(
+                        f"🛑 {sl_label} trade #{trade_id}: {price_change_pct:.1f}% move (Threshold: {stop_threshold}%)"
+                    )
 
-                        time.sleep(2)  # Wait for exchange to free up tokens
+                    # Cancel existing limit sell order if it exists
+                    if limit_sell_order_id:
+                        if cancel_order(limit_sell_order_id):
+                            log(
+                                f"[{symbol}] ⏳ Limit sell order cancelled, waiting for tokens to be freed..."
+                            )
+                            import time
 
-                # Sell current position
-                sell_result = sell_position(token_id, size, current_price)
+                            time.sleep(2)  # Wait for exchange to free up tokens
+
+                    # Sell current position
+                    sell_result = sell_position(token_id, size, current_price)
 
                 if sell_result["success"]:
                     # Mark as exited early
