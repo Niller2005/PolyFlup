@@ -24,7 +24,7 @@ echo ""
 
 # Build and deploy with docker-compose
 echo "🐳 Building and starting containers..."
-docker-compose up -d --build
+docker compose up -d --build
 if [ $? -ne 0 ]; then
     echo "❌ Docker compose failed"
     exit 1
