@@ -48,26 +48,26 @@ def save_trade(**kwargs):
     """,
         (
             datetime.now(tz=ZoneInfo("UTC")).isoformat(),
-            kwargs["symbol"],
-            kwargs["window_start"],
-            kwargs["window_end"],
-            kwargs["slug"],
-            kwargs["token_id"],
-            kwargs["side"],
-            kwargs["edge"],
-            kwargs["price"],
-            kwargs["size"],
-            kwargs["bet_usd"],
-            kwargs["p_yes"],
-            kwargs["best_bid"],
-            kwargs["best_ask"],
-            kwargs["imbalance"],
-            kwargs["funding_bias"],
-            kwargs["order_status"],
-            kwargs["order_id"],
+            kwargs.get("symbol"),
+            kwargs.get("window_start"),
+            kwargs.get("window_end"),
+            kwargs.get("slug"),
+            kwargs.get("token_id"),
+            kwargs.get("side"),
+            kwargs.get("edge", 0.0),
+            kwargs.get("price", 0.0),
+            kwargs.get("size", 0.0),
+            kwargs.get("bet_usd", 0.0),
+            kwargs.get("p_yes", 0.5),
+            kwargs.get("best_bid"),
+            kwargs.get("best_ask"),
+            kwargs.get("imbalance", 0.5),
+            kwargs.get("funding_bias", 0.0),
+            kwargs.get("order_status", "UNKNOWN"),
+            kwargs.get("order_id", "N/A"),
             kwargs.get("limit_sell_order_id"),
             kwargs.get("is_reversal", False),
-            kwargs.get("target_price", None),
+            kwargs.get("target_price"),
         ),
     )
     trade_id = c.lastrowid
@@ -117,6 +117,7 @@ def generate_statistics():
 
     send_discord(f"📊 **PERFORMANCE REPORT**\n```\n{report_text}\n```")
     conn.close()
+
 
 def get_total_exposure() -> float:
     """Get total USD exposure of open trades"""
