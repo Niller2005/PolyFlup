@@ -286,6 +286,42 @@ def trade_symbol(symbol: str, balance: float):
         f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Price {price:.4f}"
     )
 
+    # Place limit sell order at 0.99 immediately after market buy (with retry logic)
+    limit_sell_order_id = None
+    max_retries = 3
+    retry_delays = [1, 2, 3]
+
+    log(f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units")
+    for attempt in range(max_retries):
+        if attempt > 0:
+            log(
+                f"[{symbol}] ⏳ Retry {attempt}/{max_retries - 1} placing limit sell order..."
+            )
+            time.sleep(retry_delays[attempt - 1])
+
+        sell_limit_result = place_limit_order(
+            token_id,
+            0.99,
+            size,
+            SELL,
+            silent_on_balance_error=(attempt < max_retries - 1),
+        )
+
+        if sell_limit_result["success"]:
+            limit_sell_order_id = sell_limit_result["order_id"]
+            log(
+                f"[{symbol}] ✅ Limit sell order placed at 0.99: {limit_sell_order_id[:10] if limit_sell_order_id else 'N/A'}"
+            )
+            break
+        else:
+            error_msg = str(sell_limit_result.get("error", ""))
+            if "not enough balance" in error_msg.lower() and attempt < max_retries - 1:
+                # Balance might still be settling, will retry
+                continue
+            else:
+                log(f"[{symbol}] ⚠️ Failed to place limit sell order: {error_msg}")
+                break
+
     try:
         window_start, window_end = get_window_times(symbol)
         target_price = get_window_start_price(symbol)
@@ -308,7 +344,7 @@ def trade_symbol(symbol: str, balance: float):
             funding_bias=get_funding_bias(symbol),
             order_status=result["status"],
             order_id=result["order_id"],
-            limit_sell_order_id=None,  # Will be set by position manager once buy is filled
+            limit_sell_order_id=limit_sell_order_id,  # Now set immediately after buy
             target_price=target_price if target_price > 0 else None,
         )
         log(
