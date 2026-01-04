@@ -65,7 +65,7 @@ from src.trading.orders import (
     get_clob_client,
     SELL,
 )
-from src.trading.position_manager import check_open_positions
+from src.trading.position_manager import check_open_positions, recover_open_positions
 from src.trading.settlement import check_and_settle_trades
 
 
@@ -377,6 +377,13 @@ def main():
     )
     log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: {BET_PERCENT}% | ADX: {ADX_THRESHOLD}")
     log("=" * 90)
+
+    # Recover and start monitoring any existing open positions
+    recover_open_positions()
+
+    # Immediately check positions to ensure stop loss/take profit monitoring is active
+    log("🔍 Performing initial position check...")
+    check_open_positions(verbose=True, check_orders=True)
 
     cycle = 0
     last_position_check = time.time()

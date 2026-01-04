@@ -37,6 +37,57 @@ from src.data.market_data import (
 from src.data.database import save_trade
 
 
+def recover_open_positions():
+    """
+    Recover and log open positions from database on bot startup
+    This ensures positions are monitored after a restart
+    """
+    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    c = conn.cursor()
+    now = datetime.now(tz=ZoneInfo("UTC"))
+
+    # Get all unsettled trades that are still in their window
+    c.execute(
+        """SELECT id, symbol, side, entry_price, size, bet_usd, window_end, order_status
+           FROM trades 
+           WHERE settled = 0 
+           AND exited_early = 0
+           AND datetime(window_end) > datetime(?)""",
+        (now.isoformat(),),
+    )
+    open_positions = c.fetchall()
+    conn.close()
+
+    if not open_positions:
+        log("✓ No open positions to recover")
+        return
+
+    log("=" * 90)
+    log(f"🔄 RECOVERING {len(open_positions)} OPEN POSITIONS FROM DATABASE")
+    log("=" * 90)
+
+    for (
+        trade_id,
+        symbol,
+        side,
+        entry_price,
+        size,
+        bet_usd,
+        window_end,
+        order_status,
+    ) in open_positions:
+        window_end_dt = datetime.fromisoformat(window_end)
+        time_left = (window_end_dt - now).total_seconds() / 60.0  # minutes
+
+        log(
+            f"  [{symbol}] Trade #{trade_id} {side}: ${bet_usd:.2f} @ ${entry_price:.4f} | Status: {order_status} | {time_left:.0f}m left"
+        )
+
+    log("=" * 90)
+    log(f"✓ Position monitoring ACTIVE for {len(open_positions)} positions")
+    log("=" * 90)
+
+
 def check_open_positions(verbose: bool = True, check_orders: bool = False):
     """
     Check open positions and manage them
