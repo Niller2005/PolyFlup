@@ -84,6 +84,112 @@ def get_midpoint(token_id: str) -> Optional[float]:
         return None
 
 
+def get_tick_size(token_id: str) -> float:
+    """
+    Get the minimum tick size (price increment) for a token
+
+    Args:
+        token_id: Token ID
+
+    Returns:
+        Tick size (e.g., 0.01, 0.001, 0.0001) or 0.01 as default
+    """
+    try:
+        tick_size = client.get_tick_size(token_id)
+
+        if tick_size:
+            return float(tick_size)
+
+        return MIN_TICK_SIZE  # Default fallback
+
+    except Exception as e:
+        log(f"⚠️ Error getting tick size for {token_id[:10]}...: {e}")
+        return MIN_TICK_SIZE
+
+
+def get_spread(token_id: str) -> Optional[float]:
+    """
+    Get the spread (difference between best ask and bid) for a token
+
+    Args:
+        token_id: Token ID
+
+    Returns:
+        Spread value or None if unavailable
+    """
+    try:
+        result = client.get_spread(token_id)
+
+        if isinstance(result, dict):
+            spread = result.get("spread")
+            if spread:
+                return float(spread)
+        elif hasattr(result, "spread"):
+            return float(result.spread)
+
+        return None
+
+    except Exception as e:
+        log(f"⚠️ Error getting spread for {token_id[:10]}...: {e}")
+        return None
+
+
+def get_server_time() -> Optional[int]:
+    """
+    Get current server timestamp for accurate time synchronization
+
+    Returns:
+        Unix timestamp in seconds or None if unavailable
+    """
+    try:
+        timestamp = client.get_server_time()
+
+        if isinstance(timestamp, (int, float)):
+            return int(timestamp)
+
+        return None
+
+    except Exception as e:
+        log(f"⚠️ Error getting server time: {e}")
+        return None
+
+
+def get_trades(
+    market: Optional[str] = None, asset_id: Optional[str] = None, limit: int = 100
+) -> List[dict]:
+    """
+    Get trade history (filled orders)
+
+    Args:
+        market: Filter by market condition ID
+        asset_id: Filter by token ID
+        limit: Maximum number of trades to return
+
+    Returns:
+        List of trade dictionaries
+    """
+    try:
+        from py_clob_client.clob_types import TradeParams
+
+        params = TradeParams()
+        if market:
+            params.market = market
+        if asset_id:
+            params.asset_id = asset_id
+
+        trades = client.get_trades(params)
+
+        if not isinstance(trades, list):
+            trades = [trades] if trades else []
+
+        # Limit results
+        return trades[:limit]
+
+    except Exception as e:
+        log(f"⚠️ Error getting trades: {e}")
+        return []
+
+
 def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
     """
     Get balance and allowance for USDC collateral or specific conditional token
@@ -234,9 +340,15 @@ def _ensure_api_creds(order_client: ClobClient) -> None:
             log(f"⚠ Error setting API creds: {e}")
 
 
-def _validate_price(price: float) -> tuple[bool, Optional[str]]:
+def _validate_price(
+    price: float, tick_size: float = MIN_TICK_SIZE
+) -> tuple[bool, Optional[str]]:
     """
     Validate order price meets minimum tick size requirements
+
+    Args:
+        price: Price to validate
+        tick_size: Minimum tick size (default: 0.01)
 
     Returns:
         (is_valid, error_message)
@@ -247,11 +359,23 @@ def _validate_price(price: float) -> tuple[bool, Optional[str]]:
     if price < 0.01 or price > 0.99:
         return False, "Price must be between 0.01 and 0.99"
 
-    # Check tick size (must be multiple of 0.01)
-    if round(price, 2) != price:
+    # Determine decimal places from tick size
+    if tick_size == 0.1:
+        decimal_places = 1
+    elif tick_size == 0.01:
+        decimal_places = 2
+    elif tick_size == 0.001:
+        decimal_places = 3
+    elif tick_size == 0.0001:
+        decimal_places = 4
+    else:
+        decimal_places = 2  # Default
+
+    # Check if price is properly rounded to tick size
+    if round(price, decimal_places) != price:
         return (
             False,
-            f"Price must be rounded to minimum tick size of {MIN_TICK_SIZE} (got {price})",
+            f"Price must be rounded to minimum tick size of {tick_size} (got {price})",
         )
 
     return True, None
@@ -620,6 +744,33 @@ def place_market_order(
             "errorMsg": parsed_error,
             "orderHashes": [],
         }
+
+
+def check_liquidity(token_id: str, size: float, warn_threshold: float = 0.05) -> bool:
+    """
+    Check if there's sufficient liquidity for an order
+
+    Args:
+        token_id: Token ID to check
+        size: Order size in shares
+        warn_threshold: Warn if spread is above this (default 0.05 = 5%)
+
+    Returns:
+        True if liquidity looks good, False if spread is too wide
+    """
+    spread = get_spread(token_id)
+
+    if spread is None:
+        # Can't determine spread, assume OK
+        return True
+
+    if spread > warn_threshold:
+        log(
+            f"⚠️ Wide spread detected: {spread:.3f} ({spread * 100:.1f}%) - Low liquidity!"
+        )
+        return False
+
+    return True
 
 
 def place_batch_orders(orders: List[Dict[str, any]]) -> List[dict]:
