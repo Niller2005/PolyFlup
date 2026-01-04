@@ -278,7 +278,6 @@ def _check_stop_loss(
             trade_id,
         ),
     )
-    conn.commit()
 
     send_discord(f"🛑 **STOP LOSS** [{symbol}] {side} closed at {pnl_pct:+.1f}%")
 
@@ -374,7 +373,6 @@ def _update_exit_plan_after_scale_in(
                 "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
                 (new_order_id, trade_id),
             )
-            conn.commit()
         else:
             log(f"   ⚠️ Failed to update exit plan: {new_exit_order.get('error')}")
             # Clear old order ID since we cancelled it
@@ -382,7 +380,6 @@ def _update_exit_plan_after_scale_in(
                 "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
                 (trade_id,),
             )
-            conn.commit()
     else:
         log(f"   ⚠️ Failed to cancel old exit plan order")
 
@@ -431,7 +428,6 @@ def _check_exit_plan(
                 "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
                 (limit_sell_order_id, trade_id),
             )
-            conn.commit()
         else:
             error_msg = sell_limit_result.get("error", "Unknown error")
             log(
@@ -501,7 +497,6 @@ def _check_scale_in(
                                WHERE id=?""",
                             (new_total_size, new_total_bet, new_avg_price, trade_id),
                         )
-                        conn.commit()
 
                         log(
                             f"   Size: {size:.2f} → {new_total_size:.2f} (+{size_matched:.2f})"
@@ -531,7 +526,6 @@ def _check_scale_in(
                         "UPDATE trades SET scale_in_order_id = NULL WHERE id = ?",
                         (trade_id,),
                     )
-                    conn.commit()
                 elif status == "LIVE":
                     # Order is live, waiting for fill
                     log(
@@ -590,7 +584,6 @@ def _check_scale_in(
                    WHERE id=?""",
                 (new_total_size, new_total_bet, new_avg_price, trade_id),
             )
-            conn.commit()
 
             log(f"   Size: {size:.2f} → {new_total_size:.2f} (+{additional_size:.2f})")
             log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
@@ -621,7 +614,6 @@ def _check_scale_in(
                 "UPDATE trades SET scale_in_order_id = ? WHERE id = ?",
                 (new_scale_in_order_id, trade_id),
             )
-            conn.commit()
             log(f"   Monitoring scale-in order: {new_scale_in_order_id[:10]}...")
     else:
         # Enhanced error reporting
@@ -669,7 +661,6 @@ def _check_take_profit(
            WHERE id=?""",
         (current_price, pnl_usd, pnl_pct, now.isoformat(), trade_id),
     )
-    conn.commit()
 
     send_discord(f"🎯 **TAKE PROFIT** [{symbol}] {side} closed at {pnl_pct:+.1f}%")
 
@@ -753,7 +744,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
                         (trade_id,),
                     )
-                    conn.commit()
                 elif current_buy_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
                     log(
                         f"⚠️ BUY order for trade #{trade_id} was {current_buy_status}. Settling trade."
@@ -762,7 +752,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         "UPDATE trades SET settled = 1, final_outcome = ? WHERE id = ?",
                         (current_buy_status, trade_id),
                     )
-                    conn.commit()
                     continue
                 elif current_buy_status in ["DELAYED", "UNMATCHED"]:
                     # Order is pending, log status but continue monitoring
@@ -814,7 +803,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                     trade_id,
                                 ),
                             )
-                            conn.commit()
                             send_discord(
                                 f"🎯 **EXIT PLAN SUCCESS** [{symbol}] {side} closed at {exit_price} ({roi_pct:+.1f}%)"
                             )
@@ -828,7 +816,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                 "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
                                 (trade_id,),
                             )
-                            conn.commit()
                         elif status == "LIVE" and verbose:
                             log(
                                 f"📋 EXIT PLAN: Limit sell order for trade #{trade_id} is LIVE at {EXIT_PRICE_TARGET}"
@@ -1047,7 +1034,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                         trade_id,
                                     ),
                                 )
-                                conn.commit()
                                 send_discord(
                                     f"🔄 **RETRY** [{symbol}] {side} @ ${retry_price:.2f} (was ${entry_price:.2f}, waited {position_age_seconds:.0f}s)"
                                 )
@@ -1061,7 +1047,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                             "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_UNFILLED', order_status = 'CANCELED' WHERE id = ?",
                             (trade_id,),
                         )
-                        conn.commit()
                     else:
                         # Cancel failed - likely order already filled or cancelled
                         # Update status so we don't keep trying
@@ -1080,7 +1065,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                 "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
                                 (trade_id,),
                             )
-                            conn.commit()
                             continue
                         elif actual_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
                             # Order already cancelled/expired, settle it
@@ -1093,7 +1077,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                     trade_id,
                                 ),
                             )
-                            conn.commit()
                             continue
                         elif actual_status == "ERROR":
                             # Can't determine status (API error) - mark to prevent infinite retry
@@ -1104,7 +1087,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                 "UPDATE trades SET order_status = 'CANCEL_ATTEMPTED' WHERE id = ?",
                                 (trade_id,),
                             )
-                            conn.commit()
                             continue
                         else:
                             # Unknown state (LIVE, DELAYED, etc.), mark to prevent spam
@@ -1112,7 +1094,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                 "UPDATE trades SET order_status = 'CANCEL_ATTEMPTED' WHERE id = ?",
                                 (trade_id,),
                             )
-                            conn.commit()
                             continue
 
                     continue
