@@ -33,6 +33,8 @@ from src.trading.orders import (
     place_limit_order,
     cancel_order,
     get_order_status,
+    get_order,
+    BUY,
     SELL,
 )
 from src.data.market_data import (
@@ -272,7 +274,7 @@ def _check_stop_loss(
 
     send_discord(f"🛑 **STOP LOSS** [{symbol}] {side} closed at {pnl_pct:+.1f}%")
 
-    if not is_reversal:
+    if not is_reversal and ENABLE_REVERSAL:
         opposite_side = "DOWN" if side == "UP" else "UP"
         log(f"🔄 Reversing [{symbol}] {side} → {opposite_side} to get on winning side")
 
@@ -281,7 +283,9 @@ def _check_stop_loss(
             opposite_token = down_id if side == "UP" else up_id
             opposite_price = 1.0 - current_price
 
+            # Use enhanced place_order with better error handling
             reverse_result = place_order(opposite_token, opposite_price, size)
+
             if reverse_result["success"]:
                 send_discord(
                     f"🔄 **REVERSED** [{symbol}] {side} → {opposite_side} (Target: ${target_price:,.2f}, Spot: ${current_spot:,.2f})"
@@ -311,6 +315,13 @@ def _check_stop_loss(
                     )
                 except Exception as e:
                     log(f"⚠️ DB Error (reversal): {e}")
+            else:
+                # Enhanced error reporting
+                error_msg = reverse_result.get("error", "Unknown error")
+                log(f"⚠️ Reversal order failed for [{symbol}]: {error_msg}")
+                send_discord(
+                    f"⚠️ **REVERSAL FAILED** [{symbol}] {side} → {opposite_side}: {error_msg}"
+                )
 
     return True
 
@@ -342,11 +353,12 @@ def _check_exit_plan(
             f"[{symbol}] 📉 EXIT PLAN: Placing limit sell order at {EXIT_PRICE_TARGET} for {size} units (position age: {position_age_seconds:.0f}s, min age: {EXIT_MIN_POSITION_AGE}s)"
         )
         sell_limit_result = place_limit_order(
-            token_id,
-            EXIT_PRICE_TARGET,
-            size,
-            SELL,
+            token_id=token_id,
+            price=EXIT_PRICE_TARGET,
+            size=size,
+            side=SELL,
             silent_on_balance_error=True,
+            order_type="GTC",  # Good-til-cancelled for exit plan
         )
         if sell_limit_result["success"]:
             limit_sell_order_id = sell_limit_result["order_id"]
@@ -359,8 +371,9 @@ def _check_exit_plan(
             )
             conn.commit()
         else:
+            error_msg = sell_limit_result.get("error", "Unknown error")
             log(
-                f"[{symbol}] ⚠️ EXIT PLAN: Failed to place limit sell at {EXIT_PRICE_TARGET} (will retry next cycle)"
+                f"[{symbol}] ⚠️ EXIT PLAN: Failed to place limit sell at {EXIT_PRICE_TARGET}: {error_msg} (will retry next cycle)"
             )
     elif limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60:
         log(
@@ -376,16 +389,84 @@ def _check_scale_in(
     size: float,
     bet_usd: float,
     scaled_in: bool,
+    scale_in_order_id: Optional[str],
     time_left_seconds: float,
     current_price: float,
+    check_orders: bool,
     c: sqlite3.Cursor,
     conn: sqlite3.Connection,
 ) -> None:
-    """Check and execute scale in if conditions are met"""
+    """Check and execute scale in if conditions are met, or monitor pending scale-in orders"""
+    if not ENABLE_SCALE_IN:
+        return
+
+    # First, check if there's a pending scale-in order to monitor
+    if scale_in_order_id and check_orders:
+        try:
+            order_data = get_order(scale_in_order_id)
+
+            if order_data:
+                status = order_data.get("status", "").upper()
+
+                if status == "FILLED":
+                    # Scale-in order filled! Update position
+                    scale_price = order_data.get("price", current_price)
+                    size_matched = order_data.get("size_matched", 0)
+
+                    if size_matched > 0:
+                        log(
+                            f"✅ SCALE IN FILLED for trade #{trade_id}: {size_matched} shares @ ${scale_price:.4f}"
+                        )
+
+                        new_total_size = size + size_matched
+                        additional_bet = size_matched * scale_price
+                        new_total_bet = bet_usd + additional_bet
+                        new_avg_price = new_total_bet / new_total_size
+
+                        c.execute(
+                            """UPDATE trades
+                               SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL
+                               WHERE id=?""",
+                            (new_total_size, new_total_bet, new_avg_price, trade_id),
+                        )
+                        conn.commit()
+
+                        log(
+                            f"   Size: {size:.2f} → {new_total_size:.2f} (+{size_matched:.2f})"
+                        )
+                        log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
+                        send_discord(
+                            f"📈 **SCALE IN FILLED** [{symbol}] +${additional_bet:.2f} @ ${scale_price:.2f}"
+                        )
+                        return
+
+                elif status in ["CANCELED", "EXPIRED"]:
+                    log(f"⚠️ SCALE IN: Order for trade #{trade_id} was {status}")
+                    # Clear the order ID so it can potentially be re-placed
+                    c.execute(
+                        "UPDATE trades SET scale_in_order_id = NULL WHERE id = ?",
+                        (trade_id,),
+                    )
+                    conn.commit()
+                elif status == "LIVE":
+                    # Order is live, waiting for fill
+                    log(
+                        f"📋 SCALE IN: Order for trade #{trade_id} is LIVE, waiting for fill..."
+                    )
+                    return  # Don't try to place another one
+                elif status in ["DELAYED", "UNMATCHED"]:
+                    log(f"ℹ️ SCALE IN: Order for trade #{trade_id} status: {status}")
+                    return  # Still pending
+        except Exception as e:
+            log(f"⚠️ Error checking scale-in order {scale_in_order_id}: {e}")
+
+    # If already scaled in or there's a pending order, don't place new one
+    if scaled_in or scale_in_order_id:
+        return
+
+    # Check if conditions are met to place a new scale-in order
     if (
-        not ENABLE_SCALE_IN
-        or scaled_in
-        or time_left_seconds > SCALE_IN_TIME_LEFT
+        time_left_seconds > SCALE_IN_TIME_LEFT
         or time_left_seconds <= 0
         or not (SCALE_IN_MIN_PRICE <= current_price <= SCALE_IN_MAX_PRICE)
     ):
@@ -398,33 +479,50 @@ def _check_scale_in(
     additional_size = size * SCALE_IN_MULTIPLIER
     additional_bet = additional_size * current_price
 
+    # Use enhanced place_order with validation and retry logic
     scale_result = place_order(token_id, current_price, additional_size)
 
     if scale_result["success"]:
-        new_total_size = size + additional_size
-        new_total_bet = bet_usd + additional_bet
-        new_avg_price = new_total_bet / new_total_size
-
-        c.execute(
-            """UPDATE trades
-               SET size=?, bet_usd=?, entry_price=?, scaled_in=1
-               WHERE id=?""",
-            (
-                new_total_size,
-                new_total_bet,
-                new_avg_price,
-                trade_id,
-            ),
-        )
-        conn.commit()
+        # Save the order ID so we can monitor it
+        new_scale_in_order_id = scale_result["order_id"]
+        order_status = scale_result["status"]
 
         log(
-            f"✅ Scaled in! Size: {size:.2f} → {new_total_size:.2f} (+{additional_size:.2f})"
+            f"✅ SCALE IN order placed for trade #{trade_id}: {additional_size:.2f} shares @ ${current_price:.2f} (status: {order_status})"
         )
-        log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
-        send_discord(
-            f"📈 **SCALED IN** [{symbol}] +${additional_bet:.2f} @ ${current_price:.2f} ({time_left_seconds:.0f}s left)"
-        )
+
+        # If order filled immediately, update position now
+        if order_status == "matched":
+            new_total_size = size + additional_size
+            new_total_bet = bet_usd + additional_bet
+            new_avg_price = new_total_bet / new_total_size
+
+            c.execute(
+                """UPDATE trades
+                   SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL
+                   WHERE id=?""",
+                (new_total_size, new_total_bet, new_avg_price, trade_id),
+            )
+            conn.commit()
+
+            log(f"   Size: {size:.2f} → {new_total_size:.2f} (+{additional_size:.2f})")
+            log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
+            send_discord(
+                f"📈 **SCALED IN** [{symbol}] +${additional_bet:.2f} @ ${current_price:.2f} ({time_left_seconds:.0f}s left)"
+            )
+        else:
+            # Order is live/pending, save ID to monitor it
+            c.execute(
+                "UPDATE trades SET scale_in_order_id = ? WHERE id = ?",
+                (new_scale_in_order_id, trade_id),
+            )
+            conn.commit()
+            log(f"   Monitoring scale-in order: {new_scale_in_order_id[:10]}...")
+    else:
+        # Enhanced error reporting
+        error_msg = scale_result.get("error", "Unknown error")
+        log(f"⚠️ Scale in failed for trade #{trade_id}: {error_msg}")
+        # Don't send Discord for scale-in failures (too noisy), just log it
 
 
 def _check_take_profit(
@@ -500,7 +598,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
     # Get unsettled trades that are still in their window
     c.execute(
-        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status, timestamp
+        """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status, timestamp, scale_in_order_id
            FROM trades 
            WHERE settled = 0 
            AND exited_early = 0
@@ -535,12 +633,14 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         buy_order_id,
         buy_order_status,
         timestamp,
+        scale_in_order_id,
     ) in open_positions:
         try:
             # 0. Check buy order status if not filled
             current_buy_status = buy_order_status
             if buy_order_status != "FILLED" and buy_order_id:
                 current_buy_status = get_order_status(buy_order_id)
+
                 if current_buy_status == "FILLED":
                     log(f"✅ BUY order for trade #{trade_id} has been FILLED")
                     c.execute(
@@ -548,7 +648,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         (trade_id,),
                     )
                     conn.commit()
-                elif current_buy_status in ["CANCELED", "EXPIRED"]:
+                elif current_buy_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
                     log(
                         f"⚠️ BUY order for trade #{trade_id} was {current_buy_status}. Settling trade."
                     )
@@ -558,40 +658,82 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     )
                     conn.commit()
                     continue
+                elif current_buy_status in ["DELAYED", "UNMATCHED"]:
+                    # Order is pending, log status but continue monitoring
+                    if verbose:
+                        log(
+                            f"ℹ️ BUY order for trade #{trade_id} status: {current_buy_status}"
+                        )
+                elif current_buy_status == "LIVE":
+                    # Order is live on the book, waiting for fill
+                    if verbose:
+                        log(f"📋 BUY order for trade #{trade_id} is LIVE on the book")
+                elif current_buy_status == "ERROR":
+                    log(f"⚠️ Error checking BUY order for trade #{trade_id}")
 
             # Note: Limit sell order placement moved to 60-second mark (after price checks below)
 
             # 2. Check if limit sell order was filled (EXIT PLAN MONITORING)
             if check_orders and limit_sell_order_id:
                 try:
-                    order_data = client.get_order(limit_sell_order_id)
-                    # Handle both dict and object response
-                    if isinstance(order_data, dict):
-                        status = order_data.get("status")
+                    # Use enhanced get_order() for detailed information
+                    order_data = get_order(limit_sell_order_id)
+
+                    if order_data:
+                        status = order_data.get("status", "").upper()
+
+                        if status == "FILLED":
+                            # Get actual exit price from order data if available
+                            exit_price = order_data.get("price", EXIT_PRICE_TARGET)
+                            size_matched = order_data.get("size_matched", size)
+
+                            log(
+                                f"🎯 EXIT PLAN SUCCESS: Trade #{trade_id} filled at {exit_price}! (matched {size_matched} shares)"
+                            )
+
+                            pnl_usd = (exit_price * size_matched) - bet_usd
+                            roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
+
+                            c.execute(
+                                """UPDATE trades 
+                                   SET settled=1, exited_early=1, exit_price=?, 
+                                       pnl_usd=?, roi_pct=?, 
+                                       final_outcome='EXIT_PLAN_FILLED', settled_at=? 
+                                   WHERE id=?""",
+                                (
+                                    exit_price,
+                                    pnl_usd,
+                                    roi_pct,
+                                    now.isoformat(),
+                                    trade_id,
+                                ),
+                            )
+                            conn.commit()
+                            send_discord(
+                                f"🎯 **EXIT PLAN SUCCESS** [{symbol}] {side} closed at {exit_price} ({roi_pct:+.1f}%)"
+                            )
+                            continue
+                        elif status in ["CANCELED", "EXPIRED"]:
+                            log(
+                                f"⚠️ EXIT PLAN: Limit sell order for trade #{trade_id} was {status}"
+                            )
+                            # Clear the limit_sell_order_id so it can be re-placed
+                            c.execute(
+                                "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                                (trade_id,),
+                            )
+                            conn.commit()
+                        elif status == "LIVE" and verbose:
+                            log(
+                                f"📋 EXIT PLAN: Limit sell order for trade #{trade_id} is LIVE at {EXIT_PRICE_TARGET}"
+                            )
                     else:
-                        status = getattr(order_data, "status", None)
+                        # Order not found, might be too old
+                        if verbose:
+                            log(
+                                f"⚠️ EXIT PLAN: Could not find limit sell order {limit_sell_order_id[:10]}..."
+                            )
 
-                    if status == "FILLED":
-                        exit_price = EXIT_PRICE_TARGET if ENABLE_EXIT_PLAN else 0.99
-                        log(
-                            f"🎯 EXIT PLAN SUCCESS: Trade #{trade_id} filled at {exit_price}!"
-                        )
-                        pnl_usd = (exit_price * size) - bet_usd
-                        roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
-
-                        c.execute(
-                            """UPDATE trades 
-                               SET settled=1, exited_early=1, exit_price=?, 
-                                   pnl_usd=?, roi_pct=?, 
-                                   final_outcome='EXIT_PLAN_FILLED', settled_at=? 
-                               WHERE id=?""",
-                            (exit_price, pnl_usd, roi_pct, now.isoformat(), trade_id),
-                        )
-                        conn.commit()
-                        send_discord(
-                            f"🎯 **EXIT PLAN SUCCESS** [{symbol}] {side} closed at {exit_price} ({roi_pct:+.1f}%)"
-                        )
-                        continue
                 except Exception as e:
                     # Order might be too old or other error, log if significant
                     if "404" not in str(e):
@@ -672,8 +814,14 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                 limit_sell_order_id = row[0]
 
             # ============================================================
-            # SCALE IN: Check if conditions are met
+            # SCALE IN: Check if conditions are met or monitor pending orders
             # ============================================================
+            # Re-fetch scale_in_order_id in case it was just placed
+            c.execute("SELECT scale_in_order_id FROM trades WHERE id = ?", (trade_id,))
+            row = c.fetchone()
+            if row:
+                scale_in_order_id = row[0]
+
             _check_scale_in(
                 symbol=symbol,
                 trade_id=trade_id,
@@ -682,8 +830,10 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                 size=size,
                 bet_usd=bet_usd,
                 scaled_in=scaled_in,
+                scale_in_order_id=scale_in_order_id,
                 time_left_seconds=time_left_seconds,
                 current_price=current_price,
+                check_orders=check_orders,
                 c=c,
                 conn=conn,
             )

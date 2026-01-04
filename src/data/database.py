@@ -23,7 +23,7 @@ def init_database():
                 slug TEXT, token_id TEXT, side TEXT, edge REAL, entry_price REAL,
                 size REAL, bet_usd REAL, p_yes REAL, best_bid REAL, best_ask REAL,
                 imbalance REAL, funding_bias REAL, order_status TEXT, order_id TEXT,
-                limit_sell_order_id TEXT,
+                limit_sell_order_id TEXT, scale_in_order_id TEXT,
                 final_outcome TEXT, exit_price REAL, pnl_usd REAL, roi_pct REAL,
                 settled BOOLEAN DEFAULT 0, settled_at TEXT, exited_early BOOLEAN DEFAULT 0,
                 scaled_in BOOLEAN DEFAULT 0, is_reversal BOOLEAN DEFAULT 0, target_price REAL
