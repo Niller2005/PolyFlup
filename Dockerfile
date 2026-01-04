@@ -1,7 +1,7 @@
 # Stage 1: Builder
 FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS builder
 
-# Install build dependencies for libsql-experimental (Rust-based package)
+# Install build dependencies for libsql (Rust-based package)
 RUN apt-get update && apt-get install -y \
     curl \
     build-essential \

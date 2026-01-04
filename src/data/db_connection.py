@@ -36,10 +36,10 @@ def db_connection():
     if USE_EMBEDDED_REPLICA:
         # Use Embedded Replica (local file synced with remote Turso)
         try:
-            import libsql_experimental as libsql
+            import libsql
         except ImportError:
             raise ImportError(
-                "libsql-experimental is required for Embedded Replicas. Install with: pip install libsql-experimental"
+                "libsql is required for Embedded Replicas. Install with: pip install libsql"
             )
 
         if not TURSO_DATABASE_URL or not TURSO_AUTH_TOKEN:
@@ -77,10 +77,10 @@ def db_connection():
     elif USE_TURSO:
         # Use Turso (direct remote connection)
         try:
-            import libsql_experimental as libsql
+            import libsql
         except ImportError:
             raise ImportError(
-                "libsql-experimental is required for Turso. Install with: pip install libsql-experimental"
+                "libsql is required for Turso. Install with: pip install libsql"
             )
 
         if not TURSO_DATABASE_URL or not TURSO_AUTH_TOKEN:
