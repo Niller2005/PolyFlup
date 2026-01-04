@@ -61,10 +61,7 @@ from src.trading.strategy import (
 from src.trading.orders import (
     setup_api_creds,
     place_order,
-    place_limit_order,
     get_clob_client,
-    get_order_status,
-    SELL,
 )
 from src.trading.position_manager import check_open_positions, recover_open_positions
 from src.trading.settlement import check_and_settle_trades
@@ -287,70 +284,6 @@ def trade_symbol(symbol: str, balance: float):
         f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Price {price:.4f}"
     )
 
-    # Wait for BUY order to be filled before placing SELL limit order
-    limit_sell_order_id = None
-    buy_order_id = result.get("order_id")
-    initial_status = result.get("status", "").upper()
-
-    # Check if order was already filled/matched immediately
-    filled = initial_status in ["FILLED", "MATCHED"]
-
-    if buy_order_id and not filled:
-        # Wait for order to be filled (max 10 seconds)
-        log(f"[{symbol}] ⏳ Waiting for BUY order to be filled...")
-        for check_attempt in range(10):
-            time.sleep(1)
-            order_status = get_order_status(buy_order_id)
-
-            if order_status in ["FILLED", "MATCHED"]:
-                log(f"[{symbol}] ✅ BUY order filled! (status: {order_status})")
-                filled = True
-                break
-            elif order_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
-                log(f"[{symbol}] ⚠️ BUY order status: {order_status}")
-                break
-    elif filled:
-        log(f"[{symbol}] ✅ BUY order immediately filled! (status: {initial_status})")
-
-    # Only place limit sell if buy order was filled
-    if filled:
-        max_retries = 3
-        retry_delays = [1, 2, 3]
-
-        log(f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units")
-        for attempt in range(max_retries):
-            if attempt > 0:
-                log(
-                    f"[{symbol}] ⏳ Retry {attempt}/{max_retries - 1} placing limit sell order..."
-                )
-                time.sleep(retry_delays[attempt - 1])
-
-            sell_limit_result = place_limit_order(
-                token_id,
-                0.99,
-                size,
-                SELL,
-                silent_on_balance_error=(attempt < max_retries - 1),
-            )
-
-            if sell_limit_result["success"]:
-                limit_sell_order_id = sell_limit_result["order_id"]
-                log(
-                    f"[{symbol}] ✅ Limit sell order placed at 0.99: {limit_sell_order_id[:10] if limit_sell_order_id else 'N/A'}"
-                )
-                break
-            else:
-                error_msg = str(sell_limit_result.get("error", ""))
-                if (
-                    "not enough balance" in error_msg.lower()
-                    and attempt < max_retries - 1
-                ):
-                    # Balance might still be settling, will retry
-                    continue
-                else:
-                    log(f"[{symbol}] ⚠️ Failed to place limit sell order: {error_msg}")
-                    break
-
     try:
         window_start, window_end = get_window_times(symbol)
         target_price = get_window_start_price(symbol)
@@ -373,7 +306,7 @@ def trade_symbol(symbol: str, balance: float):
             funding_bias=get_funding_bias(symbol),
             order_status=result["status"],
             order_id=result["order_id"],
-            limit_sell_order_id=limit_sell_order_id,  # Now set immediately after buy
+            limit_sell_order_id=None,  # Will be set by position manager at 1 minute left
             target_price=target_price if target_price > 0 else None,
         )
         log(

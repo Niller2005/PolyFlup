@@ -157,6 +157,10 @@ def place_market_order(
             # Sell at slightly below current bid to ensure fill
             market_price = max(0.01, reference_price - 0.02)
 
+        # FOK orders require specific precision: price (maker) max 2 decimals, size (taker) max 4 decimals
+        market_price = round(market_price, 2)
+        size = round(size, 4)
+
         order_args = OrderArgs(
             token_id=token_id,
             price=market_price,

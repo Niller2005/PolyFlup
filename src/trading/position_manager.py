@@ -164,27 +164,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     conn.commit()
                     continue
 
-            # 1. Place limit sell order if filled but missing sell order
-            if current_buy_status == "FILLED" and not limit_sell_order_id:
-                log(
-                    f"[{symbol}] 📉 Placing delayed limit sell order at 0.99 for {size} units"
-                )
-                sell_limit_result = place_limit_order(
-                    token_id, 0.99, size, SELL, silent_on_balance_error=True
-                )
-                if sell_limit_result["success"]:
-                    limit_sell_order_id = sell_limit_result["order_id"]
-                    log(
-                        f"[{symbol}] ✅ Delayed limit sell order placed: {limit_sell_order_id}"
-                    )
-                    c.execute(
-                        "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
-                        (limit_sell_order_id, trade_id),
-                    )
-                    conn.commit()
-                else:
-                    # Balance might still be settling, will try again next cycle
-                    pass
+            # Note: Limit sell order placement moved to 60-second mark (after price checks below)
 
             # 2. Check if limit sell order was filled
             if check_orders and limit_sell_order_id:
@@ -263,6 +243,34 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             window_end_dt = datetime.fromisoformat(window_end)
             time_left_seconds = (window_end_dt - now).total_seconds()
 
+            # Place 0.99 limit sell order when 1 minute left (after scale-in/reversals complete)
+            if (
+                current_buy_status == "FILLED"
+                and not limit_sell_order_id
+                and time_left_seconds <= 60
+                and time_left_seconds > 0
+            ):
+                log(
+                    f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units ({time_left_seconds:.0f}s left)"
+                )
+                sell_limit_result = place_limit_order(
+                    token_id, 0.99, size, SELL, silent_on_balance_error=True
+                )
+                if sell_limit_result["success"]:
+                    limit_sell_order_id = sell_limit_result["order_id"]
+                    log(
+                        f"[{symbol}] ✅ Limit sell order placed at 0.99: {limit_sell_order_id}"
+                    )
+                    c.execute(
+                        "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                        (limit_sell_order_id, trade_id),
+                    )
+                    conn.commit()
+                else:
+                    log(
+                        f"[{symbol}] ⚠️ Failed to place limit sell at 0.99 (will retry next cycle)"
+                    )
+
             # Check if we should scale into position
             if (
                 ENABLE_SCALE_IN
@@ -288,60 +296,15 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     new_total_bet = bet_usd + additional_bet
                     new_avg_price = new_total_bet / new_total_size
 
-                    # NEW: Update limit sell order at 0.99 to include new size (with retries)
-                    new_limit_sell_id = limit_sell_order_id
-                    if limit_sell_order_id:
-                        cancel_order(limit_sell_order_id)
-                        time.sleep(2)  # Wait for tokens to be freed
-
-                    log(
-                        f"[{symbol}] 📉 Updating limit sell order at 0.99 for {new_total_size} units"
-                    )
-
-                    # Retry updating the limit sell order
-                    max_retries = 3
-                    retry_delays = [2, 3, 5]
-                    for attempt in range(max_retries):
-                        if attempt > 0:
-                            time.sleep(retry_delays[attempt - 1])
-
-                        new_sell_limit_result = place_limit_order(
-                            token_id,
-                            0.99,
-                            new_total_size,
-                            SELL,
-                            silent_on_balance_error=(attempt < max_retries - 1),
-                        )
-                        if new_sell_limit_result["success"]:
-                            new_limit_sell_id = new_sell_limit_result["order_id"]
-                            log(f"✅ Limit sell order updated: {new_limit_sell_id}")
-                            break
-                        else:
-                            error_msg = str(new_sell_limit_result.get("error", ""))
-                            if (
-                                "not enough balance" in error_msg.lower()
-                                and attempt < max_retries - 1
-                            ):
-                                log(
-                                    f"⏳ Balance for limit sell update not yet available, will retry..."
-                                )
-                                continue
-                            else:
-                                new_limit_sell_id = None
-                                log(
-                                    f"❌ Failed to update limit sell order: {error_msg}"
-                                )
-                                break
-
+                    # Update database with scaled-in position (don't place limit sell yet - will happen at 60s)
                     c.execute(
                         """UPDATE trades 
-                           SET size=?, bet_usd=?, entry_price=?, scaled_in=1, limit_sell_order_id=? 
+                           SET size=?, bet_usd=?, entry_price=?, scaled_in=1 
                            WHERE id=?""",
                         (
                             new_total_size,
                             new_total_bet,
                             new_avg_price,
-                            new_limit_sell_id,
                             trade_id,
                         ),
                     )
