@@ -351,6 +351,7 @@ def _check_exit_plan(
     c: sqlite3.Cursor,
     conn: sqlite3.Connection,
     now: datetime,
+    verbose: bool = False,
 ) -> None:
     """Check and manage exit plan limit orders"""
     if not ENABLE_EXIT_PLAN or buy_order_status != "FILLED" or size == 0:
@@ -390,9 +391,11 @@ def _check_exit_plan(
                 f"[{symbol}] ⚠️ EXIT PLAN: Failed to place limit sell at {EXIT_PRICE_TARGET}: {error_msg} (will retry next cycle)"
             )
     elif limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60:
-        log(
-            f"[{symbol}] ⏰ EXIT PLAN: Position age {position_age_seconds:.0f}s - monitoring limit sell order {limit_sell_order_id}"
-        )
+        # Only log monitoring message on verbose cycles (every 60s)
+        if verbose:
+            log(
+                f"[{symbol}] ⏰ EXIT PLAN: Position age {position_age_seconds:.0f}s - monitoring limit sell order {limit_sell_order_id}"
+            )
 
 
 def _check_scale_in(
@@ -822,6 +825,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                 c=c,
                 conn=conn,
                 now=now,
+                verbose=verbose,
             )
             c.execute(
                 "SELECT limit_sell_order_id FROM trades WHERE id = ?", (trade_id,)
