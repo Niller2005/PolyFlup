@@ -331,13 +331,25 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     log(
                         f"🛑 Price moved away from unfilled bid for trade #{trade_id} ({price_change_pct:.1f}%). CANCELLING BUY ORDER."
                     )
-                    if cancel_order(buy_order_id):
-                        c.execute(
-                            "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_SL' WHERE id = ?",
-                            (trade_id,),
+                    cancel_result = cancel_order(buy_order_id)
+
+                    # Always settle the trade, regardless of cancellation success
+                    # The order may already be cancelled, expired, or not found
+                    c.execute(
+                        "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_SL' WHERE id = ?",
+                        (trade_id,),
+                    )
+                    conn.commit()
+
+                    if cancel_result:
+                        log(
+                            f"✅ Buy order for trade #{trade_id} cancelled successfully"
                         )
-                        conn.commit()
-                        continue
+                    else:
+                        log(
+                            f"⚠️ Buy order for trade #{trade_id} may already be cancelled or not found"
+                        )
+                    continue
                 else:
                     log(
                         f"🛑 {sl_label} trade #{trade_id}: {price_change_pct:.1f}% move (Threshold: {stop_threshold}%)"
