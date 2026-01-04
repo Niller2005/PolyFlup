@@ -75,9 +75,7 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
             if row:
                 trade_id, symbol, trade_side, size = row
-                log(
-                    f"🔔 Buy order filled: Trade #{trade_id} [{symbol}] {trade_side} ({size:.2f} shares)"
-                )
+                log(f"🔔 [{symbol}] Buy filled: #{trade_id} {trade_side} ({size:.2f})")
                 c.execute(
                     "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
                     (trade_id,),
@@ -94,24 +92,11 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
             if row:
                 trade_id, symbol, trade_side, size = row
-                log(
-                    f"🔔 Exit plan filled: Trade #{trade_id} [{symbol}] {trade_side} ({size:.2f} shares @ $0.99)"
-                )
+                log(f"🎯 [{symbol}] Exit filled: #{trade_id}")
                 # Position manager will handle settlement
                 return  # Found and logged, done
 
-            # Check if this is a scale-in order
-            c.execute(
-                "SELECT id, symbol, side FROM trades WHERE scale_in_order_id = ? AND settled = 0",
-                (order_id,),
-            )
-            row = c.fetchone()
-
-            if row:
-                trade_id, symbol, trade_side = row
-                log(f"🔔 Scale-in filled: Trade #{trade_id} [{symbol}] {trade_side}")
-                # Position manager will handle position update
-                return  # Found and logged, done
+            # Don't log scale-in fills - position manager already logs them
 
             # Order not tracked in our database - skip logging (likely old or other trader's order)
 
@@ -138,11 +123,7 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
             )
             row = c.fetchone()
 
-            if row:
-                trade_id, symbol, trade_side = row
-                log(f"🔔 Order cancelled: Trade #{trade_id} [{symbol}] {trade_side}")
-
-            # Only log if it's a tracked order, otherwise skip
+            # Don't log cancellations - position manager already logs them if needed
 
     except Exception as e:
         log(f"⚠️ Error handling order cancellation notification: {e}")
@@ -154,10 +135,8 @@ def _handle_market_resolved(payload: dict, timestamp: int) -> None:
         market_id = payload.get("market_id") or payload.get("condition_id")
         outcome = payload.get("outcome")
 
-        # Only log if we have useful information
-        if market_id and outcome:
-            log(f"🔔 Market resolved: {market_id[:10]}... → {outcome}")
-            # Settlement will handle this automatically
+        # Don't log - settlement will handle this automatically
+        pass
 
     except Exception as e:
         log(f"⚠️ Error handling market resolution notification: {e}")

@@ -716,7 +716,9 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         return
 
     if verbose:
-        log(f"🔍 Checking {len(open_positions)} open positions...")
+        log(
+            f"👀 Monitoring {len(open_positions)} position{'s' if len(open_positions) > 1 else ''}..."
+        )
 
     client = get_clob_client()
 
@@ -856,8 +858,10 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             price_change_pct = pnl_info["price_change_pct"]
 
             if verbose:
+                # Add emoji based on P&L direction
+                emoji = "📈" if pnl_pct > 0 else "📉"
                 log(
-                    f"  [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={price_change_pct:+.1f}%"
+                    f"  {emoji} [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={price_change_pct:+.1f}%"
                 )
 
             # ============================================================
