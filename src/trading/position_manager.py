@@ -1,12 +1,11 @@
 """Position monitoring and management"""
 
-import sqlite3
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Optional
+from typing import Optional, Any
+from src.data.db_connection import db_connection
 from src.config.settings import (
-    DB_FILE,
     ENABLE_STOP_LOSS,
     STOP_LOSS_PERCENT,
     ENABLE_TAKE_PROFIT,
@@ -55,58 +54,56 @@ from src.data.database import save_trade
 
 def get_exit_plan_stats():
     """Get statistics on exit plan performance"""
-    conn = sqlite3.connect(DB_FILE, timeout=30.0)
-    c = conn.cursor()
-
     try:
-        # Count exit plan successes vs natural settlements
-        c.execute("""
-            SELECT 
-                COUNT(CASE WHEN final_outcome = 'EXIT_PLAN_FILLED' THEN 1 END) as exit_plan_successes,
-                COUNT(CASE WHEN final_outcome = 'RESOLVED' AND exited_early = 0 THEN 1 END) as natural_settlements,
-                COUNT(CASE WHEN final_outcome = 'LIMIT_SELL_099' THEN 1 END) as legacy_limit_sells,
-                AVG(CASE WHEN final_outcome = 'EXIT_PLAN_FILLED' THEN roi_pct END) as avg_exit_plan_roi,
-                AVG(CASE WHEN final_outcome = 'RESOLVED' AND exited_early = 0 THEN roi_pct END) as avg_natural_roi
-            FROM trades 
-            WHERE settled = 1 
-            AND datetime(timestamp) >= datetime('now', '-7 days')
-        """)
+        with db_connection() as conn:
+            c = conn.cursor()
 
-        stats = c.fetchone()
-        conn.close()
+            # Count exit plan successes vs natural settlements
+            c.execute("""
+                SELECT 
+                    COUNT(CASE WHEN final_outcome = 'EXIT_PLAN_FILLED' THEN 1 END) as exit_plan_successes,
+                    COUNT(CASE WHEN final_outcome = 'RESOLVED' AND exited_early = 0 THEN 1 END) as natural_settlements,
+                    COUNT(CASE WHEN final_outcome = 'LIMIT_SELL_099' THEN 1 END) as legacy_limit_sells,
+                    AVG(CASE WHEN final_outcome = 'EXIT_PLAN_FILLED' THEN roi_pct END) as avg_exit_plan_roi,
+                    AVG(CASE WHEN final_outcome = 'RESOLVED' AND exited_early = 0 THEN roi_pct END) as avg_natural_roi
+                FROM trades 
+                WHERE settled = 1 
+                AND datetime(timestamp) >= datetime('now', '-7 days')
+            """)
 
-        if stats and any(stats):
-            (
-                exit_successes,
-                natural_settlements,
-                legacy_sells,
-                avg_exit_roi,
-                avg_natural_roi,
-            ) = stats
-            total_exits = exit_successes + natural_settlements + legacy_sells
+            stats = c.fetchone()
 
-            if total_exits > 0:
-                exit_rate = (exit_successes / total_exits) * 100
-                log(
-                    f"📊 EXIT PLAN STATS (7d): {exit_successes} successful exits ({exit_rate:.1f}%), "
-                    f"{natural_settlements} natural settlements, {legacy_sells} legacy | "
-                    f"Avg ROI: Exit {avg_exit_roi or 0:.1f}%, Natural {avg_natural_roi or 0:.1f}%"
-                )
+            if stats and any(stats):
+                (
+                    exit_successes,
+                    natural_settlements,
+                    legacy_sells,
+                    avg_exit_roi,
+                    avg_natural_roi,
+                ) = stats
+                total_exits = exit_successes + natural_settlements + legacy_sells
 
-                return {
-                    "exit_plan_successes": exit_successes,
-                    "natural_settlements": natural_settlements,
-                    "legacy_limit_sells": legacy_sells,
-                    "exit_success_rate": exit_rate,
-                    "avg_exit_plan_roi": avg_exit_roi or 0,
-                    "avg_natural_roi": avg_natural_roi or 0,
-                }
+                if total_exits > 0:
+                    exit_rate = (exit_successes / total_exits) * 100
+                    log(
+                        f"📊 EXIT PLAN STATS (7d): {exit_successes} successful exits ({exit_rate:.1f}%), "
+                        f"{natural_settlements} natural settlements, {legacy_sells} legacy | "
+                        f"Avg ROI: Exit {avg_exit_roi or 0:.1f}%, Natural {avg_natural_roi or 0:.1f}%"
+                    )
 
-        return None
+                    return {
+                        "exit_plan_successes": exit_successes,
+                        "natural_settlements": natural_settlements,
+                        "legacy_limit_sells": legacy_sells,
+                        "exit_success_rate": exit_rate,
+                        "avg_exit_plan_roi": avg_exit_roi or 0,
+                        "avg_natural_roi": avg_natural_roi or 0,
+                    }
+
+            return None
 
     except Exception as e:
         log(f"⚠️ Error getting exit plan stats: {e}")
-        conn.close()
         return None
 
 
@@ -115,21 +112,20 @@ def recover_open_positions():
     Recover and log open positions from database on bot startup
     This ensures positions are monitored after a restart
     """
-    conn = sqlite3.connect(DB_FILE, timeout=30.0)
-    c = conn.cursor()
-    now = datetime.now(tz=ZoneInfo("UTC"))
+    with db_connection() as conn:
+        c = conn.cursor()
+        now = datetime.now(tz=ZoneInfo("UTC"))
 
-    # Get all unsettled trades that are still in their window
-    c.execute(
-        """SELECT id, symbol, side, entry_price, size, bet_usd, window_end, order_status, timestamp
-           FROM trades 
-           WHERE settled = 0 
-           AND exited_early = 0
-           AND datetime(window_end) > datetime(?)""",
-        (now.isoformat(),),
-    )
-    open_positions = c.fetchall()
-    conn.close()
+        # Get all unsettled trades that are still in their window
+        c.execute(
+            """SELECT id, symbol, side, entry_price, size, bet_usd, window_end, order_status, timestamp
+               FROM trades 
+               WHERE settled = 0 
+               AND exited_early = 0
+               AND datetime(window_end) > datetime(?)""",
+            (now.isoformat(),),
+        )
+        open_positions = c.fetchall()
 
     if not open_positions:
         log("✓ No open positions to recover")
@@ -215,8 +211,8 @@ def _check_stop_loss(
     target_price: Optional[float],
     limit_sell_order_id: Optional[str],
     is_reversal: bool,
-    c: sqlite3.Cursor,
-    conn: sqlite3.Connection,
+    c: Any,
+    conn: Any,
     now: datetime,
 ) -> bool:
     """Check and execute stop loss if triggered, returns True if position closed"""
@@ -346,8 +342,8 @@ def _update_exit_plan_after_scale_in(
     token_id: str,
     new_total_size: float,
     limit_sell_order_id: Optional[str],
-    c: sqlite3.Cursor,
-    conn: sqlite3.Connection,
+    c: Any,
+    conn: Any,
 ) -> None:
     """Update exit plan limit order after position size changes from scale-in"""
     if not limit_sell_order_id or not ENABLE_EXIT_PLAN:
@@ -399,8 +395,8 @@ def _check_exit_plan(
     buy_order_status: str,
     limit_sell_order_id: Optional[str],
     timestamp: str,
-    c: sqlite3.Cursor,
-    conn: sqlite3.Connection,
+    c: Any,
+    conn: Any,
     now: datetime,
     verbose: bool = False,
 ) -> None:
@@ -461,8 +457,8 @@ def _check_scale_in(
     time_left_seconds: float,
     current_price: float,
     check_orders: bool,
-    c: sqlite3.Cursor,
-    conn: sqlite3.Connection,
+    c: Any,
+    conn: Any,
 ) -> None:
     """Check and execute scale in if conditions are met, or monitor pending scale-in orders"""
     if not ENABLE_SCALE_IN:
@@ -644,8 +640,8 @@ def _check_take_profit(
     pnl_usd: float,
     current_price: float,
     limit_sell_order_id: Optional[str],
-    c: sqlite3.Cursor,
-    conn: sqlite3.Connection,
+    c: Any,
+    conn: Any,
     now: datetime,
 ) -> bool:
     """Check and execute take profit if triggered, returns True if position closed"""
@@ -701,8 +697,8 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         if not check_orders:
             return
 
-    conn = sqlite3.connect(DB_FILE, timeout=30.0)
-    c = conn.cursor()
+    with db_connection() as conn:
+        c = conn.cursor()
     now = datetime.now(tz=ZoneInfo("UTC"))
 
     # Get unsettled trades that are still in their window
@@ -717,7 +713,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
     open_positions = c.fetchall()
 
     if not open_positions:
-        conn.close()
         return
 
     if verbose:
@@ -1141,5 +1136,4 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         except Exception as e:
             log(f"⚠️ Error checking position #{trade_id}: {e}")
 
-    conn.commit()
-    conn.close()
+        conn.commit()

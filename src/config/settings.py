@@ -115,6 +115,11 @@ DB_FILE = f"{BASE_DIR}/trades.db"
 REPORTS_DIR = f"{BASE_DIR}/logs/reports"
 os.makedirs(f"{BASE_DIR}/logs/reports", exist_ok=True)
 
+# Database Configuration (Turso or Local SQLite)
+USE_TURSO = os.getenv("USE_TURSO", "NO").upper() == "YES"
+TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "")
+TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
+
 # API Endpoints
 CLOB_HOST = "https://clob.polymarket.com"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"

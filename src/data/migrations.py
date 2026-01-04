@@ -1,12 +1,11 @@
 """Database migrations system"""
 
-import sqlite3
-from typing import List, Callable
-from src.config.settings import DB_FILE
+from typing import List, Callable, Any
 from src.utils.logger import log
+from src.data.db_connection import db_connection
 
 
-def get_schema_version(conn: sqlite3.Connection) -> int:
+def get_schema_version(conn: Any) -> int:
     """Get current schema version from database"""
     c = conn.cursor()
 
@@ -25,7 +24,7 @@ def get_schema_version(conn: sqlite3.Connection) -> int:
     return current_version
 
 
-def set_schema_version(conn: sqlite3.Connection, version: int) -> None:
+def set_schema_version(conn: Any, version: int) -> None:
     """Set schema version in database"""
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -38,7 +37,7 @@ def set_schema_version(conn: sqlite3.Connection, version: int) -> None:
     conn.commit()
 
 
-def migration_001_add_scale_in_order_id(conn: sqlite3.Connection) -> None:
+def migration_001_add_scale_in_order_id(conn: Any) -> None:
     """Add scale_in_order_id column to track pending scale-in orders"""
     c = conn.cursor()
 
@@ -55,7 +54,7 @@ def migration_001_add_scale_in_order_id(conn: sqlite3.Connection) -> None:
         log("    ✓ scale_in_order_id column already exists")
 
 
-def migration_002_add_created_at_column(conn: sqlite3.Connection) -> None:
+def migration_002_add_created_at_column(conn: Any) -> None:
     """Add created_at as alias for timestamp for better clarity"""
     c = conn.cursor()
 
@@ -79,46 +78,42 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
 
 def run_migrations() -> None:
     """Run all pending database migrations"""
-    conn = sqlite3.connect(DB_FILE, timeout=30.0)
+    with db_connection() as conn:
+        try:
+            current_version = get_schema_version(conn)
+            log(f"📊 Database schema version: {current_version}")
 
-    try:
-        current_version = get_schema_version(conn)
-        log(f"📊 Database schema version: {current_version}")
+            # Find pending migrations
+            pending = [m for m in MIGRATIONS if m[0] > current_version]
 
-        # Find pending migrations
-        pending = [m for m in MIGRATIONS if m[0] > current_version]
+            if not pending:
+                log("✓ Database schema is up to date")
+                return
 
-        if not pending:
-            log("✓ Database schema is up to date")
-            conn.close()
-            return
+            log(f"🔄 Running {len(pending)} pending migrations...")
 
-        log(f"🔄 Running {len(pending)} pending migrations...")
+            latest_version = current_version
+            for version, description, migration_func in pending:
+                log(f"  Migration {version}: {description}")
+                try:
+                    migration_func(conn)
+                    set_schema_version(conn, version)
+                    latest_version = version
+                    log(f"    ✓ Migration {version} completed")
+                except Exception as e:
+                    log(f"    ❌ Migration {version} failed: {e}")
+                    conn.rollback()
+                    raise
 
-        latest_version = current_version
-        for version, description, migration_func in pending:
-            log(f"  Migration {version}: {description}")
-            try:
-                migration_func(conn)
-                set_schema_version(conn, version)
-                latest_version = version
-                log(f"    ✓ Migration {version} completed")
-            except Exception as e:
-                log(f"    ❌ Migration {version} failed: {e}")
-                conn.rollback()
-                raise
+            conn.commit()
+            log(f"✓ All migrations completed. Schema version: {latest_version}")
 
-        conn.commit()
-        log(f"✓ All migrations completed. Schema version: {latest_version}")
+        except Exception as e:
+            log(f"❌ Migration error: {e}")
+            import traceback
 
-    except Exception as e:
-        log(f"❌ Migration error: {e}")
-        import traceback
-
-        log(traceback.format_exc())
-        raise
-    finally:
-        conn.close()
+            log(traceback.format_exc())
+            raise
 
 
 def add_migration(description: str, migration_func: Callable) -> None:

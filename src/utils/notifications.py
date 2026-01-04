@@ -1,10 +1,9 @@
 """Notification monitoring and processing"""
 
-import sqlite3
 from typing import List, Dict
-from src.config.settings import DB_FILE
 from src.utils.logger import log, send_discord
 from src.trading.orders import get_notifications, drop_notifications
+from src.data.db_connection import db_connection
 
 
 # Notification type constants
@@ -64,60 +63,57 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
             return  # Skip if no order ID
 
         # Update database if this is a tracked order
-        conn = sqlite3.connect(DB_FILE, timeout=30.0)
-        c = conn.cursor()
+        with db_connection() as conn:
+            c = conn.cursor()
 
-        # Check if this is a buy order
-        c.execute(
-            "SELECT id, symbol, side, size FROM trades WHERE order_id = ? AND settled = 0",
-            (order_id,),
-        )
-        row = c.fetchone()
-
-        if row:
-            trade_id, symbol, trade_side, size = row
-            log(
-                f"🔔 Buy order filled: Trade #{trade_id} [{symbol}] {trade_side} ({size:.2f} shares)"
-            )
+            # Check if this is a buy order
             c.execute(
-                "UPDATE trades SET order_status = 'FILLED' WHERE id = ?", (trade_id,)
+                "SELECT id, symbol, side, size FROM trades WHERE order_id = ? AND settled = 0",
+                (order_id,),
             )
-            conn.commit()
-            conn.close()
-            return  # Found and logged, done
+            row = c.fetchone()
 
-        # Check if this is a limit sell order (exit plan)
-        c.execute(
-            "SELECT id, symbol, side, size FROM trades WHERE limit_sell_order_id = ? AND settled = 0",
-            (order_id,),
-        )
-        row = c.fetchone()
+            if row:
+                trade_id, symbol, trade_side, size = row
+                log(
+                    f"🔔 Buy order filled: Trade #{trade_id} [{symbol}] {trade_side} ({size:.2f} shares)"
+                )
+                c.execute(
+                    "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
+                    (trade_id,),
+                )
+                conn.commit()
+                return  # Found and logged, done
 
-        if row:
-            trade_id, symbol, trade_side, size = row
-            log(
-                f"🔔 Exit plan filled: Trade #{trade_id} [{symbol}] {trade_side} ({size:.2f} shares @ $0.99)"
+            # Check if this is a limit sell order (exit plan)
+            c.execute(
+                "SELECT id, symbol, side, size FROM trades WHERE limit_sell_order_id = ? AND settled = 0",
+                (order_id,),
             )
-            # Position manager will handle settlement
-            conn.close()
-            return  # Found and logged, done
+            row = c.fetchone()
 
-        # Check if this is a scale-in order
-        c.execute(
-            "SELECT id, symbol, side FROM trades WHERE scale_in_order_id = ? AND settled = 0",
-            (order_id,),
-        )
-        row = c.fetchone()
+            if row:
+                trade_id, symbol, trade_side, size = row
+                log(
+                    f"🔔 Exit plan filled: Trade #{trade_id} [{symbol}] {trade_side} ({size:.2f} shares @ $0.99)"
+                )
+                # Position manager will handle settlement
+                return  # Found and logged, done
 
-        if row:
-            trade_id, symbol, trade_side = row
-            log(f"🔔 Scale-in filled: Trade #{trade_id} [{symbol}] {trade_side}")
-            # Position manager will handle position update
-            conn.close()
-            return  # Found and logged, done
+            # Check if this is a scale-in order
+            c.execute(
+                "SELECT id, symbol, side FROM trades WHERE scale_in_order_id = ? AND settled = 0",
+                (order_id,),
+            )
+            row = c.fetchone()
 
-        # Order not tracked in our database - skip logging (likely old or other trader's order)
-        conn.close()
+            if row:
+                trade_id, symbol, trade_side = row
+                log(f"🔔 Scale-in filled: Trade #{trade_id} [{symbol}] {trade_side}")
+                # Position manager will handle position update
+                return  # Found and logged, done
+
+            # Order not tracked in our database - skip logging (likely old or other trader's order)
 
     except Exception as e:
         log(f"⚠️ Error handling order fill notification: {e}")
@@ -132,22 +128,21 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
             return
 
         # Update database
-        conn = sqlite3.connect(DB_FILE, timeout=30.0)
-        c = conn.cursor()
+        with db_connection() as conn:
+            c = conn.cursor()
 
-        # Check if this is a tracked order
-        c.execute(
-            "SELECT id, symbol, side FROM trades WHERE order_id = ? AND settled = 0",
-            (order_id,),
-        )
-        row = c.fetchone()
+            # Check if this is a tracked order
+            c.execute(
+                "SELECT id, symbol, side FROM trades WHERE order_id = ? AND settled = 0",
+                (order_id,),
+            )
+            row = c.fetchone()
 
-        if row:
-            trade_id, symbol, trade_side = row
-            log(f"🔔 Order cancelled: Trade #{trade_id} [{symbol}] {trade_side}")
+            if row:
+                trade_id, symbol, trade_side = row
+                log(f"🔔 Order cancelled: Trade #{trade_id} [{symbol}] {trade_side}")
 
-        # Only log if it's a tracked order, otherwise skip
-        conn.close()
+            # Only log if it's a tracked order, otherwise skip
 
     except Exception as e:
         log(f"⚠️ Error handling order cancellation notification: {e}")

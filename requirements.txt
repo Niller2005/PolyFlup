@@ -21,5 +21,7 @@ pandas>=2.0.0
 # Timezone Support (built-in from Python 3.9+, but listed for clarity)
 # zoneinfo is part of standard library
 
-# Database (sqlite3 is built-in)
-# No external package needed
+# Database
+# sqlite3 is built-in for local dev
+# Turso (libSQL) for production
+libsql-client>=0.3.0
