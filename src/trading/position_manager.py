@@ -225,6 +225,20 @@ def _check_stop_loss(
     if buy_order_status not in ["FILLED", "MATCHED", "matched"]:
         return False
 
+    # CRITICAL FIX: Wait at least 30 seconds after order is placed before attempting stop loss
+    # This prevents trying to sell tokens that aren't yet available in wallet (Polymarket API delay)
+    # This is especially important for reversal orders
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+    row = c.fetchone()
+    if row:
+        trade_timestamp = datetime.fromisoformat(row[0])
+        position_age = (now - trade_timestamp).total_seconds()
+        if position_age < 30:
+            return False  # Too young to sell
+
     stop_threshold = -STOP_LOSS_PERCENT
     sl_label = "STOP LOSS"
 
@@ -655,6 +669,19 @@ def _check_take_profit(
     # CRITICAL FIX: Only sell if we actually own the tokens (buy order filled)
     if buy_order_status not in ["FILLED", "MATCHED", "matched"]:
         return False
+
+    # CRITICAL FIX: Wait at least 30 seconds after order is placed before attempting take profit
+    # This prevents trying to sell tokens that aren't yet available in wallet (Polymarket API delay)
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+    row = c.fetchone()
+    if row:
+        trade_timestamp = datetime.fromisoformat(row[0])
+        position_age = (now - trade_timestamp).total_seconds()
+        if position_age < 30:
+            return False  # Too young to sell
 
     log(f"🎯 TAKE PROFIT triggered for trade #{trade_id}: {pnl_pct:.1f}% gain")
 
