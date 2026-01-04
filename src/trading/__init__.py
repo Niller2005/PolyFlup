@@ -3,6 +3,7 @@ from .orders import (
     setup_api_creds,
     place_order,
     place_limit_order,
+    place_market_order,
     place_batch_orders,
     get_orders,
     get_order,

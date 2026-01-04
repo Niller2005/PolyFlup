@@ -419,6 +419,81 @@ def place_order(token_id: str, price: float, size: float) -> dict:
     return place_limit_order(token_id, price, size, BUY)
 
 
+def place_market_order(
+    token_id: str,
+    amount: float,
+    side: str,
+    order_type: str = "FOK",
+) -> dict:
+    """
+    Place a market order for immediate execution
+
+    Args:
+        token_id: Token ID to trade
+        amount: Dollar amount for BUY, number of shares for SELL
+        side: BUY or SELL
+        order_type: FOK (fill all or kill) or FAK (fill partial and kill rest)
+
+    Returns:
+        Dict with success, status, order_id, error, errorMsg, orderHashes
+    """
+    try:
+        order_client = client
+        _ensure_api_creds(order_client)
+
+        # Map order type
+        order_type_map = {
+            "FOK": OrderType.FOK,
+            "FAK": OrderType.FAK,
+        }
+        order_type_enum = order_type_map.get(order_type.upper(), OrderType.FOK)
+
+        # Create market order (simplified - no price needed)
+        from py_clob_client.clob_types import MarketOrderArgs
+
+        market_order_args = MarketOrderArgs(
+            token_id=token_id,
+            amount=amount,
+            side=side,
+        )
+
+        signed_order = order_client.create_market_order(market_order_args)
+        resp = order_client.post_order(signed_order, order_type_enum)
+
+        # Enhanced response parsing
+        status = resp.get("status", "UNKNOWN") if isinstance(resp, dict) else "UNKNOWN"
+        order_id = resp.get("orderID") if isinstance(resp, dict) else None
+        error_msg = resp.get("errorMsg", "") if isinstance(resp, dict) else ""
+        order_hashes = resp.get("orderHashes", []) if isinstance(resp, dict) else []
+        success = resp.get("success", True) if isinstance(resp, dict) else True
+
+        has_error = bool(error_msg)
+
+        return {
+            "success": success and not has_error,
+            "status": status,
+            "order_id": order_id,
+            "error": error_msg if has_error else None,
+            "errorMsg": error_msg,
+            "orderHashes": order_hashes,
+        }
+
+    except Exception as e:
+        error_str = str(e)
+        parsed_error = _parse_api_error(error_str)
+
+        log(f"❌ {side} Market Order error: {parsed_error}")
+
+        return {
+            "success": False,
+            "status": "ERROR",
+            "order_id": None,
+            "error": parsed_error,
+            "errorMsg": parsed_error,
+            "orderHashes": [],
+        }
+
+
 def place_batch_orders(orders: List[Dict[str, any]]) -> List[dict]:
     """
     Place multiple orders in a single batch (up to 15 orders)
@@ -825,7 +900,11 @@ def cancel_all() -> dict:
 
 
 def sell_position(
-    token_id: str, size: float, current_price: float, max_retries: int = 3
+    token_id: str,
+    size: float,
+    current_price: float,
+    max_retries: int = 3,
+    use_market_order: bool = True,
 ) -> dict:
     """
     Sell existing position (market sell to CLOB) with retry logic
@@ -833,8 +912,9 @@ def sell_position(
     Args:
         token_id: Token ID to sell
         size: Number of shares to sell
-        current_price: Current market price
+        current_price: Current market price (used for fallback limit orders)
         max_retries: Maximum retry attempts
+        use_market_order: If True, use market order (recommended). If False, use limit order
 
     Returns:
         Dict with success, sold, price, status, order_id, error
@@ -851,29 +931,38 @@ def sell_position(
 
                 time.sleep(retry_delays[attempt - 1])
 
-            # Sell at slightly below current market price for quick fill
-            # Round to minimum tick size (0.01) to pass validation
-            sell_price = max(0.01, current_price - 0.01)
-            sell_price = round(sell_price, 2)
+            # Use market order for faster, more reliable fills
+            if use_market_order:
+                # Market order: specify dollar amount (shares to sell)
+                result = place_market_order(
+                    token_id=token_id,
+                    amount=size,  # Shares to sell
+                    side=SELL,
+                    order_type="FAK",  # Fill-And-Kill: fills partial, cancels rest
+                )
+            else:
+                # Fallback to limit order
+                sell_price = max(0.01, current_price - 0.01)
+                sell_price = round(sell_price, 2)
 
-            # Try FAK first (Fill-And-Kill) - fills partial and cancels rest
-            # If that fails, fallback to GTC
-            order_type_to_use = "FAK" if attempt == 0 else "GTC"
+                order_type_to_use = "FAK" if attempt == 0 else "GTC"
 
-            result = place_limit_order(
-                token_id=token_id,
-                price=sell_price,
-                size=size,
-                side=SELL,
-                silent_on_balance_error=(attempt < max_retries - 1),
-                order_type=order_type_to_use,
-            )
+                result = place_limit_order(
+                    token_id=token_id,
+                    price=sell_price,
+                    size=size,
+                    side=SELL,
+                    silent_on_balance_error=(attempt < max_retries - 1),
+                    order_type=order_type_to_use,
+                )
 
             if result["success"]:
+                # Get actual sell price from response if available
+                actual_price = result.get("price", current_price)
                 return {
                     "success": True,
                     "sold": size,
-                    "price": sell_price,
+                    "price": actual_price,
                     "status": result["status"],
                     "order_id": result["order_id"],
                 }
@@ -885,13 +974,10 @@ def sell_position(
                 log(f"⏳ Balance for sell not yet available, will retry...")
                 continue
 
-            # FOK failed - will retry with GTC on next attempt
-            if (
-                "FOK" in error_str
-                and "fully filled" in error_str.lower()
-                and attempt < max_retries - 1
-            ):
-                log(f"⏳ FOK order couldn't fill completely, will retry with GTC...")
+            # Market order failed - try limit order on next attempt
+            if use_market_order and "FOK" in error_str and attempt < max_retries - 1:
+                log(f"⏳ Market order failed, will retry with limit order...")
+                use_market_order = False  # Switch to limit order
                 continue
 
             # Non-retryable error
