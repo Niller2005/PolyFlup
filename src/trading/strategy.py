@@ -4,7 +4,6 @@ from py_clob_client.client import ClobClient
 from src.config.settings import (
     MAX_SPREAD,
     ADX_ENABLED,
-    ADX_THRESHOLD,
     BFXD_URL,
     MIN_EDGE,
     MOMENTUM_LOOKBACK_MINUTES,
@@ -104,23 +103,43 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         else "NEUTRAL"
     )
 
-    # 4. VWAP / VWM - Weight: 0.15
+    # 4. VWAP / VWM - Weight: 0.10
     vwm_score = 0.0
     vwm_dir = "NEUTRAL"
     vwm = get_volume_weighted_momentum(symbol)
     vwm_score = vwm["momentum_quality"]
     vwm_dir = "UP" if vwm["vwap_distance"] > 0 else "DOWN"
 
+    # 5. ADX (Trend Strength) - Weight: 0.15
+    adx_score = 0.0
+    adx_dir = "NEUTRAL"
+    adx_val = 0.0
+    if ADX_ENABLED:
+        adx_val = get_adx_from_binance(symbol)
+        if adx_val > 0:
+            # Normalize ADX (25-50 range maps to 0.5-1.0 score)
+            adx_score = min(adx_val / 50.0, 1.0)
+            # ADX follows the strongest current directional signal
+            adx_dir = momentum_dir if momentum_dir != "NEUTRAL" else divergence_dir
+
     # Aggregate Scores for each direction
     up_total = 0.0
     down_total = 0.0
 
+    # Adjust weights if ADX is disabled
+    adx_weight = 0.15 if ADX_ENABLED else 0.0
+    mom_weight = 0.30 if ADX_ENABLED else 0.35
+    flow_weight = 0.20 if ADX_ENABLED else 0.25
+    div_weight = 0.25 if ADX_ENABLED else 0.25
+    vwm_weight = 0.10 if ADX_ENABLED else 0.15
+
     # Apply weights and directions
     for score, direction, weight in [
-        (momentum_score, momentum_dir, 0.35),
-        (flow_score, flow_dir, 0.25),
-        (divergence_score, divergence_dir, 0.25),
-        (vwm_score, vwm_dir, 0.15),
+        (momentum_score, momentum_dir, mom_weight),
+        (flow_score, flow_dir, flow_weight),
+        (divergence_score, divergence_dir, div_weight),
+        (vwm_score, vwm_dir, vwm_weight),
+        (adx_score, adx_dir, adx_weight),
     ]:
         if direction == "UP":
             up_total += score * weight
@@ -151,27 +170,12 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         "order_flow": order_flow,
         "divergence": divergence,
         "vwm": vwm,
+        "adx": {"value": adx_val, "score": adx_score},
         "scores": {"up": up_total, "down": down_total},
         "current_spot": current_spot,
     }
 
     return confidence, bias, p_up, best_bid, best_ask, signals
-
-
-def adx_allows_trade(symbol: str) -> tuple[bool, float]:
-    """Check if ADX filter allows trade"""
-    if not ADX_ENABLED:
-        return True, -1.0
-
-    adx_value = get_adx_from_binance(symbol)
-
-    if adx_value < 0:
-        return True, -1.0
-
-    if adx_value >= ADX_THRESHOLD:
-        return True, adx_value
-    else:
-        return False, adx_value
 
 
 def bfxd_allows_trade(symbol: str, direction: str) -> tuple[bool, str]:

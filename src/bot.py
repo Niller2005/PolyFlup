@@ -11,7 +11,6 @@ from src.config.settings import (
     MAX_SPREAD,
     WINDOW_DELAY_SEC,
     ADX_ENABLED,
-    ADX_THRESHOLD,
     ADX_PERIOD,
     ADX_INTERVAL,
     BET_PERCENT,
@@ -51,7 +50,6 @@ from src.data.market_data import (
 )
 from src.trading.strategy import (
     calculate_confidence,
-    adx_allows_trade,
     bfxd_allows_trade,
 )
 
@@ -67,6 +65,72 @@ from src.trading.position_manager import (
     get_exit_plan_stats,
 )
 from src.trading.settlement import check_and_settle_trades
+
+
+def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
+    """Determine actual trading side and confidence for sizing"""
+    if confidence >= 0.2:
+        actual_side = bias
+        sizing_confidence = confidence
+    else:
+        actual_side = "DOWN" if bias == "UP" else "UP"
+        sizing_confidence = 0.2
+
+    return actual_side, sizing_confidence
+
+
+def _check_target_price_alignment(
+    symbol: str,
+    side: str,
+    confidence: float,
+    current_spot: float,
+    target_price: float,
+) -> bool:
+    """Check if target price alignment allows trading"""
+    if target_price > 0 and current_spot > 0:
+        from src.config.settings import WINDOW_START_PRICE_BUFFER_PCT
+
+        buffer = target_price * (WINDOW_START_PRICE_BUFFER_PCT / 100.0)
+
+        is_winning_side = False
+        if side == "UP":
+            is_winning_side = current_spot >= (target_price - buffer)
+        elif side == "DOWN":
+            is_winning_side = current_spot <= (target_price + buffer)
+
+        if not is_winning_side:
+            LOSING_SIDE_BYPASS_CONFIDENCE = 0.45
+            if confidence < LOSING_SIDE_BYPASS_CONFIDENCE:
+                log(
+                    f"[{symbol}] ⚠️ {side} is on LOSING side (Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_BYPASS_CONFIDENCE:.0%}. SKIPPING."
+                )
+                return False
+            else:
+                log(
+                    f"[{symbol}] 🔥 HIGH CONFIDENCE BYPASS: Entering {side} on losing side (Confidence: {confidence:.1%})"
+                )
+
+    return True
+
+
+def _calculate_bet_size(
+    balance: float, price: float, sizing_confidence: float
+) -> tuple[float, float]:
+    """Calculate position size and effective bet amount"""
+    base_bet = balance * (BET_PERCENT / 100.0)
+    confidence_multiplier = 0.5 + (sizing_confidence * 3.5)
+    target_bet = base_bet * confidence_multiplier
+
+    size = round(target_bet / price, 6)
+
+    MIN_SIZE = 5.0
+    bet_usd_effective = target_bet
+
+    if size < MIN_SIZE:
+        size = MIN_SIZE
+        bet_usd_effective = round(size * price, 4)
+
+    return size, bet_usd_effective
 
 
 def trade_symbol(symbol: str, balance: float):
@@ -85,16 +149,11 @@ def trade_symbol(symbol: str, balance: float):
         log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
         return
 
-    # Direction Logic:
-    # - If confidence > 20%: Follow the bias
-    # - If confidence < 20%: Enter OPPOSITE (contrarian play)
+    actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
+
     if confidence >= 0.2:
-        actual_side = bias
-        sizing_confidence = confidence
         log(f"[{symbol}] ✅ Trend Following: {bias} (Confidence: {confidence:.1%})")
     else:
-        actual_side = "DOWN" if bias == "UP" else "UP"
-        sizing_confidence = 0.2  # Small fixed size for contrarian bets
         log(
             f"[{symbol}] 🔄 Contrarian Entry: {actual_side} (Original Bias: {bias} @ {confidence:.1%})"
         )
@@ -104,61 +163,35 @@ def trade_symbol(symbol: str, balance: float):
     else:
         token_id, side, price = down_id, "DOWN", 1.0 - p_up
 
-    # Check target price alignment (using actual_side)
     target_price = float(get_window_start_price(symbol))
 
     current_spot = 0.0
     if isinstance(signals, dict):
         current_spot = float(signals.get("current_spot", 0))
 
-    if target_price > 0 and current_spot > 0:
-        # Determine if we are on the 'winning' or 'losing' side
-        # Use buffer to handle 'exactly at target' or 'near target' cases
-        from src.config.settings import WINDOW_START_PRICE_BUFFER_PCT
-
-        buffer = target_price * (WINDOW_START_PRICE_BUFFER_PCT / 100.0)
-
-        is_winning_side = False
-        if side == "UP":
-            # Winning if spot >= (target - buffer)
-            if current_spot >= (target_price - buffer):
-                is_winning_side = True
-        elif side == "DOWN":
-            # Winning if spot <= (target + buffer)
-            if current_spot <= (target_price + buffer):
-                is_winning_side = True
-
-        if not is_winning_side:
-            # We are on the 'losing' side - check if confidence is high enough to bypass
-            # Threshold for entering 'losing' side (lowered to 45% for new system)
-            LOSING_SIDE_BYPASS_CONFIDENCE = 0.45
-            if confidence < LOSING_SIDE_BYPASS_CONFIDENCE:
-                log(
-                    f"[{symbol}] ⚠️ {side} is on LOSING side (Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_BYPASS_CONFIDENCE:.0%}. SKIPPING."
-                )
-                return
-            else:
-                log(
-                    f"[{symbol}] 🔥 HIGH CONFIDENCE BYPASS: Entering {side} on losing side (Confidence: {confidence:.1%})"
-                )
+    if not _check_target_price_alignment(
+        symbol, side, confidence, current_spot, target_price
+    ):
+        return
 
     # Check filters
-    adx_ok, adx_val = adx_allows_trade(symbol)
     bfxd_ok, bfxd_trend = bfxd_allows_trade(symbol, side)
 
-    # RSI from signals
+    # Signal details
     rsi = 50.0
     imbalance_val = 0.5
+    adx_val = 0.0
     if isinstance(signals, dict):
-        mom = signals.get("momentum", {})
-        if isinstance(mom, dict):
-            rsi = mom.get("rsi", 50.0)
+        if "momentum" in signals and isinstance(signals["momentum"], dict):
+            rsi = signals["momentum"].get("rsi", 50.0)
 
-        of = signals.get("order_flow", {})
-        if isinstance(of, dict):
-            imbalance_val = of.get("buy_pressure", 0.5)
+        if "order_flow" in signals and isinstance(signals["order_flow"], dict):
+            imbalance_val = signals["order_flow"].get("buy_pressure", 0.5)
 
-    filter_text = f"ADX: {adx_val:.1f} {'✅' if adx_ok else '❌'}"
+        if "adx" in signals and isinstance(signals["adx"], dict):
+            adx_val = signals["adx"].get("value", 0.0)
+
+    filter_text = f"ADX: {adx_val:.1f}"
 
     if ENABLE_BFXD and symbol == "BTC":
         filter_text += f" | BFXD: {bfxd_trend} {'✅' if bfxd_ok else '❌'}"
@@ -167,7 +200,7 @@ def trade_symbol(symbol: str, balance: float):
         f"Confidence: {confidence:.1%} ({bias}) | {filter_text} | RSI: {rsi:.1f}"
     )
 
-    if not adx_ok or not bfxd_ok:
+    if not bfxd_ok:
         log(f"[{symbol}] ⛔ {core_summary} | status: BLOCKED")
         return
 
@@ -179,20 +212,7 @@ def trade_symbol(symbol: str, balance: float):
 
     price = max(0.01, min(0.99, price))
 
-    # SIZING: base_bet scaled by confidence (0.2 to 1.0)
-    # Higher confidence = larger position, up to 4x base_bet
-    base_bet = balance * (BET_PERCENT / 100.0)
-    confidence_multiplier = 0.5 + (sizing_confidence * 3.5)  # Scale to 0.5x - 4.0x
-    target_bet = base_bet * confidence_multiplier
-
-    size = round(target_bet / price, 6)
-
-    MIN_SIZE = 5.0
-    bet_usd_effective = target_bet
-
-    if size < MIN_SIZE:
-        size = MIN_SIZE
-        bet_usd_effective = round(size * price, 4)
+    size, bet_usd_effective = _calculate_bet_size(balance, price, sizing_confidence)
 
     result = place_order(token_id, price, size)
 
@@ -240,9 +260,8 @@ def trade_symbol(symbol: str, balance: float):
 def main():
     """Main bot loop"""
     log("🚀 Starting PolyAstra Trading Bot (Modular Version)...")
-    log("📝 FIX: Reversed UP/DOWN logic - now buying undervalued side")
     log(
-        f"📊 ADX Filter: {'ENABLED' if ADX_ENABLED else 'DISABLED'} (threshold={ADX_THRESHOLD}, period={ADX_PERIOD}, interval={ADX_INTERVAL})"
+        f"📊 ADX System: {'INTEGRATED' if ADX_ENABLED else 'DISABLED'} (period={ADX_PERIOD}, interval={ADX_INTERVAL})"
     )
     setup_api_creds()
     init_database()
@@ -258,7 +277,7 @@ def main():
     log(
         f"🤖 POLYASTRA | Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC"
     )
-    log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: {BET_PERCENT}% | ADX: {ADX_THRESHOLD}")
+    log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: {BET_PERCENT}%")
     log("=" * 90)
 
     # Recover and start monitoring any existing open positions

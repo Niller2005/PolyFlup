@@ -4,6 +4,7 @@ import sqlite3
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from typing import Optional
 from src.config.settings import (
     DB_FILE,
     ENABLE_STOP_LOSS,
@@ -153,6 +154,324 @@ def recover_open_positions():
     log("=" * 90)
 
 
+def _get_position_pnl(token_id: str, entry_price: float, size: float) -> Optional[dict]:
+    """Get current market price and calculate P&L"""
+    client = get_clob_client()
+    book = client.get_order_book(token_id)
+    if isinstance(book, dict):
+        bids = book.get("bids", []) or []
+        asks = book.get("asks", []) or []
+    else:
+        bids = getattr(book, "bids", []) or []
+        asks = getattr(book, "asks", []) or []
+
+    if not bids or not asks:
+        return None
+
+    best_bid = float(
+        bids[-1].price if hasattr(bids[-1], "price") else bids[-1].get("price", 0)
+    )
+    best_ask = float(
+        asks[-1].price if hasattr(asks[-1], "price") else asks[-1].get("price", 0)
+    )
+    current_price = (best_bid + best_ask) / 2.0
+    price_change_pct = ((current_price - entry_price) / entry_price) * 100
+    current_value = current_price * size
+    pnl_usd = current_value - (entry_price * size)
+    pnl_pct = (pnl_usd / (entry_price * size)) * 100 if size > 0 else 0
+
+    return {
+        "current_price": current_price,
+        "pnl_pct": pnl_pct,
+        "pnl_usd": pnl_usd,
+        "price_change_pct": price_change_pct,
+    }
+
+
+def _check_stop_loss(
+    symbol: str,
+    trade_id: int,
+    side: str,
+    entry_price: float,
+    size: float,
+    pnl_pct: float,
+    pnl_usd: float,
+    current_price: float,
+    target_price: Optional[float],
+    limit_sell_order_id: Optional[str],
+    is_reversal: bool,
+    c: sqlite3.Cursor,
+    conn: sqlite3.Connection,
+    now: datetime,
+) -> bool:
+    """Check and execute stop loss if triggered, returns True if position closed"""
+    if not ENABLE_STOP_LOSS or pnl_pct > -STOP_LOSS_PERCENT or size == 0:
+        return False
+
+    stop_threshold = -STOP_LOSS_PERCENT
+    sl_label = "STOP LOSS"
+
+    if pnl_pct >= 20.0:
+        is_moving_against = (side == "UP" and current_price < entry_price) or (
+            side == "DOWN" and current_price > entry_price
+        )
+
+        if is_moving_against:
+            stop_threshold = -5.0
+            sl_label = "BREAKEVEN PROTECTION"
+
+    current_spot = get_current_spot_price(symbol)
+    is_on_losing_side = False
+
+    if current_spot > 0 and target_price is not None:
+        if side == "UP" and current_spot < target_price:
+            is_on_losing_side = True
+        elif side == "DOWN" and current_spot > target_price:
+            is_on_losing_side = True
+    else:
+        is_on_losing_side = True
+
+    if not is_on_losing_side:
+        log(
+            f"ℹ️ [{symbol}] PnL is bad ({pnl_pct:.1f}%) but price is on WINNING side of target - HOLDING (Spot ${current_spot:,.2f} vs Target ${target_price:,.2f})"
+        )
+        return False
+
+    log(
+        f"🛑 {sl_label} trade #{trade_id}: {pnl_pct:.1f}% PnL (Threshold: {stop_threshold}%) | Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}"
+    )
+
+    if limit_sell_order_id:
+        if cancel_order(limit_sell_order_id):
+            log(
+                f"[{symbol}] ⏳ Limit sell order cancelled, waiting for tokens to be freed..."
+            )
+            time.sleep(2)
+
+    sell_result = sell_position(symbol.split("-")[0], size, current_price)
+
+    if not sell_result["success"]:
+        return False
+
+    c.execute(
+        """UPDATE trades
+           SET exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?,
+               final_outcome=?, settled=1, settled_at=?
+           WHERE id=?""",
+        (
+            current_price,
+            pnl_usd,
+            pnl_pct,
+            sl_label,
+            now.isoformat(),
+            trade_id,
+        ),
+    )
+    conn.commit()
+
+    send_discord(f"🛑 **STOP LOSS** [{symbol}] {side} closed at {pnl_pct:+.1f}%")
+
+    if not is_reversal:
+        opposite_side = "DOWN" if side == "UP" else "UP"
+        log(f"🔄 Reversing [{symbol}] {side} → {opposite_side} to get on winning side")
+
+        up_id, down_id = get_token_ids(symbol.split("-")[0])
+        if up_id and down_id:
+            opposite_token = down_id if side == "UP" else up_id
+            opposite_price = 1.0 - current_price
+
+            reverse_result = place_order(opposite_token, opposite_price, size)
+            if reverse_result["success"]:
+                send_discord(
+                    f"🔄 **REVERSED** [{symbol}] {side} → {opposite_side} (Target: ${target_price:,.2f}, Spot: ${current_spot:,.2f})"
+                )
+
+                try:
+                    window_start, window_end = get_window_times(symbol.split("-")[0])
+                    bet_usd_effective = size * opposite_price
+                    save_trade(
+                        symbol=symbol,
+                        window_start=window_start.isoformat(),
+                        window_end=window_end.isoformat(),
+                        slug=get_current_slug(symbol.split("-")[0]),
+                        token_id=opposite_token,
+                        side=opposite_side,
+                        edge=0.0,
+                        price=opposite_price,
+                        size=size,
+                        bet_usd=bet_usd_effective,
+                        p_yes=opposite_price
+                        if opposite_side == "UP"
+                        else 1.0 - opposite_price,
+                        order_status=reverse_result["status"],
+                        order_id=reverse_result["order_id"],
+                        is_reversal=True,
+                        target_price=target_price,
+                    )
+                except Exception as e:
+                    log(f"⚠️ DB Error (reversal): {e}")
+
+    return True
+
+
+def _check_exit_plan(
+    symbol: str,
+    trade_id: int,
+    token_id: str,
+    size: float,
+    buy_order_status: str,
+    limit_sell_order_id: Optional[str],
+    timestamp: str,
+    c: sqlite3.Cursor,
+    conn: sqlite3.Connection,
+    now: datetime,
+) -> None:
+    """Check and manage exit plan limit orders"""
+    if not ENABLE_EXIT_PLAN or buy_order_status != "FILLED" or size == 0:
+        return
+
+    position_age_seconds = (now - datetime.fromisoformat(timestamp)).total_seconds()
+
+    if (
+        not limit_sell_order_id
+        and position_age_seconds >= EXIT_MIN_POSITION_AGE
+        and position_age_seconds > 60
+    ):
+        log(
+            f"[{symbol}] 📉 EXIT PLAN: Placing limit sell order at {EXIT_PRICE_TARGET} for {size} units (position age: {position_age_seconds:.0f}s, min age: {EXIT_MIN_POSITION_AGE}s)"
+        )
+        sell_limit_result = place_limit_order(
+            token_id,
+            EXIT_PRICE_TARGET,
+            size,
+            SELL,
+            silent_on_balance_error=True,
+        )
+        if sell_limit_result["success"]:
+            limit_sell_order_id = sell_limit_result["order_id"]
+            log(
+                f"[{symbol}] ✅ EXIT PLAN: Limit sell order placed at {EXIT_PRICE_TARGET}: {limit_sell_order_id}"
+            )
+            c.execute(
+                "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                (limit_sell_order_id, trade_id),
+            )
+            conn.commit()
+        else:
+            log(
+                f"[{symbol}] ⚠️ EXIT PLAN: Failed to place limit sell at {EXIT_PRICE_TARGET} (will retry next cycle)"
+            )
+    elif limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60:
+        log(
+            f"[{symbol}] ⏰ EXIT PLAN: Position age {position_age_seconds:.0f}s - monitoring limit sell order {limit_sell_order_id}"
+        )
+
+
+def _check_scale_in(
+    symbol: str,
+    trade_id: int,
+    token_id: str,
+    entry_price: float,
+    size: float,
+    bet_usd: float,
+    scaled_in: bool,
+    time_left_seconds: float,
+    current_price: float,
+    c: sqlite3.Cursor,
+    conn: sqlite3.Connection,
+) -> None:
+    """Check and execute scale in if conditions are met"""
+    if (
+        not ENABLE_SCALE_IN
+        or scaled_in
+        or time_left_seconds > SCALE_IN_TIME_LEFT
+        or time_left_seconds <= 0
+        or not (SCALE_IN_MIN_PRICE <= current_price <= SCALE_IN_MAX_PRICE)
+    ):
+        return
+
+    log(
+        f"📈 SCALE IN triggered for trade #{trade_id}: price=${current_price:.2f}, {time_left_seconds:.0f}s left"
+    )
+
+    additional_size = size * SCALE_IN_MULTIPLIER
+    additional_bet = additional_size * current_price
+
+    scale_result = place_order(token_id, current_price, additional_size)
+
+    if scale_result["success"]:
+        new_total_size = size + additional_size
+        new_total_bet = bet_usd + additional_bet
+        new_avg_price = new_total_bet / new_total_size
+
+        c.execute(
+            """UPDATE trades
+               SET size=?, bet_usd=?, entry_price=?, scaled_in=1
+               WHERE id=?""",
+            (
+                new_total_size,
+                new_total_bet,
+                new_avg_price,
+                trade_id,
+            ),
+        )
+        conn.commit()
+
+        log(
+            f"✅ Scaled in! Size: {size:.2f} → {new_total_size:.2f} (+{additional_size:.2f})"
+        )
+        log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
+        send_discord(
+            f"📈 **SCALED IN** [{symbol}] +${additional_bet:.2f} @ ${current_price:.2f} ({time_left_seconds:.0f}s left)"
+        )
+
+
+def _check_take_profit(
+    symbol: str,
+    trade_id: int,
+    token_id: str,
+    side: str,
+    size: float,
+    pnl_pct: float,
+    pnl_usd: float,
+    current_price: float,
+    limit_sell_order_id: Optional[str],
+    c: sqlite3.Cursor,
+    conn: sqlite3.Connection,
+    now: datetime,
+) -> bool:
+    """Check and execute take profit if triggered, returns True if position closed"""
+    if not ENABLE_TAKE_PROFIT or pnl_pct < TAKE_PROFIT_PERCENT:
+        return False
+
+    log(f"🎯 TAKE PROFIT triggered for trade #{trade_id}: {pnl_pct:.1f}% gain")
+
+    if limit_sell_order_id:
+        if cancel_order(limit_sell_order_id):
+            log(
+                f"[{symbol}] ⏳ Limit sell order cancelled, waiting for tokens to be freed..."
+            )
+            time.sleep(2)
+
+    sell_result = sell_position(token_id.split("-")[0], size, current_price)
+
+    if not sell_result["success"]:
+        return False
+
+    c.execute(
+        """UPDATE trades
+           SET exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?,
+               final_outcome='TAKE_PROFIT', settled=1, settled_at=?
+           WHERE id=?""",
+        (current_price, pnl_usd, pnl_pct, now.isoformat(), trade_id),
+    )
+    conn.commit()
+
+    send_discord(f"🎯 **TAKE PROFIT** [{symbol}] {side} closed at {pnl_pct:+.1f}%")
+
+    return True
+
+
 def check_open_positions(verbose: bool = True, check_orders: bool = False):
     """
     Check open positions and manage them
@@ -272,37 +591,15 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                             f"⚠️ Error checking exit plan order {limit_sell_order_id}: {e}"
                         )
 
-            # Get current market price
-            book = client.get_order_book(token_id)
-            if isinstance(book, dict):
-                bids = book.get("bids", []) or []
-                asks = book.get("asks", []) or []
-            else:
-                bids = getattr(book, "bids", []) or []
-                asks = getattr(book, "asks", []) or []
-
-            if not bids or not asks:
+            # Get current market price and calculate P&L
+            pnl_info = _get_position_pnl(token_id, entry_price, size)
+            if not pnl_info:
                 continue
 
-            best_bid = float(
-                bids[-1].price
-                if hasattr(bids[-1], "price")
-                else bids[-1].get("price", 0)
-            )
-            best_ask = float(
-                asks[-1].price
-                if hasattr(asks[-1], "price")
-                else asks[-1].get("price", 0)
-            )
-            current_price = (best_bid + best_ask) / 2.0
-
-            # Calculate current P&L
-            # Both UP and DOWN tokens increase in value when the prediction is moving in our favor
-            price_change_pct = ((current_price - entry_price) / entry_price) * 100
-
-            current_value = current_price * size
-            pnl_usd = current_value - bet_usd
-            pnl_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
+            current_price = pnl_info["current_price"]
+            pnl_pct = pnl_info["pnl_pct"]
+            pnl_usd = pnl_info["pnl_usd"]
+            price_change_pct = pnl_info["price_change_pct"]
 
             if verbose:
                 log(
@@ -312,133 +609,24 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             # ============================================================
             # PRIORITY #1: STOP LOSS (checked FIRST, before everything else)
             # ============================================================
-            # Stop loss is highest priority - check it regardless of order status
-            # If we can calculate PnL, we have a position that needs protection
-            stop_threshold = -STOP_LOSS_PERCENT
-            sl_label = "STOP LOSS"
-
-            # Smart Breakeven Protection (only if position was profitable)
-            if ENABLE_STOP_LOSS and pnl_pct >= 20.0:
-                # Only activate breakeven if market is moving AGAINST our position
-                is_moving_against = False
-                if side == "UP" and current_price < entry_price:
-                    is_moving_against = True
-                elif side == "DOWN" and current_price > entry_price:
-                    is_moving_against = True
-
-                if is_moving_against:
-                    stop_threshold = (
-                        -5.0
-                    )  # Allow 5% drawback from peak before breakeven exit
-                    sl_label = "BREAKEVEN PROTECTION"
-
-            # CRITICAL: Stop loss works regardless of order_status
-            # If size > 0, we have a position that needs stop loss protection
-            if ENABLE_STOP_LOSS and pnl_pct <= stop_threshold and size > 0:
-                # NEW REQUIREMENT: Stop loss ONLY triggers if we are on the 'opposite' (losing) side of target
-                # Get current spot price to confirm we are losing
-                current_spot = get_current_spot_price(symbol)
-                is_on_losing_side = False
-
-                if current_spot > 0 and target_price is not None:
-                    if side == "UP" and current_spot < target_price:
-                        is_on_losing_side = True
-                    elif side == "DOWN" and current_spot > target_price:
-                        is_on_losing_side = True
-                else:
-                    # Fallback if target price or spot is missing: assume losing if pnl is bad
-                    is_on_losing_side = True
-
-                if is_on_losing_side:
-                    log(
-                        f"🛑 {sl_label} trade #{trade_id}: {pnl_pct:.1f}% PnL (Threshold: {stop_threshold}%) | Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}"
-                    )
-
-                    # Cancel existing limit sell order if it exists
-                    if limit_sell_order_id:
-                        if cancel_order(limit_sell_order_id):
-                            log(
-                                f"[{symbol}] ⏳ Limit sell order cancelled, waiting for tokens to be freed..."
-                            )
-                            time.sleep(2)
-
-                    # Sell current position
-                    sell_result = sell_position(token_id, size, current_price)
-
-                    if sell_result["success"]:
-                        # Mark as exited early
-                        c.execute(
-                            """UPDATE trades 
-                               SET exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, 
-                                   final_outcome=?, settled=1, settled_at=? 
-                               WHERE id=?""",
-                            (
-                                current_price,
-                                pnl_usd,
-                                pnl_pct,
-                                sl_label,
-                                now.isoformat(),
-                                trade_id,
-                            ),
-                        )
-                        conn.commit()
-
-                        send_discord(
-                            f"🛑 **STOP LOSS** [{symbol}] {side} closed at {pnl_pct:+.1f}%"
-                        )
-
-                        # ALWAYS trigger reversal to the 'winning' side
-                        if not is_reversal:  # Don't reverse a reversal
-                            opposite_side = "DOWN" if side == "UP" else "UP"
-                            log(
-                                f"🔄 Reversing [{symbol}] {side} → {opposite_side} to get on winning side"
-                            )
-
-                            up_id, down_id = get_token_ids(symbol)
-                            if up_id and down_id:
-                                opposite_token = down_id if side == "UP" else up_id
-                                opposite_price = 1.0 - current_price
-
-                                # Place reverse order with same size
-                                reverse_result = place_order(
-                                    opposite_token, opposite_price, size
-                                )
-                                if reverse_result["success"]:
-                                    send_discord(
-                                        f"🔄 **REVERSED** [{symbol}] {side} → {opposite_side} (Target: ${target_price:,.2f}, Spot: ${current_spot:,.2f})"
-                                    )
-
-                                    # Save reversed trade to database
-                                    try:
-                                        window_start, window_end = get_window_times(
-                                            symbol
-                                        )
-                                        bet_usd_effective = size * opposite_price
-                                        save_trade(
-                                            symbol=symbol,
-                                            window_start=window_start.isoformat(),
-                                            window_end=window_end.isoformat(),
-                                            slug=get_current_slug(symbol),
-                                            token_id=opposite_token,
-                                            side=opposite_side,
-                                            edge=0.0,
-                                            price=opposite_price,
-                                            size=size,
-                                            bet_usd=bet_usd_effective,
-                                            p_yes=opposite_price
-                                            if opposite_side == "UP"
-                                            else 1.0 - opposite_price,
-                                            order_status=reverse_result["status"],
-                                            order_id=reverse_result["order_id"],
-                                            is_reversal=True,
-                                            target_price=target_price,
-                                        )
-                                    except Exception as e:
-                                        log(f"⚠️ DB Error (reversal): {e}")
-                else:
-                    log(
-                        f"ℹ️ [{symbol}] PnL is bad ({pnl_pct:.1f}%) but price is on WINNING side of target - HOLDING (Spot ${current_spot:,.2f} vs Target ${target_price:,.2f})"
-                    )
+            closed = _check_stop_loss(
+                symbol,
+                trade_id,
+                side,
+                entry_price,
+                size,
+                pnl_pct,
+                pnl_usd,
+                current_price,
+                target_price,
+                limit_sell_order_id,
+                is_reversal,
+                c,
+                conn,
+                now,
+            )
+            if closed:
+                continue
 
             # ============================================================
             # PRIORITY #2: Other Risk Management (after stop loss)
@@ -453,106 +641,43 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             time_left_seconds = (window_end_dt - now).total_seconds()
 
             # ============================================================
-            # EXIT PLAN: Aggressive limit sell implementation
+            # EXIT PLAN: Check and manage limit sell orders
             # ============================================================
-            if ENABLE_EXIT_PLAN and current_buy_status == "FILLED" and size > 0:
-                # Determine exit check interval based on aggressive mode
-                check_interval = EXIT_CHECK_INTERVAL
-                if EXIT_AGGRESSIVE_MODE:
-                    # In aggressive mode, check more frequently (half the interval)
-                    check_interval = max(EXIT_CHECK_INTERVAL // 2, 30)  # Min 30 seconds
+            _check_exit_plan(
+                symbol,
+                trade_id,
+                token_id,
+                size,
+                current_buy_status,
+                limit_sell_order_id,
+                timestamp,
+                c,
+                conn,
+                now,
+            )
+            c.execute(
+                "SELECT limit_sell_order_id FROM trades WHERE id = ?", (trade_id,)
+            )
+            row = c.fetchone()
+            if row:
+                limit_sell_order_id = row[0]
 
-                # Place limit sell order when position is old enough
-                position_age_seconds = (
-                    now - datetime.fromisoformat(timestamp)
-                ).total_seconds()
-                if (
-                    not limit_sell_order_id
-                    and position_age_seconds >= EXIT_MIN_POSITION_AGE
-                    and position_age_seconds
-                    > 60  # Additional safety: position must be at least 1 minute old
-                ):
-                    log(
-                        f"[{symbol}] 📉 EXIT PLAN: Placing limit sell order at {EXIT_PRICE_TARGET} for {size} units (position age: {position_age_seconds:.0f}s, min age: {EXIT_MIN_POSITION_AGE}s)"
-                    )
-                    sell_limit_result = place_limit_order(
-                        token_id,
-                        EXIT_PRICE_TARGET,
-                        size,
-                        SELL,
-                        silent_on_balance_error=True,
-                    )
-                    if sell_limit_result["success"]:
-                        limit_sell_order_id = sell_limit_result["order_id"]
-                        log(
-                            f"[{symbol}] ✅ EXIT PLAN: Limit sell order placed at {EXIT_PRICE_TARGET}: {limit_sell_order_id}"
-                        )
-                        c.execute(
-                            "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
-                            (limit_sell_order_id, trade_id),
-                        )
-                        conn.commit()
-                    else:
-                        log(
-                            f"[{symbol}] ⚠️ EXIT PLAN: Failed to place limit sell at {EXIT_PRICE_TARGET} (will retry next cycle)"
-                        )
-
-                # Monitor existing limit sell order based on position age
-                elif (
-                    limit_sell_order_id
-                    and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60
-                ):
-                    # Position is mature, monitor the exit order
-                    log(
-                        f"[{symbol}] ⏰ EXIT PLAN: Position age {position_age_seconds:.0f}s - monitoring limit sell order {limit_sell_order_id}"
-                    )
-                    # The order check logic above will handle if it gets filled
-
-            # Check if we should scale into position
-            if (
-                ENABLE_SCALE_IN
-                and not scaled_in
-                and time_left_seconds <= SCALE_IN_TIME_LEFT
-                and time_left_seconds > 0
-                and SCALE_IN_MIN_PRICE <= current_price <= SCALE_IN_MAX_PRICE
-            ):
-                log(
-                    f"📈 SCALE IN triggered for trade #{trade_id}: price=${current_price:.2f}, {time_left_seconds:.0f}s left"
-                )
-
-                # Calculate additional size
-                additional_size = size * SCALE_IN_MULTIPLIER
-                additional_bet = additional_size * current_price
-
-                # Place additional order
-                scale_result = place_order(token_id, current_price, additional_size)
-
-                if scale_result["success"]:
-                    # Update trade with new size and bet
-                    new_total_size = size + additional_size
-                    new_total_bet = bet_usd + additional_bet
-                    new_avg_price = new_total_bet / new_total_size
-
-                    # Update database with scaled-in position (don't place limit sell yet - will happen at 60s)
-                    c.execute(
-                        """UPDATE trades 
-                           SET size=?, bet_usd=?, entry_price=?, scaled_in=1 
-                           WHERE id=?""",
-                        (
-                            new_total_size,
-                            new_total_bet,
-                            new_avg_price,
-                            trade_id,
-                        ),
-                    )
-
-                    log(
-                        f"✅ Scaled in! Size: {size:.2f} → {new_total_size:.2f} (+{additional_size:.2f})"
-                    )
-                    log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
-                    send_discord(
-                        f"📈 **SCALED IN** [{symbol}] {side} +${additional_bet:.2f} @ ${current_price:.2f} ({time_left_seconds:.0f}s left)"
-                    )
+            # ============================================================
+            # SCALE IN: Check if conditions are met
+            # ============================================================
+            _check_scale_in(
+                symbol,
+                trade_id,
+                token_id,
+                entry_price,
+                size,
+                bet_usd,
+                scaled_in,
+                time_left_seconds,
+                current_price,
+                c,
+                conn,
+            )
 
             # Handle unfilled order cancellation (separate from stop loss)
             if (
@@ -581,37 +706,25 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     )
                 continue
 
-            # Check take profit
-            if ENABLE_TAKE_PROFIT and pnl_pct >= TAKE_PROFIT_PERCENT:
-                log(
-                    f"🎯 TAKE PROFIT triggered for trade #{trade_id}: {pnl_pct:.1f}% gain"
-                )
-
-                # Cancel existing limit sell order if it exists
-                if limit_sell_order_id:
-                    if cancel_order(limit_sell_order_id):
-                        log(
-                            f"[{symbol}] ⏳ Limit sell order cancelled, waiting for tokens to be freed..."
-                        )
-                        time.sleep(2)  # Wait for exchange to free up tokens
-
-                # Sell current position
-                sell_result = sell_position(token_id, size, current_price)
-
-                if sell_result["success"]:
-                    c.execute(
-                        """UPDATE trades 
-                           SET exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, 
-                           final_outcome='TAKE_PROFIT', settled=1, settled_at=? 
-                           WHERE id=?""",
-                        (current_price, pnl_usd, pnl_pct, now.isoformat(), trade_id),
-                    )
-                    # Commit immediately after take profit update
-                    conn.commit()
-
-                    send_discord(
-                        f"🎯 **TAKE PROFIT** [{symbol}] {side} closed at {pnl_pct:+.1f}%"
-                    )
+            # ============================================================
+            # TAKE PROFIT: Check if profit target is hit
+            # ============================================================
+            closed = _check_take_profit(
+                symbol,
+                trade_id,
+                token_id,
+                side,
+                size,
+                pnl_pct,
+                pnl_usd,
+                current_price,
+                limit_sell_order_id,
+                c,
+                conn,
+                now,
+            )
+            if closed:
+                continue
 
         except Exception as e:
             log(f"⚠️ Error checking position #{trade_id}: {e}")

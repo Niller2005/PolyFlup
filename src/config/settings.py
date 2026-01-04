@@ -58,7 +58,6 @@ EXIT_AGGRESSIVE_MODE = (
 
 # ADX Filter
 ADX_ENABLED = os.getenv("ADX", "NO").upper() == "YES"
-ADX_THRESHOLD = float(os.getenv("ADX_THRESHOLD", "20.0"))
 ADX_INTERVAL = os.getenv("ADX_INTERVAL", "15m")
 ADX_PERIOD = int(os.getenv("ADX_PERIOD", "10"))
 

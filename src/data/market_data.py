@@ -18,6 +18,32 @@ from src.utils.logger import log
 _window_start_prices = {}
 
 
+def _create_klines_dataframe(klines):
+    """Create DataFrame from Binance klines data with proper columns and types"""
+    try:
+        import pandas as pd
+    except ImportError:
+        return None
+
+    return pd.DataFrame(
+        klines,
+        columns=[
+            "open_time",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "close_time",
+            "quote_volume",
+            "trades",
+            "taker_buy_base",
+            "taker_buy_quote",
+            "ignore",
+        ],
+    )
+
+
 def get_current_slug(symbol: str) -> str:
     """Generate slug for current 15-minute window"""
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
@@ -241,26 +267,7 @@ def get_adx_from_binance(symbol: str) -> float:
             log(f"[{symbol}] ADX: Insufficient klines data (got {len(klines)})")
             return -1.0
 
-        # Convert to DataFrame
-        df = pd.DataFrame(
-            klines,
-            columns=[
-                "open_time",
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-                "close_time",
-                "quote_volume",
-                "trades",
-                "taker_buy_base",
-                "taker_buy_quote",
-                "ignore",
-            ],
-        )
-
-        # Convert to numeric
+        df = _create_klines_dataframe(klines)
         df["high"] = pd.to_numeric(df["high"])
         df["low"] = pd.to_numeric(df["low"])
         df["close"] = pd.to_numeric(df["close"])
@@ -354,24 +361,7 @@ def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
                 "strength": 0.0,
             }
 
-        df = pd.DataFrame(
-            klines,
-            columns=[
-                "open_time",
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-                "close_time",
-                "quote_volume",
-                "trades",
-                "taker_buy_base",
-                "taker_buy_quote",
-                "ignore",
-            ],
-        )
-
+        df = _create_klines_dataframe(klines)
         df["close"] = pd.to_numeric(df["close"])
         df["open"] = pd.to_numeric(df["open"])
 
@@ -469,24 +459,7 @@ def get_order_flow_analysis(symbol: str) -> dict:
                 "trade_intensity": 0.0,
             }
 
-        df = pd.DataFrame(
-            klines,
-            columns=[
-                "open_time",
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-                "close_time",
-                "quote_volume",
-                "trades",
-                "taker_buy_base",
-                "taker_buy_quote",
-                "ignore",
-            ],
-        )
-
+        df = _create_klines_dataframe(klines)
         df["volume"] = pd.to_numeric(df["volume"])
         df["taker_buy_base"] = pd.to_numeric(df["taker_buy_base"])
         df["trades"] = pd.to_numeric(df["trades"])
@@ -578,24 +551,7 @@ def get_cross_exchange_divergence(symbol: str, polymarket_p_up: float) -> dict:
                 "opportunity": "NEUTRAL",
             }
 
-        df = pd.DataFrame(
-            klines,
-            columns=[
-                "open_time",
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-                "close_time",
-                "quote_volume",
-                "trades",
-                "taker_buy_base",
-                "taker_buy_quote",
-                "ignore",
-            ],
-        )
-
+        df = _create_klines_dataframe(klines)
         df["close"] = pd.to_numeric(df["close"])
         df["open"] = pd.to_numeric(df["open"])
 
@@ -697,24 +653,7 @@ def get_volume_weighted_momentum(symbol: str) -> dict:
                 "momentum_quality": 0.0,
             }
 
-        df = pd.DataFrame(
-            klines,
-            columns=[
-                "open_time",
-                "open",
-                "high",
-                "low",
-                "close",
-                "volume",
-                "close_time",
-                "quote_volume",
-                "trades",
-                "taker_buy_base",
-                "taker_buy_quote",
-                "ignore",
-            ],
-        )
-
+        df = _create_klines_dataframe(klines)
         df["close"] = pd.to_numeric(df["close"])
         df["high"] = pd.to_numeric(df["high"])
         df["low"] = pd.to_numeric(df["low"])

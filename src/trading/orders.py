@@ -62,6 +62,26 @@ def setup_api_creds() -> None:
         raise
 
 
+def _ensure_api_creds(order_client: ClobClient) -> None:
+    """Ensure API credentials are set on the client"""
+    if not hasattr(order_client, "builder_config"):
+        order_client.builder_config = None
+
+    api_key = os.getenv("API_KEY")
+    api_secret = os.getenv("API_SECRET")
+    api_passphrase = os.getenv("API_PASSPHRASE")
+    if api_key and api_secret and api_passphrase:
+        try:
+            creds = ApiCreds(
+                api_key=api_key,
+                api_secret=api_secret,
+                api_passphrase=api_passphrase,
+            )
+            order_client.set_api_creds(creds)
+        except Exception as e:
+            log(f"⚠ Error setting API creds: {e}")
+
+
 def place_limit_order(
     token_id: str,
     price: float,
@@ -73,22 +93,7 @@ def place_limit_order(
     try:
         order_client = client
 
-        if not hasattr(order_client, "builder_config"):
-            order_client.builder_config = None
-
-        api_key = os.getenv("API_KEY")
-        api_secret = os.getenv("API_SECRET")
-        api_passphrase = os.getenv("API_PASSPHRASE")
-        if api_key and api_secret and api_passphrase:
-            try:
-                creds = ApiCreds(
-                    api_key=api_key,
-                    api_secret=api_secret,
-                    api_passphrase=api_passphrase,
-                )
-                order_client.set_api_creds(creds)
-            except Exception as e:
-                log(f"⚠ Error setting API creds in place_limit_order: {e}")
+        _ensure_api_creds(order_client)
 
         order_args = OrderArgs(
             token_id=token_id,
@@ -175,23 +180,7 @@ def sell_position(
             sell_price = max(0.01, current_price - 0.01)
 
             sell_client = client
-            if not hasattr(sell_client, "builder_config"):
-                sell_client.builder_config = None
-
-            api_key = os.getenv("API_KEY")
-            api_secret = os.getenv("API_SECRET")
-            api_passphrase = os.getenv("API_PASSPHRASE")
-
-            if api_key and api_secret and api_passphrase:
-                try:
-                    creds = ApiCreds(
-                        api_key=api_key,
-                        api_secret=api_secret,
-                        api_passphrase=api_passphrase,
-                    )
-                    sell_client.set_api_creds(creds)
-                except Exception as e:
-                    log(f"⚠ Error setting API creds in sell_position: {e}")
+            _ensure_api_creds(sell_client)
 
             # Create SELL order
             order_args = OrderArgs(
