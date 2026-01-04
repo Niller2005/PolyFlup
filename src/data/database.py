@@ -6,10 +6,11 @@ from zoneinfo import ZoneInfo
 from src.config.settings import DB_FILE, REPORTS_DIR
 from src.utils.logger import log, send_discord
 from src.data.db_connection import db_connection
+from src.data.migrations import run_migrations
 
 
 def init_database():
-    """Initialize SQLite database"""
+    """Initialize SQLite database and run migrations"""
     with db_connection() as conn:
         c = conn.cursor()
 
@@ -31,7 +32,11 @@ def init_database():
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_symbol ON trades(symbol)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_settled ON trades(settled)")
+
     log("✓ Database initialized")
+
+    # Run migrations after initial schema is created
+    run_migrations()
 
 
 def save_trade(**kwargs):
