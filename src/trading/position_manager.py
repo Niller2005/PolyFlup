@@ -269,137 +269,121 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             # CRITICAL: Stop loss works regardless of order_status
             # If size > 0, we have a position that needs stop loss protection
             if ENABLE_STOP_LOSS and pnl_pct <= stop_threshold and size > 0:
-                log(
-                    f"🛑 {sl_label} trade #{trade_id}: {price_change_pct:.1f}% move (Threshold: {stop_threshold}%)"
-                )
+                # NEW REQUIREMENT: Stop loss ONLY triggers if we are on the 'opposite' (losing) side of target
+                # Get current spot price to confirm we are losing
+                current_spot = get_current_spot_price(symbol)
+                is_on_losing_side = False
 
-                # Cancel existing limit sell order if it exists
-                if limit_sell_order_id:
-                    if cancel_order(limit_sell_order_id):
-                        log(
-                            f"[{symbol}] ⏳ Limit sell order cancelled, waiting for tokens to be freed..."
-                        )
-                        time.sleep(2)  # Wait for exchange to free up tokens
+                if current_spot > 0 and target_price is not None:
+                    if side == "UP" and current_spot < target_price:
+                        is_on_losing_side = True
+                    elif side == "DOWN" and current_spot > target_price:
+                        is_on_losing_side = True
+                else:
+                    # Fallback if target price or spot is missing: assume losing if pnl is bad
+                    is_on_losing_side = True
 
-                # Sell current position
-                sell_result = sell_position(token_id, size, current_price)
+                if is_on_losing_side:
+                    log(
+                        f"🛑 {sl_label} trade #{trade_id}: {pnl_pct:.1f}% PnL (Threshold: {stop_threshold}%) | Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}"
+                    )
 
-                if sell_result["success"]:
-                    # Mark as exited early
-                    c.execute(
-                        """UPDATE trades 
+                    # Cancel existing limit sell order if it exists
+                    if limit_sell_order_id:
+                        if cancel_order(limit_sell_order_id):
+                            log(
+                                f"[{symbol}] ⏳ Limit sell order cancelled, waiting for tokens to be freed..."
+                            )
+                            time.sleep(2)
+
+                    # Sell current position
+                    sell_result = sell_position(token_id, size, current_price)
+
+                    if sell_result["success"]:
+                        # Mark as exited early
+                        c.execute(
+                            """UPDATE trades 
                                SET exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, 
                                    final_outcome=?, settled=1, settled_at=? 
                                WHERE id=?""",
-                        (
-                            current_price,
-                            pnl_usd,
-                            pnl_pct,
-                            sl_label,
-                            now.isoformat(),
-                            trade_id,
-                        ),
-                    )
-                    # Commit before calling save_trade() to avoid nested connection locks
-                    conn.commit()
+                            (
+                                current_price,
+                                pnl_usd,
+                                pnl_pct,
+                                sl_label,
+                                now.isoformat(),
+                                trade_id,
+                            ),
+                        )
+                        conn.commit()
 
-                    send_discord(
-                        f"🛑 **STOP LOSS** [{symbol}] {side} closed at {pnl_pct:+.1f}%"
-                    )
+                        send_discord(
+                            f"🛑 **STOP LOSS** [{symbol}] {side} closed at {pnl_pct:+.1f}%"
+                        )
 
-                    # Optionally reverse position (but only if losing based on target price)
-                    if ENABLE_REVERSAL and not is_reversal and target_price is not None:
-                        # Get current spot price to determine if we're losing
-                        # NOTE: We fetch fresh current price here, not the window start price
-                        # because we want to know the CURRENT market direction
-                        current_spot = get_current_spot_price(symbol)
-
-                        if current_spot > 0:
-                            # Determine if we're losing based on target price
-                            # UP position: losing if current_spot < target_price (price went down)
-                            # DOWN position: losing if current_spot > target_price (price went up)
-                            should_reverse = False
-
-                            if side == "UP" and current_spot < target_price:
-                                should_reverse = True
-                                reason = f"current ${current_spot:,.2f} < target ${target_price:,.2f}"
-                            elif side == "DOWN" and current_spot > target_price:
-                                should_reverse = True
-                                reason = f"current ${current_spot:,.2f} > target ${target_price:,.2f}"
-                            else:
-                                should_reverse = False
-
-                            if should_reverse:
-                                opposite_side = "DOWN" if side == "UP" else "UP"
-                                log(
-                                    f"🔄 Reversing [{symbol}] {side} → {opposite_side} (Current ${current_spot:,.0f} vs Target ${target_price:,.0f})"
-                                )
-                                # Get opposite token ID
-                                up_id, down_id = get_token_ids(symbol)
-                                if up_id and down_id:
-                                    opposite_token = down_id if side == "UP" else up_id
-                                    opposite_price = 1.0 - current_price
-
-                                    # Place reverse order with same size
-                                    reverse_result = place_order(
-                                        opposite_token, opposite_price, size
-                                    )
-                                    if reverse_result["success"]:
-                                        send_discord(
-                                            f"🔄 **REVERSED** [{symbol}] {side} → {opposite_side} (Target: ${target_price:,.2f}, Current: ${current_spot:,.2f})"
-                                        )
-
-                                        # Save reversed trade to database
-                                        try:
-                                            window_start, window_end = get_window_times(
-                                                symbol
-                                            )
-                                            bet_usd_effective = size * opposite_price
-                                            # Use same target price for reversed trade
-                                            save_trade(
-                                                symbol=symbol,
-                                                window_start=window_start.isoformat(),
-                                                window_end=window_end.isoformat(),
-                                                slug=get_current_slug(symbol),
-                                                token_id=opposite_token,
-                                                side=opposite_side,
-                                                edge=0.0,  # Reversal trade, no edge calculation
-                                                price=opposite_price,
-                                                size=size,
-                                                bet_usd=bet_usd_effective,
-                                                p_yes=opposite_price
-                                                if opposite_side == "UP"
-                                                else 1.0 - opposite_price,
-                                                best_bid=None,
-                                                best_ask=None,
-                                                imbalance=0.5,
-                                                funding_bias=get_funding_bias(symbol),
-                                                order_status=reverse_result["status"],
-                                                order_id=reverse_result["order_id"],
-                                                is_reversal=True,
-                                                target_price=target_price,
-                                            )
-                                        except Exception as e:
-                                            log(f"⚠️ DB Error (reversal): {e}")
-                        else:
+                        # ALWAYS trigger reversal to the 'winning' side
+                        if not is_reversal:  # Don't reverse a reversal
+                            opposite_side = "DOWN" if side == "UP" else "UP"
                             log(
-                                f"⚠️ Could not fetch current spot price for reversal decision"
+                                f"🔄 Reversing [{symbol}] {side} → {opposite_side} to get on winning side"
                             )
-                    elif ENABLE_REVERSAL and is_reversal:
-                        log(
-                            f"⚠️ Trade #{trade_id} is already a reversed trade - not reversing again"
-                        )
-                    elif ENABLE_REVERSAL and target_price is None:
-                        log(
-                            f"⚠️ Trade #{trade_id} has no target price - cannot determine if reversing is appropriate"
-                        )
+
+                            up_id, down_id = get_token_ids(symbol)
+                            if up_id and down_id:
+                                opposite_token = down_id if side == "UP" else up_id
+                                opposite_price = 1.0 - current_price
+
+                                # Place reverse order with same size
+                                reverse_result = place_order(
+                                    opposite_token, opposite_price, size
+                                )
+                                if reverse_result["success"]:
+                                    send_discord(
+                                        f"🔄 **REVERSED** [{symbol}] {side} → {opposite_side} (Target: ${target_price:,.2f}, Spot: ${current_spot:,.2f})"
+                                    )
+
+                                    # Save reversed trade to database
+                                    try:
+                                        window_start, window_end = get_window_times(
+                                            symbol
+                                        )
+                                        bet_usd_effective = size * opposite_price
+                                        save_trade(
+                                            symbol=symbol,
+                                            window_start=window_start.isoformat(),
+                                            window_end=window_end.isoformat(),
+                                            slug=get_current_slug(symbol),
+                                            token_id=opposite_token,
+                                            side=opposite_side,
+                                            edge=0.0,
+                                            price=opposite_price,
+                                            size=size,
+                                            bet_usd=bet_usd_effective,
+                                            p_yes=opposite_price
+                                            if opposite_side == "UP"
+                                            else 1.0 - opposite_price,
+                                            order_status=reverse_result["status"],
+                                            order_id=reverse_result["order_id"],
+                                            is_reversal=True,
+                                            target_price=target_price,
+                                        )
+                                    except Exception as e:
+                                        log(f"⚠️ DB Error (reversal): {e}")
+                else:
+                    log(
+                        f"ℹ️ [{symbol}] PnL is bad ({pnl_pct:.1f}%) but price is on WINNING side of target - HOLDING (Spot ${current_spot:,.2f} vs Target ${target_price:,.2f})"
+                    )
 
             # ============================================================
             # PRIORITY #2: Other Risk Management (after stop loss)
             # ============================================================
 
             # Calculate time left until window ends
-            window_end_dt = datetime.fromisoformat(window_end)
+            if isinstance(window_end, str):
+                window_end_dt = datetime.fromisoformat(window_end)
+            else:
+                window_end_dt = window_end  # Fallback if already a datetime object
+
             time_left_seconds = (window_end_dt - now).total_seconds()
 
             # Place 0.99 limit sell order when 1 minute left (after scale-in/reversals complete)

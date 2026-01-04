@@ -51,10 +51,10 @@ from src.data.market_data import (
 )
 from src.trading.strategy import (
     calculate_confidence,
-    calculate_edge,
     adx_allows_trade,
     bfxd_allows_trade,
 )
+
 
 from src.trading.orders import (
     setup_api_creds,
@@ -81,20 +81,60 @@ def trade_symbol(symbol: str, balance: float):
         log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
         return
 
-    # Set token and side based on bias
+    # Determine bias
     if bias == "UP":
         token_id, side, price = up_id, "UP", p_up
     else:
         token_id, side, price = down_id, "DOWN", 1.0 - p_up
+
+    # Check target price alignment
+    target_price = float(get_window_start_price(symbol))
+    current_spot = 0.0
+    if isinstance(signals, dict):
+        current_spot = float(signals.get("current_spot", 0))
+
+    if target_price > 0 and current_spot > 0:
+        # Determine if we are on the 'winning' or 'losing' side
+        # UP is winning if current_spot > target_price
+        # DOWN is winning if current_spot < target_price
+        is_winning_side = False
+        if side == "UP" and current_spot > target_price:
+            is_winning_side = True
+        elif side == "DOWN" and current_spot < target_price:
+            is_winning_side = True
+
+        if not is_winning_side:
+            # We are on the 'losing' side - check if confidence is high enough to bypass
+            # High confidence threshold for entering 'losing' side (e.g. 60%)
+            LOSING_SIDE_BYPASS_CONFIDENCE = 0.60
+            if confidence < LOSING_SIDE_BYPASS_CONFIDENCE:
+                log(
+                    f"[{symbol}] ⚠️ {side} is on LOSING side (Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_BYPASS_CONFIDENCE:.0%}. SKIPPING."
+                )
+                return
+            else:
+                log(
+                    f"[{symbol}] 🔥 HIGH CONFIDENCE BYPASS: Entering {side} on losing side (Confidence: {confidence:.1%})"
+                )
 
     # Check filters
     adx_ok, adx_val = adx_allows_trade(symbol)
     bfxd_ok, bfxd_trend = bfxd_allows_trade(symbol, side)
 
     # RSI from signals
-    rsi = signals.get("momentum", {}).get("rsi", 50.0)
+    rsi = 50.0
+    imbalance_val = 0.5
+    if isinstance(signals, dict):
+        mom = signals.get("momentum", {})
+        if isinstance(mom, dict):
+            rsi = mom.get("rsi", 50.0)
+
+        of = signals.get("order_flow", {})
+        if isinstance(of, dict):
+            imbalance_val = of.get("buy_pressure", 0.5)
 
     filter_text = f"ADX: {adx_val:.1f} {'✅' if adx_ok else '❌'}"
+
     if ENABLE_BFXD and symbol == "BTC":
         filter_text += f" | BFXD: {bfxd_trend} {'✅' if bfxd_ok else '❌'}"
 
@@ -158,7 +198,7 @@ def trade_symbol(symbol: str, balance: float):
             p_yes=p_up,
             best_bid=best_bid,
             best_ask=best_ask,
-            imbalance=signals.get("order_flow", {}).get("buy_pressure", 0.5),
+            imbalance=imbalance_val,
             funding_bias=get_funding_bias(symbol),
             order_status=result["status"],
             order_id=result["order_id"],
@@ -213,13 +253,17 @@ def main():
             # Check positions every 1 second (verbose log every 60 seconds)
             now_ts = time.time()
             if now_ts - last_position_check >= 1:
-                verbose = now_ts - last_verbose_log >= 60
-                check_orders = now_ts - last_order_check >= 30
-                check_open_positions(verbose=verbose, check_orders=check_orders)
+                is_verbose_cycle = now_ts - last_verbose_log >= 60
+                is_order_check_cycle = now_ts - last_order_check >= 30
+
+                check_open_positions(
+                    verbose=is_verbose_cycle, check_orders=is_order_check_cycle
+                )
+
                 last_position_check = now_ts
-                if verbose:
+                if is_verbose_cycle:
                     last_verbose_log = now_ts
-                if check_orders:
+                if is_order_check_cycle:
                     last_order_check = now_ts
 
             now = datetime.utcnow()
@@ -240,13 +284,19 @@ def main():
                 # Check positions during wait (silent unless it's been 60s)
                 if remaining > 0:
                     now_ts = time.time()
-                    verbose = now_ts - last_verbose_log >= 60
-                    check_orders = now_ts - last_order_check >= 30
-                    check_open_positions(verbose=verbose, check_orders=check_orders)
-                    if verbose:
-                        last_verbose_log = now_ts
-                    if check_orders:
-                        last_order_check = now_ts
+                    if now_ts - last_position_check >= 1:
+                        is_verbose_cycle = now_ts - last_verbose_log >= 60
+                        is_order_check_cycle = now_ts - last_order_check >= 30
+
+                        check_open_positions(
+                            verbose=is_verbose_cycle, check_orders=is_order_check_cycle
+                        )
+
+                        last_position_check = now_ts
+                        if is_verbose_cycle:
+                            last_verbose_log = now_ts
+                        if is_order_check_cycle:
+                            last_order_check = now_ts
 
             log(
                 f"\n{'=' * 90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'=' * 90}\n"
