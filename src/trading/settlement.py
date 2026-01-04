@@ -7,7 +7,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from src.config.settings import DB_FILE, GAMMA_API_BASE
 from src.utils.logger import log, send_discord
-from src.utils.web3_utils import redeem_winnings
 from src.trading.orders import cancel_order
 
 
@@ -119,22 +118,14 @@ def check_and_settle_trades():
             pnl_usd = (exit_value * size) - bet_usd
             roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
-            # Auto-claim winnings if profitable
-            redeemed = False
-            if pnl_usd > 0:
-                condition_id_hex = data.get("conditionId")
-                if condition_id_hex:
-                    redeemed = redeem_winnings(condition_id_hex)
-
             c.execute(
                 "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=? WHERE id=?",
                 ("RESOLVED", final_price, pnl_usd, roi_pct, now.isoformat(), trade_id),
             )
 
             emoji = "💰" if pnl_usd > 0 else "💀"
-            status = "| Redeemed ✅" if redeemed else ""
             log(
-                f"{emoji} Settled #{trade_id} [{symbol}] {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%) {status}"
+                f"{emoji} Settled #{trade_id} [{symbol}] {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%)"
             )
             total_pnl += pnl_usd
             settled_count += 1
