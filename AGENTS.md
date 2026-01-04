@@ -251,7 +251,8 @@ When modifying code:
 
 For additional information about the codebase and recent improvements:
 
-- **SESSION_IMPROVEMENTS.md** - Full details on all improvements from latest session (bug fixes, features, API integrations)
-- **QUICK_REFERENCE.md** - Code examples and quick lookup for new features (batch orders, market orders, notifications, etc.)
-- **MIGRATIONS.md** - How to add database migrations (step-by-step guide with examples)
+- **instructions/SESSION_IMPROVEMENTS.md** - Full details on all improvements from latest session (bug fixes, features, API integrations)
+- **instructions/QUICK_REFERENCE.md** - Code examples and quick lookup for new features (batch orders, market orders, notifications, etc.)
+- **instructions/MIGRATIONS.md** - How to add database migrations (step-by-step guide with examples)
+- **instructions/TURSO_MIGRATION.md** - Complete guide for Turso database setup and migration
 - **AGENTS.md** - This file - General coding standards and project overview
