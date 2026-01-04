@@ -36,6 +36,10 @@ from src.trading.orders import (
     cancel_order,
     get_order_status,
     get_order,
+    get_midpoint,
+    get_balance_allowance,
+    get_notifications,
+    drop_notifications,
     BUY,
     SELL,
 )
@@ -160,25 +164,31 @@ def recover_open_positions():
 
 def _get_position_pnl(token_id: str, entry_price: float, size: float) -> Optional[dict]:
     """Get current market price and calculate P&L"""
-    client = get_clob_client()
-    book = client.get_order_book(token_id)
-    if isinstance(book, dict):
-        bids = book.get("bids", []) or []
-        asks = book.get("asks", []) or []
-    else:
-        bids = getattr(book, "bids", []) or []
-        asks = getattr(book, "asks", []) or []
+    # Try to get midpoint price first (more accurate)
+    current_price = get_midpoint(token_id)
 
-    if not bids or not asks:
-        return None
+    # Fallback to calculating from order book if midpoint fails
+    if current_price is None:
+        client = get_clob_client()
+        book = client.get_order_book(token_id)
+        if isinstance(book, dict):
+            bids = book.get("bids", []) or []
+            asks = book.get("asks", []) or []
+        else:
+            bids = getattr(book, "bids", []) or []
+            asks = getattr(book, "asks", []) or []
 
-    best_bid = float(
-        bids[-1].price if hasattr(bids[-1], "price") else bids[-1].get("price", 0)
-    )
-    best_ask = float(
-        asks[-1].price if hasattr(asks[-1], "price") else asks[-1].get("price", 0)
-    )
-    current_price = (best_bid + best_ask) / 2.0
+        if not bids or not asks:
+            return None
+
+        best_bid = float(
+            bids[-1].price if hasattr(bids[-1], "price") else bids[-1].get("price", 0)
+        )
+        best_ask = float(
+            asks[-1].price if hasattr(asks[-1], "price") else asks[-1].get("price", 0)
+        )
+        current_price = (best_bid + best_ask) / 2.0
+
     price_change_pct = ((current_price - entry_price) / entry_price) * 100
     current_value = current_price * size
     pnl_usd = current_value - (entry_price * size)

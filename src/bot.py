@@ -63,9 +63,10 @@ from src.trading.orders import (
 )
 from src.trading.position_manager import (
     check_open_positions,
-    recover_open_positions,
     get_exit_plan_stats,
+    recover_open_positions,
 )
+from src.utils.notifications import process_notifications
 from src.trading.settlement import check_and_settle_trades
 
 
@@ -434,6 +435,10 @@ def main():
                     last_verbose_log = now_ts
                 if is_order_check_cycle:
                     last_order_check = now_ts
+
+                # Process notifications every 30 seconds (when checking orders)
+                if is_order_check_cycle:
+                    process_notifications()
 
                 # Log exit plan stats every 15 minutes (every 15th verbose cycle)
                 if (

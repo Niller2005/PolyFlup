@@ -57,6 +57,134 @@ def get_clob_client() -> ClobClient:
     return client
 
 
+def get_midpoint(token_id: str) -> Optional[float]:
+    """
+    Get midpoint price (average of best bid and ask) for a token
+
+    Args:
+        token_id: Token ID to get price for
+
+    Returns:
+        Midpoint price or None if unavailable
+    """
+    try:
+        result = client.get_midpoint(token_id)
+
+        if isinstance(result, dict):
+            mid = result.get("mid")
+            if mid:
+                return float(mid)
+        elif hasattr(result, "mid"):
+            return float(result.mid)
+
+        return None
+
+    except Exception as e:
+        log(f"⚠️ Error getting midpoint for {token_id[:10]}...: {e}")
+        return None
+
+
+def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
+    """
+    Get balance and allowance for USDC collateral or specific conditional token
+
+    Args:
+        token_id: Optional token ID for conditional token. If None, checks USDC collateral
+
+    Returns:
+        Dict with 'balance' and 'allowance' or None if error
+    """
+    try:
+        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+
+        params = BalanceAllowanceParams(
+            asset_type=AssetType.CONDITIONAL if token_id else AssetType.COLLATERAL,
+            token_id=token_id,
+        )
+
+        result = client.get_balance_allowance(params)
+
+        if isinstance(result, dict):
+            return {
+                "balance": float(result.get("balance", 0)),
+                "allowance": float(result.get("allowance", 0)),
+            }
+        elif hasattr(result, "balance") and hasattr(result, "allowance"):
+            return {
+                "balance": float(result.balance),
+                "allowance": float(result.allowance),
+            }
+
+        return None
+
+    except Exception as e:
+        log(f"⚠️ Error getting balance/allowance: {e}")
+        return None
+
+
+def get_notifications() -> List[dict]:
+    """
+    Get all notifications (order fills, cancellations, market resolutions)
+
+    Notification types:
+    - 1: Order Cancellation
+    - 2: Order Fill (maker or taker)
+    - 4: Market Resolved
+
+    Returns:
+        List of notification dicts with id, owner, payload, timestamp, type
+    """
+    try:
+        notifications = client.get_notifications()
+
+        if not isinstance(notifications, list):
+            notifications = [notifications] if notifications else []
+
+        # Convert to dicts if needed
+        result = []
+        for notif in notifications:
+            if isinstance(notif, dict):
+                result.append(notif)
+            else:
+                # Convert object to dict
+                notif_dict = {
+                    "id": getattr(notif, "id", None),
+                    "owner": getattr(notif, "owner", ""),
+                    "payload": getattr(notif, "payload", {}),
+                    "timestamp": getattr(notif, "timestamp", None),
+                    "type": getattr(notif, "type", None),
+                }
+                result.append(notif_dict)
+
+        return result
+
+    except Exception as e:
+        log(f"⚠️ Error getting notifications: {e}")
+        return []
+
+
+def drop_notifications(notification_ids: List[str]) -> bool:
+    """
+    Mark notifications as read/dismissed
+
+    Args:
+        notification_ids: List of notification IDs to dismiss
+
+    Returns:
+        True if successful
+    """
+    try:
+        from py_clob_client.clob_types import DropNotificationParams
+
+        params = DropNotificationParams(ids=notification_ids)
+        client.drop_notifications(params)
+        return True
+
+    except Exception as e:
+        log(f"⚠️ Error dropping notifications: {e}")
+        return False
+
+
 def setup_api_creds() -> None:
     """Setup API credentials from .env or generate new ones"""
     api_key = os.getenv("API_KEY")
