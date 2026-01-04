@@ -12,7 +12,17 @@ BET_PERCENT = float(os.getenv("BET_PERCENT", "5.0"))
 MIN_EDGE = float(os.getenv("MIN_EDGE", "0.565"))
 MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.15"))
 CONFIDENCE_SCALING_FACTOR = float(os.getenv("CONFIDENCE_SCALING_FACTOR", "5.0"))
-MAX_PORTFOLIO_EXPOSURE = float(os.getenv("MAX_PORTFOLIO_EXPOSURE", "0.80"))
+MAX_PORTFOLIO_EXPOSURE = float(os.getenv("MAX_PORTFOLIO_EXPOSURE", "0.20"))
+HIGH_CONFIDENCE_EDGE_THRESHOLD = float(
+    os.getenv("HIGH_CONFIDENCE_EDGE_THRESHOLD", "0.65")
+)
+HIGH_CONFIDENCE_MOMENTUM_THRESHOLD = float(
+    os.getenv("HIGH_CONFIDENCE_MOMENTUM_THRESHOLD", "0.70")
+)
+WINDOW_START_PRICE_BUFFER_PCT = float(
+    os.getenv("WINDOW_START_PRICE_BUFFER_PCT", "0.05")
+)
+
 
 # Position Management
 ENABLE_STOP_LOSS = os.getenv("ENABLE_STOP_LOSS", "YES").upper() == "YES"
@@ -27,24 +37,6 @@ UNFILLED_CANCEL_THRESHOLD = float(
     os.getenv("UNFILLED_CANCEL_THRESHOLD", "15.0")
 )  # % price move to cancel unfilled orders
 
-# Late Entry Protection
-ENABLE_LATE_ENTRY_PROTECTION = (
-    os.getenv("ENABLE_LATE_ENTRY_PROTECTION", "YES").upper() == "YES"
-)
-LATE_ENTRY_THRESHOLD_PCT = float(
-    os.getenv("LATE_ENTRY_THRESHOLD_PCT", "0.5")
-)  # % price move threshold
-HIGH_CONFIDENCE_EDGE_THRESHOLD = float(
-    os.getenv("HIGH_CONFIDENCE_EDGE_THRESHOLD", "0.7")
-)  # Edge strength threshold (0-1)
-HIGH_CONFIDENCE_MOMENTUM_THRESHOLD = float(
-    os.getenv("HIGH_CONFIDENCE_MOMENTUM_THRESHOLD", "0.5")
-)  # Momentum strength threshold (0-1)
-
-# Window Start Price Buffer
-WINDOW_START_PRICE_BUFFER_PCT = float(
-    os.getenv("WINDOW_START_PRICE_BUFFER_PCT", "0.05")
-)  # Buffer % for window start price (0.05% = ±0.05% tolerance)
 
 # Position Scaling
 ENABLE_SCALE_IN = os.getenv("ENABLE_SCALE_IN", "YES").upper() == "YES"

@@ -37,16 +37,16 @@ def test_price_buffer():
             print(f"  Center Price:  ${center:,.2f}")
             print(f"  Lower Bound:   ${lower:,.2f}")
             print(f"  Upper Bound:   ${upper:,.2f}")
-            print(f"  Buffer Range:  ±${abs(upper - center):,.2f}")
+            print(f"  Buffer Range:  +${abs(upper - center):,.2f}")
             print()
 
             # Example: Show what would be acceptable with buffer
-            print(f"  ✓ Acceptable range for comparison:")
+            print(f"  * Acceptable range for comparison:")
             print(f"    Any price between ${lower:,.2f} and ${upper:,.2f}")
             print(f"    would be within tolerance.")
             print()
         else:
-            print(f"  ❌ Error fetching price for {symbol}")
+            print(f"  ! Error fetching price for {symbol}")
             print()
 
     print("=" * 70)

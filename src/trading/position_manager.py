@@ -98,7 +98,9 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         verbose: If True, log position checks. If False, only log actions (stop loss, etc.)
         check_orders: If True, check status of limit sell orders
     """
-    if not ENABLE_STOP_LOSS and not ENABLE_TAKE_PROFIT and not ENABLE_SCALE_IN:
+    if not any(
+        [ENABLE_STOP_LOSS, ENABLE_TAKE_PROFIT, ENABLE_SCALE_IN, ENABLE_REVERSAL]
+    ):
         if not check_orders:
             return
 

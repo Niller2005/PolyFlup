@@ -11,7 +11,12 @@ def log(text: str) -> None:
     line = (
         f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC')}] {text}"
     )
-    print(line, flush=True)
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        # Fallback for consoles that don't support emojis/unicode
+        print(line.encode("ascii", "replace").decode("ascii"), flush=True)
+
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line + "\n")

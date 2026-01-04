@@ -32,8 +32,6 @@ from src.config.settings import (
     ENABLE_BFXD,
     CONFIDENCE_SCALING_FACTOR,
     MAX_PORTFOLIO_EXPOSURE,
-    ENABLE_LATE_ENTRY_PROTECTION,
-    LATE_ENTRY_THRESHOLD_PCT,
     HIGH_CONFIDENCE_EDGE_THRESHOLD,
     HIGH_CONFIDENCE_MOMENTUM_THRESHOLD,
 )
@@ -74,15 +72,6 @@ def trade_symbol(symbol: str, balance: float):
         log(f"[{symbol}] ❌ Market not found")
         return
 
-    # Check portfolio exposure before expensive calculations
-    total_exposure = get_total_exposure()
-    exposure_pct = total_exposure / balance if balance > 0 else 0
-    if exposure_pct >= MAX_PORTFOLIO_EXPOSURE:
-        log(
-            f"[{symbol}] ⚠️ Max portfolio exposure reached ({exposure_pct:.1%}) - SKIPPING"
-        )
-        return
-
     client = get_clob_client()
     edge, reason, p_up, best_bid, best_ask, imbalance, signals = calculate_edge(
         symbol, up_id, client
@@ -96,139 +85,6 @@ def trade_symbol(symbol: str, balance: float):
     else:
         log(f"[{symbol}] ⚪ Edge: {edge:.1%} (Neutral) - NO TRADE")
         return
-
-    # Late Entry Protection: Don't open position if price already moved in the wrong direction
-    # BUT allow switching to opposite direction if we have high confidence
-    if ENABLE_LATE_ENTRY_PROTECTION:
-        target_price = get_window_start_price(symbol)
-        current_spot = get_current_spot_price(symbol)
-
-        if target_price > 0 and current_spot > 0:
-            price_move_pct = ((current_spot - target_price) / target_price) * 100.0
-
-            # Check if price has already moved AGAINST our intended direction
-            # For UP positions: if price already went DOWN significantly (missed lower entry)
-            # For DOWN positions: if price already went UP significantly (missed higher entry)
-            is_late_to_move = False
-            move_reason = ""
-            opposite_direction = None
-
-            if side == "UP" and price_move_pct < -LATE_ENTRY_THRESHOLD_PCT:
-                is_late_to_move = True
-                opposite_direction = "DOWN"
-                move_reason = (
-                    f"price already down {abs(price_move_pct):.2f}%, wanted UP"
-                )
-            elif side == "DOWN" and price_move_pct > LATE_ENTRY_THRESHOLD_PCT:
-                is_late_to_move = True
-                opposite_direction = "UP"
-                move_reason = f"price already up {price_move_pct:.2f}%, wanted DOWN"
-
-            # If we're late, check if we should switch to opposite direction with high confidence
-            if is_late_to_move:
-                momentum = signals.get("momentum", {})
-                order_flow = signals.get("order_flow", {})
-
-                # Calculate edge strength
-                raw_edge = edge if edge > 0.5 else (1.0 - edge)
-                edge_strength = (raw_edge - MIN_EDGE) / (1.0 - MIN_EDGE)  # 0-1 scale
-
-                # Check if momentum confirms the OPPOSITE direction (the direction price is moving)
-                opposite_momentum_confirms = False
-                if opposite_direction == "UP" and momentum.get("direction") == "UP":
-                    opposite_momentum_confirms = True
-                elif (
-                    opposite_direction == "DOWN" and momentum.get("direction") == "DOWN"
-                ):
-                    opposite_momentum_confirms = True
-
-                # Check if order flow confirms the OPPOSITE direction
-                opposite_flow_confirms = False
-                if (
-                    opposite_direction == "UP"
-                    and order_flow.get("buy_pressure", 0.5) > 0.6
-                ):
-                    opposite_flow_confirms = True
-                elif (
-                    opposite_direction == "DOWN"
-                    and order_flow.get("buy_pressure", 0.5) < 0.4
-                ):
-                    opposite_flow_confirms = True
-
-                # High confidence for direction switch requires strong signals
-                has_high_confidence_for_switch = (
-                    edge_strength > HIGH_CONFIDENCE_EDGE_THRESHOLD
-                    and opposite_momentum_confirms
-                    and opposite_flow_confirms
-                    and momentum.get("strength", 0) > HIGH_CONFIDENCE_MOMENTUM_THRESHOLD
-                )
-
-                if has_high_confidence_for_switch:
-                    # Switch to opposite direction
-                    log(
-                        f"[{symbol}] 🔄 DIRECTION SWITCH: {move_reason}, but high confidence for {opposite_direction} "
-                        f"(edge={edge_strength:.2f}, momentum={opposite_momentum_confirms}, flow={opposite_flow_confirms})"
-                    )
-
-                    # Update trade parameters to opposite direction
-                    if opposite_direction == "UP":
-                        token_id, side, price = up_id, "UP", p_up
-                    else:  # DOWN
-                        token_id, side, price = down_id, "DOWN", 1.0 - p_up
-                else:
-                    # No high confidence - skip trade entirely
-                    log(
-                        f"[{symbol}] ⚠️ SKIPPING: {move_reason} and insufficient confidence for direction switch "
-                        f"(edge={edge_strength:.2f}, opp_momentum={opposite_momentum_confirms}, opp_flow={opposite_flow_confirms})"
-                    )
-                    return
-            elif side == "DOWN" and price_move_pct > LATE_ENTRY_THRESHOLD_PCT:
-                is_late_to_move = True
-                move_reason = (
-                    f"price already up {price_move_pct:.2f}% (target was lower)"
-                )
-
-            # If we're late to the move, check if we have high confidence for a reversal/continuation
-            if is_late_to_move:
-                # Calculate confidence score from multiple signals
-                raw_edge = edge if edge > 0.5 else (1.0 - edge)
-                edge_strength = (raw_edge - MIN_EDGE) / (1.0 - MIN_EDGE)  # 0-1 scale
-
-                # Check momentum alignment
-                momentum = signals.get("momentum", {})
-                momentum_confirms = False
-                if side == "UP" and momentum.get("direction") == "UP":
-                    momentum_confirms = True
-                elif side == "DOWN" and momentum.get("direction") == "DOWN":
-                    momentum_confirms = True
-
-                # Check order flow alignment
-                order_flow = signals.get("order_flow", {})
-                flow_confirms = False
-                if side == "UP" and order_flow.get("buy_pressure", 0.5) > 0.6:
-                    flow_confirms = True
-                elif side == "DOWN" and order_flow.get("buy_pressure", 0.5) < 0.4:
-                    flow_confirms = True
-
-                # High confidence requires: strong edge + momentum confirmation + order flow confirmation
-                has_high_confidence = (
-                    edge_strength > HIGH_CONFIDENCE_EDGE_THRESHOLD
-                    and momentum_confirms
-                    and flow_confirms
-                    and momentum.get("strength", 0) > HIGH_CONFIDENCE_MOMENTUM_THRESHOLD
-                )
-
-                if not has_high_confidence:
-                    log(
-                        f"[{symbol}] ⚠️ SKIPPING: {move_reason} and insufficient confidence for reversal "
-                        f"(edge_strength={edge_strength:.2f}, momentum={momentum_confirms}, flow={flow_confirms})"
-                    )
-                    return
-                else:
-                    log(
-                        f"[{symbol}] ⚡ HIGH CONFIDENCE: {move_reason} but strong reversal signals detected "
-                        f"(edge_strength={edge_strength:.2f}, momentum_str={momentum.get('strength', 0):.2f})"
-                    )
 
     # Check filters
     adx_ok, adx_val = adx_allows_trade(symbol)
@@ -250,6 +106,15 @@ def trade_symbol(symbol: str, balance: float):
 
     log(f"[{symbol}] ✅ {core_summary} | status: ENTERING TRADE")
 
+    # Check portfolio exposure limit
+    total_exposure = get_total_exposure()
+    max_exposure_usd = balance * MAX_PORTFOLIO_EXPOSURE
+    if total_exposure + (balance * (BET_PERCENT / 100.0)) > max_exposure_usd:
+        log(
+            f"[{symbol}] ⛔ Exposure limit reached (${total_exposure:.2f} / ${max_exposure_usd:.2f}) - SKIPPING"
+        )
+        return
+
     if price <= 0:
         log(f"[{symbol}] ERROR: Invalid price {price}")
         return
@@ -261,9 +126,13 @@ def trade_symbol(symbol: str, balance: float):
     raw_edge = edge if edge > 0.5 else (1.0 - edge)
     edge_delta = max(0.0, raw_edge - MIN_EDGE)
     confidence_multiplier = 1.0 + (edge_delta * CONFIDENCE_SCALING_FACTOR)
-    confidence_multiplier = min(confidence_multiplier, 3.0)  # Cap at 3x
+
+    # Dynamic cap based on scaling factor (e.g., 5.0 factor -> 3x cap, 10.0 factor -> 6x cap)
+    max_cap = max(2.0, CONFIDENCE_SCALING_FACTOR * 0.6)
+    confidence_multiplier = min(confidence_multiplier, max_cap)
 
     target_bet = base_bet * confidence_multiplier
+
     size = round(target_bet / price, 6)
 
     MIN_SIZE = 5.0
