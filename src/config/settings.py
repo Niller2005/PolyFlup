@@ -21,6 +21,20 @@ ENABLE_TAKE_PROFIT = os.getenv("ENABLE_TAKE_PROFIT", "NO").upper() == "YES"
 TAKE_PROFIT_PERCENT = float(os.getenv("TAKE_PROFIT_PERCENT", "80.0"))
 ENABLE_REVERSAL = os.getenv("ENABLE_REVERSAL", "NO").upper() == "YES"
 
+# Late Entry Protection
+ENABLE_LATE_ENTRY_PROTECTION = (
+    os.getenv("ENABLE_LATE_ENTRY_PROTECTION", "YES").upper() == "YES"
+)
+LATE_ENTRY_THRESHOLD_PCT = float(
+    os.getenv("LATE_ENTRY_THRESHOLD_PCT", "0.5")
+)  # % price move threshold
+HIGH_CONFIDENCE_EDGE_THRESHOLD = float(
+    os.getenv("HIGH_CONFIDENCE_EDGE_THRESHOLD", "0.7")
+)  # Edge strength threshold (0-1)
+HIGH_CONFIDENCE_MOMENTUM_THRESHOLD = float(
+    os.getenv("HIGH_CONFIDENCE_MOMENTUM_THRESHOLD", "0.5")
+)  # Momentum strength threshold (0-1)
+
 # Position Scaling
 ENABLE_SCALE_IN = os.getenv("ENABLE_SCALE_IN", "YES").upper() == "YES"
 SCALE_IN_MIN_PRICE = float(
