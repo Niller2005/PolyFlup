@@ -59,64 +59,65 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
     """Handle order fill notification"""
     try:
         order_id = payload.get("order_id")
-        price = payload.get("price")
-        size = payload.get("size")
-        side = payload.get("side")
 
-        if order_id:
-            log(f"🔔 Order filled: {side} {size} @ ${price} | ID: {order_id[:10]}...")
+        if not order_id:
+            return  # Skip if no order ID
 
-            # Update database if this is a tracked order
-            conn = sqlite3.connect(DB_FILE, timeout=30.0)
-            c = conn.cursor()
+        # Update database if this is a tracked order
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        c = conn.cursor()
 
-            # Check if this is a buy order
-            c.execute(
-                "SELECT id, symbol, side FROM trades WHERE order_id = ? AND settled = 0",
-                (order_id,),
+        # Check if this is a buy order
+        c.execute(
+            "SELECT id, symbol, side, size FROM trades WHERE order_id = ? AND settled = 0",
+            (order_id,),
+        )
+        row = c.fetchone()
+
+        if row:
+            trade_id, symbol, trade_side, size = row
+            log(
+                f"🔔 Buy order filled: Trade #{trade_id} [{symbol}] {trade_side} ({size:.2f} shares)"
             )
-            row = c.fetchone()
-
-            if row:
-                trade_id, symbol, trade_side = row
-                log(
-                    f"  ✅ Buy order for trade #{trade_id} [{symbol}] {trade_side} filled"
-                )
-                c.execute(
-                    "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
-                    (trade_id,),
-                )
-                conn.commit()
-
-            # Check if this is a limit sell order (exit plan)
             c.execute(
-                "SELECT id, symbol, side FROM trades WHERE limit_sell_order_id = ? AND settled = 0",
-                (order_id,),
+                "UPDATE trades SET order_status = 'FILLED' WHERE id = ?", (trade_id,)
             )
-            row = c.fetchone()
-
-            if row:
-                trade_id, symbol, trade_side = row
-                log(
-                    f"  🎯 Exit plan filled for trade #{trade_id} [{symbol}] {trade_side}"
-                )
-                # Position manager will handle settlement
-
-            # Check if this is a scale-in order
-            c.execute(
-                "SELECT id, symbol, side FROM trades WHERE scale_in_order_id = ? AND settled = 0",
-                (order_id,),
-            )
-            row = c.fetchone()
-
-            if row:
-                trade_id, symbol, trade_side = row
-                log(
-                    f"  📈 Scale-in filled for trade #{trade_id} [{symbol}] {trade_side}"
-                )
-                # Position manager will handle position update
-
+            conn.commit()
             conn.close()
+            return  # Found and logged, done
+
+        # Check if this is a limit sell order (exit plan)
+        c.execute(
+            "SELECT id, symbol, side, size FROM trades WHERE limit_sell_order_id = ? AND settled = 0",
+            (order_id,),
+        )
+        row = c.fetchone()
+
+        if row:
+            trade_id, symbol, trade_side, size = row
+            log(
+                f"🔔 Exit plan filled: Trade #{trade_id} [{symbol}] {trade_side} ({size:.2f} shares @ $0.99)"
+            )
+            # Position manager will handle settlement
+            conn.close()
+            return  # Found and logged, done
+
+        # Check if this is a scale-in order
+        c.execute(
+            "SELECT id, symbol, side FROM trades WHERE scale_in_order_id = ? AND settled = 0",
+            (order_id,),
+        )
+        row = c.fetchone()
+
+        if row:
+            trade_id, symbol, trade_side = row
+            log(f"🔔 Scale-in filled: Trade #{trade_id} [{symbol}] {trade_side}")
+            # Position manager will handle position update
+            conn.close()
+            return  # Found and logged, done
+
+        # Order not tracked in our database - skip logging (likely old or other trader's order)
+        conn.close()
 
     except Exception as e:
         log(f"⚠️ Error handling order fill notification: {e}")
@@ -127,25 +128,26 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
     try:
         order_id = payload.get("order_id")
 
-        if order_id:
-            log(f"🔔 Order cancelled: {order_id[:10]}...")
+        if not order_id:
+            return
 
-            # Update database
-            conn = sqlite3.connect(DB_FILE, timeout=30.0)
-            c = conn.cursor()
+        # Update database
+        conn = sqlite3.connect(DB_FILE, timeout=30.0)
+        c = conn.cursor()
 
-            # Check if this is a tracked order
-            c.execute(
-                "SELECT id, symbol FROM trades WHERE order_id = ? AND settled = 0",
-                (order_id,),
-            )
-            row = c.fetchone()
+        # Check if this is a tracked order
+        c.execute(
+            "SELECT id, symbol, side FROM trades WHERE order_id = ? AND settled = 0",
+            (order_id,),
+        )
+        row = c.fetchone()
 
-            if row:
-                trade_id, symbol = row
-                log(f"  ℹ️ Buy order for trade #{trade_id} [{symbol}] was cancelled")
+        if row:
+            trade_id, symbol, trade_side = row
+            log(f"🔔 Order cancelled: Trade #{trade_id} [{symbol}] {trade_side}")
 
-            conn.close()
+        # Only log if it's a tracked order, otherwise skip
+        conn.close()
 
     except Exception as e:
         log(f"⚠️ Error handling order cancellation notification: {e}")
@@ -157,8 +159,9 @@ def _handle_market_resolved(payload: dict, timestamp: int) -> None:
         market_id = payload.get("market_id") or payload.get("condition_id")
         outcome = payload.get("outcome")
 
-        if market_id:
-            log(f"🔔 Market resolved: {market_id[:10]}... → Outcome: {outcome}")
+        # Only log if we have useful information
+        if market_id and outcome:
+            log(f"🔔 Market resolved: {market_id[:10]}... → {outcome}")
             # Settlement will handle this automatically
 
     except Exception as e:
