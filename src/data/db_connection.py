@@ -11,5 +11,9 @@ def db_connection():
     conn = sqlite3.connect(DB_FILE, timeout=30.0)
     try:
         yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()

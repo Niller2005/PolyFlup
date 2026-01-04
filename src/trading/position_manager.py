@@ -61,7 +61,7 @@ def get_exit_plan_stats():
                 AVG(CASE WHEN final_outcome = 'RESOLVED' AND exited_early = 0 THEN roi_pct END) as avg_natural_roi
             FROM trades 
             WHERE settled = 1 
-            AND datetime(created_at) >= datetime('now', '-7 days')
+            AND datetime(timestamp) >= datetime('now', '-7 days')
         """)
 
         stats = c.fetchone()
