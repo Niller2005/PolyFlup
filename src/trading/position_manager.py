@@ -191,6 +191,7 @@ def _get_position_pnl(token_id: str, entry_price: float, size: float) -> Optiona
 def _check_stop_loss(
     symbol: str,
     trade_id: int,
+    token_id: str,
     side: str,
     entry_price: float,
     size: float,
@@ -248,7 +249,7 @@ def _check_stop_loss(
             )
             time.sleep(2)
 
-    sell_result = sell_position(symbol.split("-")[0], size, current_price)
+    sell_result = sell_position(token_id, size, current_price)
 
     if not sell_result["success"]:
         return False
@@ -453,7 +454,7 @@ def _check_take_profit(
             )
             time.sleep(2)
 
-    sell_result = sell_position(token_id.split("-")[0], size, current_price)
+    sell_result = sell_position(token_id, size, current_price)
 
     if not sell_result["success"]:
         return False
@@ -610,20 +611,21 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             # PRIORITY #1: STOP LOSS (checked FIRST, before everything else)
             # ============================================================
             closed = _check_stop_loss(
-                symbol,
-                trade_id,
-                side,
-                entry_price,
-                size,
-                pnl_pct,
-                pnl_usd,
-                current_price,
-                target_price,
-                limit_sell_order_id,
-                is_reversal,
-                c,
-                conn,
-                now,
+                symbol=symbol,
+                trade_id=trade_id,
+                token_id=token_id,
+                side=side,
+                entry_price=entry_price,
+                size=size,
+                pnl_pct=pnl_pct,
+                pnl_usd=pnl_usd,
+                current_price=current_price,
+                target_price=target_price,
+                limit_sell_order_id=limit_sell_order_id,
+                is_reversal=is_reversal,
+                c=c,
+                conn=conn,
+                now=now,
             )
             if closed:
                 continue
@@ -636,7 +638,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             if isinstance(window_end, str):
                 window_end_dt = datetime.fromisoformat(window_end)
             else:
-                window_end_dt = window_end  # Fallback if already a datetime object
+                window_end_dt = window_end
 
             time_left_seconds = (window_end_dt - now).total_seconds()
 
@@ -644,16 +646,16 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             # EXIT PLAN: Check and manage limit sell orders
             # ============================================================
             _check_exit_plan(
-                symbol,
-                trade_id,
-                token_id,
-                size,
-                current_buy_status,
-                limit_sell_order_id,
-                timestamp,
-                c,
-                conn,
-                now,
+                symbol=symbol,
+                trade_id=trade_id,
+                token_id=token_id,
+                size=size,
+                buy_order_status=current_buy_status,
+                limit_sell_order_id=limit_sell_order_id,
+                timestamp=timestamp,
+                c=c,
+                conn=conn,
+                now=now,
             )
             c.execute(
                 "SELECT limit_sell_order_id FROM trades WHERE id = ?", (trade_id,)
@@ -666,17 +668,17 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             # SCALE IN: Check if conditions are met
             # ============================================================
             _check_scale_in(
-                symbol,
-                trade_id,
-                token_id,
-                entry_price,
-                size,
-                bet_usd,
-                scaled_in,
-                time_left_seconds,
-                current_price,
-                c,
-                conn,
+                symbol=symbol,
+                trade_id=trade_id,
+                token_id=token_id,
+                entry_price=entry_price,
+                size=size,
+                bet_usd=bet_usd,
+                scaled_in=scaled_in,
+                time_left_seconds=time_left_seconds,
+                current_price=current_price,
+                c=c,
+                conn=conn,
             )
 
             # Handle unfilled order cancellation (separate from stop loss)
@@ -690,8 +692,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                 )
                 cancel_result = cancel_order(buy_order_id)
 
-                # Always settle the trade, regardless of cancellation success
-                # The order may already be cancelled, expired, or not found
                 c.execute(
                     "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_UNFILLED' WHERE id = ?",
                     (trade_id,),
@@ -710,18 +710,18 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             # TAKE PROFIT: Check if profit target is hit
             # ============================================================
             closed = _check_take_profit(
-                symbol,
-                trade_id,
-                token_id,
-                side,
-                size,
-                pnl_pct,
-                pnl_usd,
-                current_price,
-                limit_sell_order_id,
-                c,
-                conn,
-                now,
+                symbol=symbol,
+                trade_id=trade_id,
+                token_id=token_id,
+                side=side,
+                size=size,
+                pnl_pct=pnl_pct,
+                pnl_usd=pnl_usd,
+                current_price=current_price,
+                limit_sell_order_id=limit_sell_order_id,
+                c=c,
+                conn=conn,
+                now=now,
             )
             if closed:
                 continue
