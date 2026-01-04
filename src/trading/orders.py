@@ -852,7 +852,9 @@ def sell_position(
                 time.sleep(retry_delays[attempt - 1])
 
             # Sell at slightly below current market price for quick fill
+            # Round to minimum tick size (0.01) to pass validation
             sell_price = max(0.01, current_price - 0.01)
+            sell_price = round(sell_price, 2)
 
             # Use the enhanced place_limit_order with FOK for market sell
             result = place_limit_order(

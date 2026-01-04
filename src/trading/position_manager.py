@@ -282,6 +282,8 @@ def _check_stop_loss(
         if up_id and down_id:
             opposite_token = down_id if side == "UP" else up_id
             opposite_price = 1.0 - current_price
+            # Round to minimum tick size (0.01)
+            opposite_price = round(max(0.01, min(0.99, opposite_price)), 2)
 
             # Use enhanced place_order with better error handling
             reverse_result = place_order(opposite_token, opposite_price, size)
@@ -477,10 +479,13 @@ def _check_scale_in(
     )
 
     additional_size = size * SCALE_IN_MULTIPLIER
-    additional_bet = additional_size * current_price
+
+    # Round price to minimum tick size (0.01) before placing order
+    scale_price = round(max(0.01, min(0.99, current_price)), 2)
+    additional_bet = additional_size * scale_price
 
     # Use enhanced place_order with validation and retry logic
-    scale_result = place_order(token_id, current_price, additional_size)
+    scale_result = place_order(token_id, scale_price, additional_size)
 
     if scale_result["success"]:
         # Save the order ID so we can monitor it
@@ -488,7 +493,7 @@ def _check_scale_in(
         order_status = scale_result["status"]
 
         log(
-            f"✅ SCALE IN order placed for trade #{trade_id}: {additional_size:.2f} shares @ ${current_price:.2f} (status: {order_status})"
+            f"✅ SCALE IN order placed for trade #{trade_id}: {additional_size:.2f} shares @ ${scale_price:.2f} (status: {order_status})"
         )
 
         # If order filled immediately, update position now
@@ -508,7 +513,7 @@ def _check_scale_in(
             log(f"   Size: {size:.2f} → {new_total_size:.2f} (+{additional_size:.2f})")
             log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
             send_discord(
-                f"📈 **SCALED IN** [{symbol}] +${additional_bet:.2f} @ ${current_price:.2f} ({time_left_seconds:.0f}s left)"
+                f"📈 **SCALED IN** [{symbol}] +${additional_bet:.2f} @ ${scale_price:.2f} ({time_left_seconds:.0f}s left)"
             )
         else:
             # Order is live/pending, save ID to monitor it

@@ -217,7 +217,9 @@ def _prepare_trade_params(symbol: str, balance: float) -> Optional[dict]:
         log(f"[{symbol}] ERROR: Invalid price {price}")
         return
 
+    # Clamp and round to minimum tick size (0.01)
     price = max(0.01, min(0.99, price))
+    price = round(price, 2)
 
     size, bet_usd_effective = _calculate_bet_size(balance, price, sizing_confidence)
 
