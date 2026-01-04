@@ -856,14 +856,17 @@ def sell_position(
             sell_price = max(0.01, current_price - 0.01)
             sell_price = round(sell_price, 2)
 
-            # Use the enhanced place_limit_order with FOK for market sell
+            # Try FAK first (Fill-And-Kill) - fills partial and cancels rest
+            # If that fails, fallback to GTC
+            order_type_to_use = "FAK" if attempt == 0 else "GTC"
+
             result = place_limit_order(
                 token_id=token_id,
                 price=sell_price,
                 size=size,
                 side=SELL,
                 silent_on_balance_error=(attempt < max_retries - 1),
-                order_type="FOK",  # Fill-or-kill for aggressive market sell
+                order_type=order_type_to_use,
             )
 
             if result["success"]:
@@ -877,8 +880,18 @@ def sell_position(
 
             # Check if error is retryable
             error_str = result.get("error", "")
+
             if "balance" in error_str.lower() and attempt < max_retries - 1:
                 log(f"⏳ Balance for sell not yet available, will retry...")
+                continue
+
+            # FOK failed - will retry with GTC on next attempt
+            if (
+                "FOK" in error_str
+                and "fully filled" in error_str.lower()
+                and attempt < max_retries - 1
+            ):
+                log(f"⏳ FOK order couldn't fill completely, will retry with GTC...")
                 continue
 
             # Non-retryable error

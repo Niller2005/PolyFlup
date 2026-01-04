@@ -871,6 +871,11 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     should_cancel = True
                     cancel_reason = f"Order unfilled for {position_age_seconds:.0f}s (timeout: {UNFILLED_TIMEOUT_SECONDS}s)"
 
+                    if verbose:
+                        log(
+                            f"⏰ [{symbol}] Trade #{trade_id} timeout: {position_age_seconds:.0f}s old, P&L: {pnl_pct:+.1f}%"
+                        )
+
                     # Check if we're on the winning side with good P&L
                     if UNFILLED_RETRY_ON_WINNING_SIDE and pnl_pct > 10.0:
                         current_spot = get_current_spot_price(symbol)
