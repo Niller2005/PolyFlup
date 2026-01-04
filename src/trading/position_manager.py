@@ -340,6 +340,57 @@ def _check_stop_loss(
     return True
 
 
+def _update_exit_plan_after_scale_in(
+    symbol: str,
+    trade_id: int,
+    token_id: str,
+    new_total_size: float,
+    limit_sell_order_id: Optional[str],
+    c: sqlite3.Cursor,
+    conn: sqlite3.Connection,
+) -> None:
+    """Update exit plan limit order after position size changes from scale-in"""
+    if not limit_sell_order_id or not ENABLE_EXIT_PLAN:
+        return
+
+    log(f"   🔄 Updating exit plan order (size changed to {new_total_size:.2f})")
+
+    # Cancel old exit plan order
+    cancel_result = cancel_order(limit_sell_order_id)
+
+    if cancel_result:
+        # Place new exit plan order with updated size
+        new_exit_order = place_limit_order(
+            token_id=token_id,
+            price=EXIT_PRICE_TARGET,
+            size=new_total_size,
+            side=SELL,
+            silent_on_balance_error=True,
+            order_type="GTC",
+        )
+
+        if new_exit_order["success"]:
+            new_order_id = new_exit_order["order_id"]
+            log(
+                f"   ✅ Updated exit plan: {new_total_size:.2f} shares @ {EXIT_PRICE_TARGET} | ID: {new_order_id[:10]}..."
+            )
+            c.execute(
+                "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                (new_order_id, trade_id),
+            )
+            conn.commit()
+        else:
+            log(f"   ⚠️ Failed to update exit plan: {new_exit_order.get('error')}")
+            # Clear old order ID since we cancelled it
+            c.execute(
+                "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                (trade_id,),
+            )
+            conn.commit()
+    else:
+        log(f"   ⚠️ Failed to cancel old exit plan order")
+
+
 def _check_exit_plan(
     symbol: str,
     trade_id: int,
@@ -440,6 +491,14 @@ def _check_scale_in(
                         new_total_bet = bet_usd + additional_bet
                         new_avg_price = new_total_bet / new_total_size
 
+                        # Get current limit_sell_order_id before updating
+                        c.execute(
+                            "SELECT limit_sell_order_id FROM trades WHERE id = ?",
+                            (trade_id,),
+                        )
+                        row = c.fetchone()
+                        current_limit_sell_id = row[0] if row else None
+
                         c.execute(
                             """UPDATE trades
                                SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL
@@ -452,6 +511,18 @@ def _check_scale_in(
                             f"   Size: {size:.2f} → {new_total_size:.2f} (+{size_matched:.2f})"
                         )
                         log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
+
+                        # CRITICAL: Update exit plan order with new size
+                        _update_exit_plan_after_scale_in(
+                            symbol=symbol,
+                            trade_id=trade_id,
+                            token_id=token_id,
+                            new_total_size=new_total_size,
+                            limit_sell_order_id=current_limit_sell_id,
+                            c=c,
+                            conn=conn,
+                        )
+
                         send_discord(
                             f"📈 **SCALE IN FILLED** [{symbol}] +${additional_bet:.2f} @ ${scale_price:.2f}"
                         )
@@ -527,6 +598,24 @@ def _check_scale_in(
 
             log(f"   Size: {size:.2f} → {new_total_size:.2f} (+{additional_size:.2f})")
             log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
+
+            # CRITICAL: Check if exit plan order exists and update it
+            c.execute(
+                "SELECT limit_sell_order_id FROM trades WHERE id = ?", (trade_id,)
+            )
+            row = c.fetchone()
+            current_limit_sell_id = row[0] if row else None
+
+            _update_exit_plan_after_scale_in(
+                symbol=symbol,
+                trade_id=trade_id,
+                token_id=token_id,
+                new_total_size=new_total_size,
+                limit_sell_order_id=current_limit_sell_id,
+                c=c,
+                conn=conn,
+            )
+
             send_discord(
                 f"📈 **SCALED IN** [{symbol}] +${additional_bet:.2f} @ ${scale_price:.2f} ({time_left_seconds:.0f}s left)"
             )
