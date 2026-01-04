@@ -73,13 +73,20 @@ USE_TURSO=YES
 TURSO_DATABASE_URL=libsql://polyastra-prod-your-org.turso.io
 TURSO_AUTH_TOKEN=eyJhbG...your-token-here
 
-# For Local Development (use branch or local SQLite)
-# Option A: Use Turso development branch
+# For Local Development - Choose one:
+
+# Option A: Embedded Replica (RECOMMENDED - fast local reads with remote sync)
+USE_EMBEDDED_REPLICA=YES
+TURSO_DATABASE_URL=libsql://polyastra-prod-your-org.turso.io
+TURSO_AUTH_TOKEN=eyJhbG...your-token-here
+EMBEDDED_REPLICA_FILE=trades_replica.db
+
+# Option B: Use Turso development branch (direct remote connection)
 USE_TURSO=YES
 TURSO_DATABASE_URL=libsql://polyastra-dev-your-org.turso.io
 TURSO_AUTH_TOKEN=eyJhbG...your-dev-token-here
 
-# Option B: Use local SQLite (default)
+# Option C: Use local SQLite only (no sync)
 USE_TURSO=NO
 ```
 
@@ -91,7 +98,7 @@ pip install -r requirements.txt
 uv pip install -r requirements.txt
 ```
 
-This will install `libsql-client>=0.3.0`.
+This will install `libsql>=0.5.0`.
 
 ### 7. Run Migrations
 
@@ -136,10 +143,25 @@ TURSO_AUTH_TOKEN=...
 # 5. Deploy to production
 ```
 
-### Local Development with SQLite
+### Local Development Options
 
+**Option 1: Embedded Replica (RECOMMENDED)**
 ```bash
-# Use local SQLite for development
+# Best for local dev - fast local reads, syncs with production
+USE_EMBEDDED_REPLICA=YES
+TURSO_DATABASE_URL=libsql://polyastra-prod...
+TURSO_AUTH_TOKEN=...
+
+# Benefits:
+# - Microsecond-level local reads (no network latency)
+# - Automatic sync with remote Turso database
+# - Read-your-writes guarantee
+# - Works offline with cached data
+```
+
+**Option 2: Local SQLite Only**
+```bash
+# Use local SQLite for development (no sync)
 USE_TURSO=NO
 
 # Deploy to production uses Turso
@@ -147,6 +169,14 @@ USE_TURSO=YES
 TURSO_DATABASE_URL=...
 TURSO_AUTH_TOKEN=...
 ```
+
+**Manual Sync for Embedded Replica**
+```bash
+# Force a manual sync with remote database
+python sync_replica.py
+```
+
+See [EMBEDDED_REPLICAS.md](./EMBEDDED_REPLICAS.md) for detailed setup and usage.
 
 ## Migrating Existing Data
 

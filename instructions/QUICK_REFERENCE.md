@@ -169,14 +169,42 @@ server_time = get_server_time()
 
 ---
 
-## Database Migrations
+## Database
 
-### Check Migration Status
+### Embedded Replicas (Local Dev)
+```bash
+# Setup - best for local development
+pip install libsql
+
+# Configure .env
+USE_EMBEDDED_REPLICA=YES
+TURSO_DATABASE_URL=libsql://your-db.turso.io
+TURSO_AUTH_TOKEN=your_token
+EMBEDDED_REPLICA_FILE=trades_replica.db
+
+# Run bot (auto-syncs with Turso)
+python polyastra.py
+
+# Manual sync anytime
+python sync_replica.py
+```
+
+**Benefits:**
+- ⚡ Fast local reads (microsecond latency)
+- 🔄 Auto-sync with remote Turso database
+- 📖 Read-your-writes guarantee
+- 💾 Works offline with cached data
+
+See [EMBEDDED_REPLICAS.md](./EMBEDDED_REPLICAS.md) for details.
+
+### Database Migrations
+
+#### Check Migration Status
 ```bash
 python check_migration_status.py
 ```
 
-### Add New Migration
+#### Add New Migration
 1. Create function in `src/data/migrations.py`:
 ```python
 def migration_003_add_my_column(conn: sqlite3.Connection) -> None:

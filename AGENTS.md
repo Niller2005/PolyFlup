@@ -206,6 +206,13 @@ Key settings (see `.env.example`):
 - `ENABLE_REVERSAL`: YES/NO
 - `MARKETS`: Comma-separated symbols (e.g., "BTC,ETH,SOL,XRP")
 
+### Database Configuration
+- `USE_TURSO`: YES/NO (direct remote Turso connection)
+- `USE_EMBEDDED_REPLICA`: YES/NO (local replica synced with Turso - **recommended for local dev**)
+- `TURSO_DATABASE_URL`: Turso database URL
+- `TURSO_AUTH_TOKEN`: Turso authentication token
+- `EMBEDDED_REPLICA_FILE`: Local replica file path (default: trades_replica.db)
+
 ## Database Schema
 
 Main table: `trades`

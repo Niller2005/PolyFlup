@@ -1,7 +1,7 @@
 ---
 description: Keep instructions up-to-date
 mode: subagent
-model: opencode/kimi-k2
+model: opencode/gemini-3-flash
 ---
 
 ## Overview
