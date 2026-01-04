@@ -23,5 +23,5 @@ pandas>=2.0.0
 
 # Database
 # sqlite3 is built-in for local dev
-# Turso (libSQL) for production
-libsql-client>=0.3.0
+# Turso (libSQL) for production and embedded replicas
+libsql>=0.5.0

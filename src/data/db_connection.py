@@ -1,101 +1,86 @@
-"""Database connection context manager - supports both SQLite and Turso"""
+"""Database connection context manager - supports SQLite, Turso, and Embedded Replicas"""
 
 import sqlite3
 from contextlib import contextmanager
-from src.config.settings import DB_FILE, USE_TURSO, TURSO_DATABASE_URL, TURSO_AUTH_TOKEN
-
-
-class TursoConnection:
-    """Wrapper to make Turso client compatible with sqlite3 interface"""
-
-    def __init__(self, client):
-        self.client = client
-        self._cursor = None
-
-    def cursor(self):
-        """Return a cursor-like object"""
-        if self._cursor is None:
-            self._cursor = TursoCursor(self.client)
-        return self._cursor
-
-    def commit(self):
-        """Commit is automatic in Turso, but keep for compatibility"""
-        pass
-
-    def rollback(self):
-        """Rollback - Turso doesn't support transactions the same way"""
-        # Note: Turso auto-commits each statement
-        # For complex transactions, we'd need to use BEGIN/COMMIT explicitly
-        pass
-
-    def close(self):
-        """Close the connection"""
-        self.client.close()
-
-
-class TursoCursor:
-    """Cursor-like wrapper for Turso client"""
-
-    def __init__(self, client):
-        self.client = client
-        self.lastrowid = None
-        self._result = None
-
-    def execute(self, query, params=None):
-        """Execute a query"""
-        try:
-            if params:
-                # Convert ? placeholders to Turso format if needed
-                result = self.client.execute(query, params)
-            else:
-                result = self.client.execute(query)
-
-            # Store result for fetchone/fetchall
-            self._result = result
-
-            # Extract lastrowid if it's an INSERT
-            if result and hasattr(result, "last_insert_rowid"):
-                self.lastrowid = result.last_insert_rowid
-            elif (
-                result
-                and hasattr(result, "rows")
-                and query.strip().upper().startswith("INSERT")
-            ):
-                # For Turso, we might need to get the last inserted id differently
-                self.lastrowid = getattr(result, "last_insert_rowid", None)
-
-        except Exception as e:
-            # Re-raise with more context
-            raise Exception(f"Query failed: {query[:100]}... Error: {e}")
-
-    def fetchone(self):
-        """Fetch one row"""
-        if self._result and hasattr(self._result, "rows") and self._result.rows:
-            return self._result.rows[0] if self._result.rows else None
-        return None
-
-    def fetchall(self):
-        """Fetch all rows"""
-        if self._result and hasattr(self._result, "rows"):
-            return self._result.rows
-        return []
+from src.config.settings import (
+    DB_FILE,
+    USE_TURSO,
+    TURSO_DATABASE_URL,
+    TURSO_AUTH_TOKEN,
+    USE_EMBEDDED_REPLICA,
+    EMBEDDED_REPLICA_FILE,
+)
+from src.utils.logger import log
 
 
 @contextmanager
 def db_connection():
     """
     Context manager for database connections with automatic cleanup.
-    Supports both local SQLite (for dev) and Turso (for production).
+    Supports three modes:
+    1. Local SQLite (default for dev)
+    2. Turso (remote database for production)
+    3. Embedded Replica (local replica synced with remote Turso - RECOMMENDED for local dev)
 
-    Set USE_TURSO=YES in .env to use Turso.
+    Configuration:
+    - USE_TURSO=YES: Connect directly to remote Turso database
+    - USE_EMBEDDED_REPLICA=YES: Use local replica that syncs with Turso (recommended for dev)
+    - Neither: Use local SQLite file
+
+    Usage:
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM trades")
+            results = cursor.fetchall()
     """
-    if USE_TURSO:
-        # Use Turso
+    if USE_EMBEDDED_REPLICA:
+        # Use Embedded Replica (local file synced with remote Turso)
         try:
-            import libsql_client
+            import libsql
         except ImportError:
             raise ImportError(
-                "libsql-client is required for Turso. Install with: pip install libsql-client"
+                "libsql is required for Embedded Replicas. Install with: pip install libsql"
+            )
+
+        if not TURSO_DATABASE_URL or not TURSO_AUTH_TOKEN:
+            raise ValueError(
+                "TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set when USE_EMBEDDED_REPLICA=YES"
+            )
+
+        log(f"📡 Using embedded replica: {EMBEDDED_REPLICA_FILE}")
+
+        # Connect with embedded replica configuration
+        # The libsql Python SDK uses .connect() with sync_url parameter
+        conn = libsql.connect(
+            EMBEDDED_REPLICA_FILE,  # Local SQLite file
+            sync_url=TURSO_DATABASE_URL,  # Remote Turso database to sync with
+            auth_token=TURSO_AUTH_TOKEN,
+        )
+
+        try:
+            # Sync on connection to get latest data
+            log("🔄 Syncing with remote database...")
+            conn.sync()
+            log("✅ Sync completed")
+
+            yield conn
+            conn.commit()
+
+            # Sync after commit to push changes to remote
+            conn.sync()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    elif USE_TURSO:
+        # Use Turso (direct remote connection)
+        try:
+            import libsql
+        except ImportError:
+            raise ImportError(
+                "libsql is required for Turso. Install with: pip install libsql"
             )
 
         if not TURSO_DATABASE_URL or not TURSO_AUTH_TOKEN:
@@ -103,10 +88,14 @@ def db_connection():
                 "TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must be set when USE_TURSO=YES"
             )
 
-        client = libsql_client.create_client(
-            url=TURSO_DATABASE_URL, auth_token=TURSO_AUTH_TOKEN
+        log(f"📡 Connecting to remote Turso database")
+
+        # For remote-only connection, use the URL directly
+        # Note: libsql.connect() with just URL creates a remote connection
+        conn = libsql.connect(
+            TURSO_DATABASE_URL,
+            auth_token=TURSO_AUTH_TOKEN,
         )
-        conn = TursoConnection(client)
 
         try:
             yield conn

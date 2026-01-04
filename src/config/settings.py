@@ -120,6 +120,12 @@ USE_TURSO = os.getenv("USE_TURSO", "NO").upper() == "YES"
 TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "")
 TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
 
+# Embedded Replica Configuration (for local dev with Turso sync)
+USE_EMBEDDED_REPLICA = os.getenv("USE_EMBEDDED_REPLICA", "NO").upper() == "YES"
+EMBEDDED_REPLICA_FILE = os.getenv(
+    "EMBEDDED_REPLICA_FILE", f"{BASE_DIR}/trades_replica.db"
+)
+
 # API Endpoints
 CLOB_HOST = "https://clob.polymarket.com"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
