@@ -98,7 +98,9 @@ pip install -r requirements.txt
 uv pip install -r requirements.txt
 ```
 
-This will install `libsql>=0.5.0`.
+This will install `libsql>=0.1.11` which is required for Turso embedded replica support.
+
+**Note for Docker:** The Dockerfile automatically installs Rust build tools required to compile `libsql` from source.
 
 ### 7. Run Migrations
 
@@ -147,16 +149,19 @@ TURSO_AUTH_TOKEN=...
 
 **Option 1: Embedded Replica (RECOMMENDED)**
 ```bash
-# Best for local dev - fast local reads, syncs with production
+# Best for local dev and production - fast local reads, syncs with remote
+USE_TURSO=NO
 USE_EMBEDDED_REPLICA=YES
 TURSO_DATABASE_URL=libsql://polyastra-prod...
 TURSO_AUTH_TOKEN=...
+EMBEDDED_REPLICA_FILE=trades_replica.db
 
 # Benefits:
 # - Microsecond-level local reads (no network latency)
-# - Automatic sync with remote Turso database
-# - Read-your-writes guarantee
+# - Automatic sync every 30 seconds
+# - Syncs immediately after writes
 # - Works offline with cached data
+# - Dramatically reduces network overhead for high-frequency reads
 ```
 
 **Option 2: Local SQLite Only**
@@ -274,10 +279,19 @@ python polyastra.py  # Migrations will run automatically
 
 ### Performance Issues
 
-Turso is optimized for reads. If you have many writes:
+**For Direct Turso Connection:**
+If experiencing high latency, switch to embedded replica mode for better performance.
+
+**For Embedded Replica:**
+- Reads are instant (local SQLite file)
+- Syncs happen every 30 seconds for reads
+- Writes sync immediately to remote
+- No performance issues expected
+
+**General Tips:**
 1. Use batch operations where possible
-2. Consider using `PRAGMA journal_mode=WAL` (enabled by default)
-3. Check your region: `turso db locations`
+2. Check your region: `turso db locations`
+3. **Recommended:** Use embedded replica mode for production
 
 ## Limits (Free Tier)
 
@@ -371,13 +385,21 @@ services:
 
 All database code is already compatible with Turso! The migration involved:
 
-1. **Updated `requirements.txt`**: Added `libsql-client>=0.3.0`
-2. **Updated `settings.py`**: Added `USE_TURSO`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`
-3. **Updated `db_connection.py`**: Created wrapper to support both SQLite and Turso
-4. **Updated migrations**: Use generic connection type instead of `sqlite3.Connection`
-5. **No changes** to SQL queries - 100% SQLite compatible!
+1. **Updated `requirements.txt`**: Added `libsql>=0.1.11` for embedded replica support
+2. **Updated `pyproject.toml`**: Added `libsql>=0.1.11` for uv package manager
+3. **Updated `settings.py`**: Added `USE_TURSO`, `USE_EMBEDDED_REPLICA`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`
+4. **Updated `db_connection.py`**: 
+   - Created context manager supporting SQLite, Turso, and Embedded Replicas
+   - Automatic 30-second sync interval for reads
+   - Immediate sync after writes
+   - Proper transaction management
+5. **Updated `Dockerfile`**: Added Rust build tools required for compiling `libsql`
+6. **Updated `database.py`**: Skip `PRAGMA journal_mode=WAL` for Turso (not supported)
+7. **Updated migrations**: Use generic connection type instead of `sqlite3.Connection`
+8. **Removed manual commits**: All `conn.commit()` calls removed - handled by context manager
+9. **No changes** to SQL queries - 100% SQLite compatible!
 
-The bot automatically switches between SQLite and Turso based on `USE_TURSO` environment variable.
+The bot automatically switches between SQLite, Turso, and Embedded Replicas based on environment variables.
 
 ---
 

@@ -214,9 +214,15 @@ def _check_stop_loss(
     c: Any,
     conn: Any,
     now: datetime,
+    buy_order_status: str,
 ) -> bool:
     """Check and execute stop loss if triggered, returns True if position closed"""
+    # CRITICAL FIX: Don't attempt stop loss if buy order not filled yet
     if not ENABLE_STOP_LOSS or pnl_pct > -STOP_LOSS_PERCENT or size == 0:
+        return False
+
+    # CRITICAL FIX: Only sell if we actually own the tokens (buy order filled)
+    if buy_order_status not in ["FILLED", "MATCHED", "matched"]:
         return False
 
     stop_threshold = -STOP_LOSS_PERCENT
@@ -398,7 +404,12 @@ def _check_exit_plan(
     verbose: bool = False,
 ) -> None:
     """Check and manage exit plan limit orders"""
-    if not ENABLE_EXIT_PLAN or buy_order_status != "FILLED" or size == 0:
+    # CRITICAL FIX: MATCHED orders are filled and ready to sell
+    if (
+        not ENABLE_EXIT_PLAN
+        or buy_order_status not in ["FILLED", "MATCHED", "matched"]
+        or size == 0
+    ):
         return
 
     position_age_seconds = (now - datetime.fromisoformat(timestamp)).total_seconds()
@@ -635,9 +646,14 @@ def _check_take_profit(
     c: Any,
     conn: Any,
     now: datetime,
+    buy_order_status: str,
 ) -> bool:
     """Check and execute take profit if triggered, returns True if position closed"""
     if not ENABLE_TAKE_PROFIT or pnl_pct < TAKE_PROFIT_PERCENT:
+        return False
+
+    # CRITICAL FIX: Only sell if we actually own the tokens (buy order filled)
+    if buy_order_status not in ["FILLED", "MATCHED", "matched"]:
         return False
 
     log(f"🎯 TAKE PROFIT triggered for trade #{trade_id}: {pnl_pct:.1f}% gain")
@@ -870,6 +886,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                 c=c,
                 conn=conn,
                 now=now,
+                buy_order_status=current_buy_status,
             )
             if closed:
                 continue
@@ -1114,6 +1131,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                 c=c,
                 conn=conn,
                 now=now,
+                buy_order_status=current_buy_status,
             )
             if closed:
                 continue
