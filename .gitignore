@@ -8,3 +8,6 @@ logs/
 trades.db
 .DS_Store
 public/
+deploy_prod.sh
+download_prod_db.bat
+download_prod_db.sh
