@@ -28,6 +28,12 @@ CANCEL_UNFILLED_ORDERS = os.getenv("CANCEL_UNFILLED_ORDERS", "NO").upper() == "Y
 UNFILLED_CANCEL_THRESHOLD = float(
     os.getenv("UNFILLED_CANCEL_THRESHOLD", "15.0")
 )  # % price move to cancel unfilled orders
+UNFILLED_TIMEOUT_SECONDS = int(
+    os.getenv("UNFILLED_TIMEOUT_SECONDS", "300")
+)  # Cancel unfilled orders after 5 minutes (300s)
+UNFILLED_RETRY_ON_WINNING_SIDE = (
+    os.getenv("UNFILLED_RETRY_ON_WINNING_SIDE", "YES").upper() == "YES"
+)  # Retry on winning side if unfilled
 
 
 # Position Scaling

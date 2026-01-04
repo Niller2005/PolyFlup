@@ -19,6 +19,8 @@ from src.config.settings import (
     SCALE_IN_MULTIPLIER,
     CANCEL_UNFILLED_ORDERS,
     UNFILLED_CANCEL_THRESHOLD,
+    UNFILLED_TIMEOUT_SECONDS,
+    UNFILLED_RETRY_ON_WINNING_SIDE,
     ENABLE_EXIT_PLAN,
     EXIT_PRICE_TARGET,
     EXIT_MIN_POSITION_AGE,
@@ -843,30 +845,105 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                 conn=conn,
             )
 
-            # Handle unfilled order cancellation (separate from stop loss)
-            if (
-                CANCEL_UNFILLED_ORDERS
-                and current_buy_status != "FILLED"
-                and price_change_pct <= -UNFILLED_CANCEL_THRESHOLD
-            ):
-                log(
-                    f"🛑 Price moved away from unfilled bid for trade #{trade_id} ({price_change_pct:.1f}% < -{UNFILLED_CANCEL_THRESHOLD}%). CANCELLING BUY ORDER."
-                )
-                cancel_result = cancel_order(buy_order_id)
+            # ============================================================
+            # UNFILLED ORDER MANAGEMENT
+            # ============================================================
+            if CANCEL_UNFILLED_ORDERS and current_buy_status not in [
+                "FILLED",
+                "matched",
+            ]:
+                should_cancel = False
+                cancel_reason = ""
+                should_reverse = False
 
-                c.execute(
-                    "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_UNFILLED' WHERE id = ?",
-                    (trade_id,),
-                )
-                conn.commit()
+                # Calculate position age
+                position_age_seconds = (
+                    now - datetime.fromisoformat(timestamp)
+                ).total_seconds()
 
-                if cancel_result:
-                    log(f"✅ Buy order for trade #{trade_id} cancelled successfully")
-                else:
+                # Reason 1: Price moved away (losing side)
+                if price_change_pct <= -UNFILLED_CANCEL_THRESHOLD:
+                    should_cancel = True
+                    cancel_reason = f"Price moved away ({price_change_pct:.1f}% < -{UNFILLED_CANCEL_THRESHOLD}%)"
+
+                # Reason 2: Timeout - order unfilled for too long
+                elif position_age_seconds > UNFILLED_TIMEOUT_SECONDS:
+                    should_cancel = True
+                    cancel_reason = f"Order unfilled for {position_age_seconds:.0f}s (timeout: {UNFILLED_TIMEOUT_SECONDS}s)"
+
+                    # Check if we're on the winning side with good P&L
+                    if UNFILLED_RETRY_ON_WINNING_SIDE and pnl_pct > 10.0:
+                        current_spot = get_current_spot_price(symbol)
+                        is_on_winning_side = False
+
+                        if current_spot > 0 and target_price is not None:
+                            if side == "UP" and current_spot >= target_price:
+                                is_on_winning_side = True
+                            elif side == "DOWN" and current_spot <= target_price:
+                                is_on_winning_side = True
+
+                        if is_on_winning_side:
+                            should_reverse = True
+                            cancel_reason += (
+                                f" - On winning side with {pnl_pct:+.1f}% P&L"
+                            )
+
+                if should_cancel:
                     log(
-                        f"⚠️ Buy order for trade #{trade_id} may already be cancelled or not found"
+                        f"🛑 CANCELLING unfilled order for trade #{trade_id}: {cancel_reason}"
                     )
-                continue
+                    cancel_result = cancel_order(buy_order_id)
+
+                    if cancel_result:
+                        log(f"✅ Buy order cancelled successfully")
+
+                        if should_reverse:
+                            # Try to enter at current market price
+                            log(
+                                f"🔄 Retrying [{symbol}] {side} at current market price"
+                            )
+
+                            # Get current market price
+                            retry_price = current_price
+                            retry_price = round(max(0.01, min(0.99, retry_price)), 2)
+
+                            retry_result = place_order(token_id, retry_price, size)
+
+                            if retry_result["success"]:
+                                log(
+                                    f"✅ Retry order placed at ${retry_price:.2f} (was ${entry_price:.2f})"
+                                )
+                                # Update the trade with new order info
+                                c.execute(
+                                    """UPDATE trades 
+                                       SET order_id = ?, order_status = ?, entry_price = ?
+                                       WHERE id = ?""",
+                                    (
+                                        retry_result["order_id"],
+                                        retry_result["status"],
+                                        retry_price,
+                                        trade_id,
+                                    ),
+                                )
+                                conn.commit()
+                                send_discord(
+                                    f"🔄 **RETRY** [{symbol}] {side} @ ${retry_price:.2f} (was ${entry_price:.2f}, waited {position_age_seconds:.0f}s)"
+                                )
+                                continue
+                            else:
+                                error_msg = retry_result.get("error", "Unknown error")
+                                log(f"⚠️ Retry order failed: {error_msg}")
+
+                        # Mark as cancelled if not retrying or retry failed
+                        c.execute(
+                            "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_UNFILLED' WHERE id = ?",
+                            (trade_id,),
+                        )
+                        conn.commit()
+                    else:
+                        log(f"⚠️ Buy order may already be cancelled or not found")
+
+                    continue
 
             # ============================================================
             # TAKE PROFIT: Check if profit target is hit

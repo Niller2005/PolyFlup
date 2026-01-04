@@ -135,7 +135,9 @@ def _calculate_bet_size(
     return size, bet_usd_effective
 
 
-def _prepare_trade_params(symbol: str, balance: float) -> Optional[dict]:
+def _prepare_trade_params(
+    symbol: str, balance: float, add_spacing: bool = True
+) -> Optional[dict]:
     """
     Prepare trade parameters without executing the order
 
@@ -145,6 +147,8 @@ def _prepare_trade_params(symbol: str, balance: float) -> Optional[dict]:
     up_id, down_id = get_token_ids(symbol)
     if not up_id or not down_id:
         log(f"[{symbol}] ❌ Market not found")
+        if add_spacing:
+            log("")  # Add blank line
         return
 
     client = get_clob_client()
@@ -154,6 +158,8 @@ def _prepare_trade_params(symbol: str, balance: float) -> Optional[dict]:
 
     if bias == "NEUTRAL":
         log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
+        if add_spacing:
+            log("")  # Add blank line
         return
 
     actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
@@ -179,6 +185,8 @@ def _prepare_trade_params(symbol: str, balance: float) -> Optional[dict]:
     if not _check_target_price_alignment(
         symbol, side, confidence, current_spot, target_price
     ):
+        if add_spacing:
+            log("")  # Add blank line
         return
 
     # Check filters
@@ -209,12 +217,16 @@ def _prepare_trade_params(symbol: str, balance: float) -> Optional[dict]:
 
     if not bfxd_ok:
         log(f"[{symbol}] ⛔ {core_summary} | status: BLOCKED")
+        if add_spacing:
+            log("")  # Add blank line
         return
 
     log(f"[{symbol}] ✅ {core_summary} | status: ENTERING TRADE")
 
     if price <= 0:
         log(f"[{symbol}] ERROR: Invalid price {price}")
+        if add_spacing:
+            log("")  # Add blank line
         return
 
     # Clamp and round to minimum tick size (0.01)
@@ -249,7 +261,7 @@ def _prepare_trade_params(symbol: str, balance: float) -> Optional[dict]:
 
 def trade_symbol(symbol: str, balance: float):
     """Execute trading logic for a symbol (single order)"""
-    trade_params = _prepare_trade_params(symbol, balance)
+    trade_params = _prepare_trade_params(symbol, balance, add_spacing=True)
 
     if not trade_params:
         return
@@ -301,10 +313,14 @@ def trade_symbols_batch(symbols: list, balance: float):
     """Execute trading logic for multiple symbols using batch orders"""
     # Prepare all trades
     trade_params_list = []
-    for symbol in symbols:
-        params = _prepare_trade_params(symbol, balance)
+    for i, symbol in enumerate(symbols):
+        params = _prepare_trade_params(symbol, balance, add_spacing=False)
         if params:
             trade_params_list.append(params)
+
+        # Add spacing between symbols (but not after the last one)
+        if i < len(symbols) - 1:
+            log("")
 
     if not trade_params_list:
         return
@@ -325,7 +341,7 @@ def trade_symbols_batch(symbols: list, balance: float):
     results = place_batch_orders(batch_orders)
 
     # Process results and save trades
-    for params, result in zip(trade_params_list, results):
+    for i, (params, result) in enumerate(zip(trade_params_list, results)):
         if not result["success"]:
             log(
                 f"[{params['symbol']}] ❌ Order failed: {result.get('error', 'Unknown error')}"
