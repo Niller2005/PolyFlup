@@ -1,4 +1,4 @@
-from .strategy import calculate_confidence, adx_allows_trade, bfxd_allows_trade
+from .strategy import calculate_confidence, bfxd_allows_trade
 from .orders import (
     setup_api_creds,
     place_order,
@@ -15,7 +15,6 @@ from .settlement import get_market_resolution, check_and_settle_trades
 
 __all__ = [
     "calculate_confidence",
-    "adx_allows_trade",
     "bfxd_allows_trade",
     "setup_api_creds",
     "place_order",
