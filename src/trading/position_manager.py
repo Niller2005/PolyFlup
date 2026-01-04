@@ -150,13 +150,8 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             current_price = (best_bid + best_ask) / 2.0
 
             # Calculate current P&L
-            # For UP: profit when price goes up (current > entry)
-            # For DOWN: profit when price goes down (current < entry)
-            if side == "UP":
-                price_change_pct = ((current_price - entry_price) / entry_price) * 100
-            else:  # DOWN
-                # For DOWN positions, lower prices are better
-                price_change_pct = ((entry_price - current_price) / entry_price) * 100
+            # Both UP and DOWN tokens increase in value when the prediction is moving in our favor
+            price_change_pct = ((current_price - entry_price) / entry_price) * 100
 
             current_value = current_price * size
             pnl_usd = current_value - bet_usd
@@ -164,7 +159,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
             if verbose:
                 log(
-                    f"  [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={pnl_pct:+.1f}%"
+                    f"  [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={price_change_pct:+.1f}%"
                 )
 
             # Calculate time left until window ends
@@ -196,24 +191,50 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     new_total_bet = bet_usd + additional_bet
                     new_avg_price = new_total_bet / new_total_size
 
-                    # NEW: Update limit sell order at 0.99 to include new size
+                    # NEW: Update limit sell order at 0.99 to include new size (with retries)
                     new_limit_sell_id = limit_sell_order_id
                     if limit_sell_order_id:
                         cancel_order(limit_sell_order_id)
+                        time.sleep(2)  # Wait for tokens to be freed
 
                     log(
                         f"[{symbol}] 📉 Updating limit sell order at 0.99 for {new_total_size} units"
                     )
-                    new_sell_limit_result = place_limit_order(
-                        token_id, 0.99, new_total_size, SELL
-                    )
-                    if new_sell_limit_result["success"]:
-                        new_limit_sell_id = new_sell_limit_result["order_id"]
-                    else:
-                        new_limit_sell_id = None
-                        log(
-                            f"❌ Failed to update limit sell order: {new_sell_limit_result.get('error')}"
+
+                    # Retry updating the limit sell order
+                    max_retries = 3
+                    retry_delays = [2, 3, 5]
+                    for attempt in range(max_retries):
+                        if attempt > 0:
+                            time.sleep(retry_delays[attempt - 1])
+
+                        new_sell_limit_result = place_limit_order(
+                            token_id,
+                            0.99,
+                            new_total_size,
+                            SELL,
+                            silent_on_balance_error=(attempt < max_retries - 1),
                         )
+                        if new_sell_limit_result["success"]:
+                            new_limit_sell_id = new_sell_limit_result["order_id"]
+                            log(f"✅ Limit sell order updated: {new_limit_sell_id}")
+                            break
+                        else:
+                            error_msg = str(new_sell_limit_result.get("error", ""))
+                            if (
+                                "not enough balance" in error_msg.lower()
+                                and attempt < max_retries - 1
+                            ):
+                                log(
+                                    f"⏳ Balance for limit sell update not yet available, will retry..."
+                                )
+                                continue
+                            else:
+                                new_limit_sell_id = None
+                                log(
+                                    f"❌ Failed to update limit sell order: {error_msg}"
+                                )
+                                break
 
                     c.execute(
                         """UPDATE trades 

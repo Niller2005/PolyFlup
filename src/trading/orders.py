@@ -136,56 +136,77 @@ def cancel_order(order_id: str) -> bool:
         return False
 
 
-def sell_position(token_id: str, size: float, current_price: float) -> dict:
-    """Sell existing position (market sell to CLOB)"""
-    try:
-        # Sell at slightly below current market price for quick fill
-        sell_price = max(0.01, current_price - 0.01)
+def sell_position(
+    token_id: str, size: float, current_price: float, max_retries: int = 3
+) -> dict:
+    """Sell existing position (market sell to CLOB) with retry logic"""
+    retry_delays = [2, 3, 5]
 
-        sell_client = client
-        if not hasattr(sell_client, "builder_config"):
-            sell_client.builder_config = None
-
-        api_key = os.getenv("API_KEY")
-        api_secret = os.getenv("API_SECRET")
-        api_passphrase = os.getenv("API_PASSPHRASE")
-
-        if api_key and api_secret and api_passphrase:
-            try:
-                creds = ApiCreds(
-                    api_key=api_key,
-                    api_secret=api_secret,
-                    api_passphrase=api_passphrase,
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                log(
+                    f"🔄 Retry {attempt}/{max_retries - 1} selling position - waiting {retry_delays[attempt - 1]}s..."
                 )
-                sell_client.set_api_creds(creds)
-            except Exception as e:
-                log(f"⚠ Error setting API creds in sell_position: {e}")
+                import time
 
-        # Create SELL order
-        order_args = OrderArgs(
-            token_id=token_id,
-            price=sell_price,
-            size=size,
-            side=SELL,
-        )
+                time.sleep(retry_delays[attempt - 1])
 
-        signed_order = sell_client.create_order(order_args)
-        resp = sell_client.post_order(signed_order, OrderType.GTC)
+            # Sell at slightly below current market price for quick fill
+            sell_price = max(0.01, current_price - 0.01)
 
-        status = resp.get("status", "UNKNOWN") if resp else "UNKNOWN"
-        order_id = resp.get("orderID") if resp else None
+            sell_client = client
+            if not hasattr(sell_client, "builder_config"):
+                sell_client.builder_config = None
 
-        return {
-            "success": True,
-            "sold": size,
-            "price": sell_price,
-            "status": status,
-            "order_id": order_id,
-        }
+            api_key = os.getenv("API_KEY")
+            api_secret = os.getenv("API_SECRET")
+            api_passphrase = os.getenv("API_PASSPHRASE")
 
-    except Exception as e:
-        log(f"❌ Sell error: {e}")
-        import traceback
+            if api_key and api_secret and api_passphrase:
+                try:
+                    creds = ApiCreds(
+                        api_key=api_key,
+                        api_secret=api_secret,
+                        api_passphrase=api_passphrase,
+                    )
+                    sell_client.set_api_creds(creds)
+                except Exception as e:
+                    log(f"⚠ Error setting API creds in sell_position: {e}")
 
-        log(traceback.format_exc())
-        return {"success": False, "error": str(e)}
+            # Create SELL order
+            order_args = OrderArgs(
+                token_id=token_id,
+                price=sell_price,
+                size=size,
+                side=SELL,
+            )
+
+            signed_order = sell_client.create_order(order_args)
+            resp = sell_client.post_order(signed_order, OrderType.GTC)
+
+            status = resp.get("status", "UNKNOWN") if resp else "UNKNOWN"
+            order_id = resp.get("orderID") if resp else None
+
+            return {
+                "success": True,
+                "sold": size,
+                "price": sell_price,
+                "status": status,
+                "order_id": order_id,
+            }
+
+        except Exception as e:
+            error_str = str(e)
+            if "not enough balance" in error_str.lower() and attempt < max_retries - 1:
+                log(f"⏳ Balance for sell not yet available, will retry...")
+                continue
+
+            log(f"❌ Sell error: {e}")
+            if attempt == max_retries - 1:
+                import traceback
+
+                log(traceback.format_exc())
+                return {"success": False, "error": error_str}
+
+    return {"success": False, "error": "Max retries exceeded"}
