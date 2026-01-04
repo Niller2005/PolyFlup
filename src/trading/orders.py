@@ -121,80 +121,9 @@ def place_limit_order(
         }
 
 
-def place_market_order(
-    token_id: str,
-    size: float,
-    side: str,
-    reference_price: float,
-    silent_on_balance_error: bool = False,
-) -> dict:
-    """Place a market order (BUY or SELL) on CLOB using aggressive limit price"""
-    try:
-        order_client = client
-
-        if not hasattr(order_client, "builder_config"):
-            order_client.builder_config = None
-
-        api_key = os.getenv("API_KEY")
-        api_secret = os.getenv("API_SECRET")
-        api_passphrase = os.getenv("API_PASSPHRASE")
-        if api_key and api_secret and api_passphrase:
-            try:
-                creds = ApiCreds(
-                    api_key=api_key,
-                    api_secret=api_secret,
-                    api_passphrase=api_passphrase,
-                )
-                order_client.set_api_creds(creds)
-            except Exception as e:
-                log(f"⚠ Error setting API creds in place_market_order: {e}")
-
-        # For market orders, use aggressive pricing to ensure immediate fill
-        if side == BUY:
-            # Buy at slightly above current ask to ensure fill
-            market_price = min(0.99, reference_price + 0.02)
-        else:
-            # Sell at slightly below current bid to ensure fill
-            market_price = max(0.01, reference_price - 0.02)
-
-        # FOK orders require specific precision: price (maker) max 2 decimals, size (taker) max 4 decimals
-        market_price = round(market_price, 2)
-        size = round(size, 4)
-
-        order_args = OrderArgs(
-            token_id=token_id,
-            price=market_price,
-            size=size,
-            side=side,
-        )
-
-        signed_order = order_client.create_order(order_args)
-        resp = order_client.post_order(signed_order, OrderType.FOK)
-
-        status = resp.get("status", "UNKNOWN") if resp else "UNKNOWN"
-        order_id = resp.get("orderID") if resp else None
-
-        return {"success": True, "status": status, "order_id": order_id, "error": None}
-
-    except Exception as e:
-        error_str = str(e)
-        # Only log if not a balance error during retry, or if we want full logging
-        if not (silent_on_balance_error and "not enough balance" in error_str.lower()):
-            log(f"❌ {side} Market Order error: {e}")
-            import traceback
-
-            log(traceback.format_exc())
-        return {
-            "success": False,
-            "status": "ERROR",
-            "order_id": None,
-            "error": error_str,
-        }
-
-
 def place_order(token_id: str, price: float, size: float) -> dict:
-    """Place market BUY order on CLOB"""
-    return place_market_order(token_id, size, BUY, price)
+    """Place BUY order on CLOB"""
+    return place_limit_order(token_id, price, size, BUY)
 
 
 def get_order_status(order_id: str) -> str:
