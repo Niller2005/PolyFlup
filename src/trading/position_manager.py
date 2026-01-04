@@ -482,7 +482,14 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         check_orders: If True, check status of limit sell orders
     """
     if not any(
-        [ENABLE_STOP_LOSS, ENABLE_TAKE_PROFIT, ENABLE_SCALE_IN, ENABLE_REVERSAL]
+        [
+            ENABLE_STOP_LOSS,
+            ENABLE_TAKE_PROFIT,
+            ENABLE_SCALE_IN,
+            ENABLE_REVERSAL,
+            ENABLE_EXIT_PLAN,
+            CANCEL_UNFILLED_ORDERS,
+        ]
     ):
         if not check_orders:
             return
