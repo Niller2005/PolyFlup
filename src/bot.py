@@ -63,7 +63,11 @@ from src.trading.orders import (
     place_order,
     get_clob_client,
 )
-from src.trading.position_manager import check_open_positions, recover_open_positions
+from src.trading.position_manager import (
+    check_open_positions,
+    recover_open_positions,
+    handle_expired_positions,
+)
 from src.trading.settlement import check_and_settle_trades
 
 
@@ -360,6 +364,8 @@ def main():
                 verbose = now_ts - last_verbose_log >= 60
                 check_orders = now_ts - last_order_check >= 30
                 check_open_positions(verbose=verbose, check_orders=check_orders)
+                # Also handle any expired positions that need limit sell orders
+                handle_expired_positions()
                 last_position_check = now_ts
                 if verbose:
                     last_verbose_log = now_ts
@@ -387,6 +393,8 @@ def main():
                     verbose = now_ts - last_verbose_log >= 60
                     check_orders = now_ts - last_order_check >= 30
                     check_open_positions(verbose=verbose, check_orders=check_orders)
+                    # Also handle any expired positions that need limit sell orders
+                    handle_expired_positions()
                     if verbose:
                         last_verbose_log = now_ts
                     if check_orders:

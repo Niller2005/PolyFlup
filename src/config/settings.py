@@ -41,6 +41,11 @@ HIGH_CONFIDENCE_MOMENTUM_THRESHOLD = float(
     os.getenv("HIGH_CONFIDENCE_MOMENTUM_THRESHOLD", "0.5")
 )  # Momentum strength threshold (0-1)
 
+# Window Start Price Buffer
+WINDOW_START_PRICE_BUFFER_PCT = float(
+    os.getenv("WINDOW_START_PRICE_BUFFER_PCT", "0.05")
+)  # Buffer % for window start price (0.05% = ±0.05% tolerance)
+
 # Position Scaling
 ENABLE_SCALE_IN = os.getenv("ENABLE_SCALE_IN", "YES").upper() == "YES"
 SCALE_IN_MIN_PRICE = float(

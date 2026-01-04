@@ -10,6 +10,7 @@ from src.config.settings import (
     BINANCE_FUNDING_MAP,
     ADX_PERIOD,
     ADX_INTERVAL,
+    WINDOW_START_PRICE_BUFFER_PCT,
 )
 from src.utils.logger import log
 
@@ -92,6 +93,12 @@ def get_window_start_price(symbol: str) -> float:
     Get the spot price at the START of the current 15-minute window.
     This is cached per window so all trades in the same window use the same target price.
 
+    Note: When comparing cached price to actual settlement price, use
+    get_window_start_price_range() to account for timing and API differences.
+    A buffer of WINDOW_START_PRICE_BUFFER_PCT (default 0.05%) is recommended
+    for price comparisons to handle minor discrepancies between the cached price
+    and the actual Polymarket settlement reference price.
+
     Args:
         symbol: Trading symbol (e.g., 'BTC', 'ETH')
 
@@ -130,13 +137,41 @@ def get_window_start_price(symbol: str) -> float:
             oldest_key = min(_window_start_prices.keys())
             del _window_start_prices[oldest_key]
 
+        buffer_pct = WINDOW_START_PRICE_BUFFER_PCT
         log(
-            f"[{symbol}] 🎯 Window start price cached: ${price:,.2f} (window: {cache_key})"
+            f"[{symbol}] 🎯 Window start price cached: ${price:,.2f} ±{buffer_pct}% (window: {cache_key})"
         )
         return price
     except Exception as e:
         log(f"[{symbol}] Error fetching window start price: {e}")
         return -1.0
+
+
+def get_window_start_price_range(symbol: str) -> tuple[float, float, float]:
+    """
+    Get the window start price with buffer range for comparison tolerance.
+
+    This accounts for minor discrepancies between our cached price and Polymarket's
+    actual settlement reference price due to API timing differences.
+
+    Args:
+        symbol: Trading symbol (e.g., 'BTC', 'ETH')
+
+    Returns:
+        Tuple of (center_price, lower_bound, upper_bound)
+        Example: For ETH at $3147.42 with 0.05% buffer -> (3147.42, 3145.85, 3148.99)
+        Returns (-1.0, -1.0, -1.0) on error
+    """
+    center_price = get_window_start_price(symbol)
+    if center_price <= 0:
+        return -1.0, -1.0, -1.0
+
+    buffer_pct = WINDOW_START_PRICE_BUFFER_PCT
+    buffer_amount = center_price * (buffer_pct / 100.0)
+    lower_bound = center_price - buffer_amount
+    upper_bound = center_price + buffer_amount
+
+    return center_price, lower_bound, upper_bound
 
 
 def get_current_spot_price(symbol: str) -> float:
