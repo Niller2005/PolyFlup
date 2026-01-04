@@ -19,7 +19,7 @@ _sync_interval = 30  # seconds
 
 
 @contextmanager
-def db_connection(sync_on_connect=True, sync_on_close=True):
+def db_connection():
     """
     Context manager for database connections with automatic cleanup.
     Supports three modes:
@@ -72,20 +72,17 @@ def db_connection(sync_on_connect=True, sync_on_close=True):
         )
 
         try:
-            # Sync on connect if requested (for reads, sync periodically; for writes, always sync)
-            if sync_on_connect:
-                current_time = time.time()
-                # For reads, only sync every 30s to reduce network overhead
-                if current_time - _last_sync_time >= _sync_interval:
-                    conn.sync()
-                    _last_sync_time = current_time
+            # Sync periodically (every 30s) to reduce network overhead on reads
+            current_time = time.time()
+            if current_time - _last_sync_time >= _sync_interval:
+                conn.sync()
+                _last_sync_time = current_time
 
             yield conn
             conn.commit()
 
-            # Sync after commit if requested (to push writes to remote)
-            if sync_on_close:
-                conn.sync()
+            # Sync after commit to push writes to remote (fast no-op if no changes)
+            conn.sync()
         except Exception:
             conn.rollback()
             raise

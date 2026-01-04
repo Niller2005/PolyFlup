@@ -697,9 +697,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         if not check_orders:
             return
 
-    # For frequent position checks, disable syncing to reduce network overhead
-    # Sync happens automatically every 30s on first connection after interval
-    with db_connection(sync_on_connect=True, sync_on_close=False) as conn:
+    with db_connection() as conn:
         c = conn.cursor()
         now = datetime.now(tz=ZoneInfo("UTC"))
 
