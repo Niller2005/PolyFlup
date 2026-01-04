@@ -77,18 +77,32 @@ def trade_symbol(symbol: str, balance: float):
         symbol, up_id, client
     )
 
-    if bias == "NEUTRAL" or confidence < 0.2:
+    if bias == "NEUTRAL":
         log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
         return
 
-    # Determine bias
-    if bias == "UP":
+    # Direction Logic:
+    # - If confidence > 20%: Follow the bias
+    # - If confidence < 20%: Enter OPPOSITE (contrarian play)
+    if confidence >= 0.2:
+        actual_side = bias
+        sizing_confidence = confidence
+        log(f"[{symbol}] ✅ Trend Following: {bias} (Confidence: {confidence:.1%})")
+    else:
+        actual_side = "DOWN" if bias == "UP" else "UP"
+        sizing_confidence = 0.2  # Small fixed size for contrarian bets
+        log(
+            f"[{symbol}] 🔄 Contrarian Entry: {actual_side} (Original Bias: {bias} @ {confidence:.1%})"
+        )
+
+    if actual_side == "UP":
         token_id, side, price = up_id, "UP", p_up
     else:
         token_id, side, price = down_id, "DOWN", 1.0 - p_up
 
-    # Check target price alignment
+    # Check target price alignment (using actual_side)
     target_price = float(get_window_start_price(symbol))
+
     current_spot = 0.0
     if isinstance(signals, dict):
         current_spot = float(signals.get("current_spot", 0))
@@ -154,10 +168,10 @@ def trade_symbol(symbol: str, balance: float):
 
     price = max(0.01, min(0.99, price))
 
-    # NEW SIZING: base_bet scaled by confidence (0.2 to 1.0)
+    # SIZING: base_bet scaled by confidence (0.2 to 1.0)
     # Higher confidence = larger position, up to 4x base_bet
     base_bet = balance * (BET_PERCENT / 100.0)
-    confidence_multiplier = 0.5 + (confidence * 3.5)  # Scale to 0.5x - 4.0x
+    confidence_multiplier = 0.5 + (sizing_confidence * 3.5)  # Scale to 0.5x - 4.0x
     target_bet = base_bet * confidence_multiplier
 
     size = round(target_bet / price, 6)
