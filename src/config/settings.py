@@ -21,6 +21,12 @@ ENABLE_TAKE_PROFIT = os.getenv("ENABLE_TAKE_PROFIT", "NO").upper() == "YES"
 TAKE_PROFIT_PERCENT = float(os.getenv("TAKE_PROFIT_PERCENT", "80.0"))
 ENABLE_REVERSAL = os.getenv("ENABLE_REVERSAL", "NO").upper() == "YES"
 
+# Unfilled Order Management (separate from stop loss)
+CANCEL_UNFILLED_ORDERS = os.getenv("CANCEL_UNFILLED_ORDERS", "NO").upper() == "YES"
+UNFILLED_CANCEL_THRESHOLD = float(
+    os.getenv("UNFILLED_CANCEL_THRESHOLD", "15.0")
+)  # % price move to cancel unfilled orders
+
 # Late Entry Protection
 ENABLE_LATE_ENTRY_PROTECTION = (
     os.getenv("ENABLE_LATE_ENTRY_PROTECTION", "YES").upper() == "YES"
