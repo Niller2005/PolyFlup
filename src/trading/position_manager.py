@@ -241,118 +241,16 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     f"  [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={price_change_pct:+.1f}%"
                 )
 
-            # Calculate time left until window ends
-            window_end_dt = datetime.fromisoformat(window_end)
-            time_left_seconds = (window_end_dt - now).total_seconds()
-
-            # Place 0.99 limit sell order when 1 minute left (after scale-in/reversals complete)
-            if (
-                current_buy_status == "FILLED"
-                and not limit_sell_order_id
-                and time_left_seconds <= 60
-                and time_left_seconds > 0
-            ):
-                log(
-                    f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units ({time_left_seconds:.0f}s left)"
-                )
-                sell_limit_result = place_limit_order(
-                    token_id, 0.99, size, SELL, silent_on_balance_error=True
-                )
-                if sell_limit_result["success"]:
-                    limit_sell_order_id = sell_limit_result["order_id"]
-                    log(
-                        f"[{symbol}] ✅ Limit sell order placed at 0.99: {limit_sell_order_id}"
-                    )
-                    c.execute(
-                        "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
-                        (limit_sell_order_id, trade_id),
-                    )
-                    conn.commit()
-                else:
-                    log(
-                        f"[{symbol}] ⚠️ Failed to place limit sell at 0.99 (will retry next cycle)"
-                    )
-
-            # Check if we should scale into position
-            if (
-                ENABLE_SCALE_IN
-                and not scaled_in
-                and time_left_seconds <= SCALE_IN_TIME_LEFT
-                and time_left_seconds > 0
-                and SCALE_IN_MIN_PRICE <= current_price <= SCALE_IN_MAX_PRICE
-            ):
-                log(
-                    f"📈 SCALE IN triggered for trade #{trade_id}: price=${current_price:.2f}, {time_left_seconds:.0f}s left"
-                )
-
-                # Calculate additional size
-                additional_size = size * SCALE_IN_MULTIPLIER
-                additional_bet = additional_size * current_price
-
-                # Place additional order
-                scale_result = place_order(token_id, current_price, additional_size)
-
-                if scale_result["success"]:
-                    # Update trade with new size and bet
-                    new_total_size = size + additional_size
-                    new_total_bet = bet_usd + additional_bet
-                    new_avg_price = new_total_bet / new_total_size
-
-                    # Update database with scaled-in position (don't place limit sell yet - will happen at 60s)
-                    c.execute(
-                        """UPDATE trades 
-                           SET size=?, bet_usd=?, entry_price=?, scaled_in=1 
-                           WHERE id=?""",
-                        (
-                            new_total_size,
-                            new_total_bet,
-                            new_avg_price,
-                            trade_id,
-                        ),
-                    )
-
-                    log(
-                        f"✅ Scaled in! Size: {size:.2f} → {new_total_size:.2f} (+{additional_size:.2f})"
-                    )
-                    log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
-                    send_discord(
-                        f"📈 **SCALED IN** [{symbol}] {side} +${additional_bet:.2f} @ ${current_price:.2f} ({time_left_seconds:.0f}s left)"
-                    )
-
-            # 1. Handle unfilled order cancellation (separate from stop loss)
-            if (
-                CANCEL_UNFILLED_ORDERS
-                and current_buy_status != "FILLED"
-                and price_change_pct <= -UNFILLED_CANCEL_THRESHOLD
-            ):
-                log(
-                    f"🛑 Price moved away from unfilled bid for trade #{trade_id} ({price_change_pct:.1f}% < -{UNFILLED_CANCEL_THRESHOLD}%). CANCELLING BUY ORDER."
-                )
-                cancel_result = cancel_order(buy_order_id)
-
-                # Always settle the trade, regardless of cancellation success
-                # The order may already be cancelled, expired, or not found
-                c.execute(
-                    "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_UNFILLED' WHERE id = ?",
-                    (trade_id,),
-                )
-                conn.commit()
-
-                if cancel_result:
-                    log(f"✅ Buy order for trade #{trade_id} cancelled successfully")
-                else:
-                    log(
-                        f"⚠️ Buy order for trade #{trade_id} may already be cancelled or not found"
-                    )
-                continue
-
-            # 2. Stop loss for FILLED positions only
-            # This correctly handles both UP (loss when price drops) and DOWN (loss when price rises)
-            # Smart Breakeven Protection
+            # ============================================================
+            # PRIORITY #1: STOP LOSS (checked FIRST, before everything else)
+            # ============================================================
+            # Stop loss is highest priority - check it regardless of order status
+            # If we can calculate PnL, we have a position that needs protection
             stop_threshold = -STOP_LOSS_PERCENT
             sl_label = "STOP LOSS"
 
-            if ENABLE_STOP_LOSS and pnl_pct >= 20.0 and current_buy_status == "FILLED":
+            # Smart Breakeven Protection (only if position was profitable)
+            if ENABLE_STOP_LOSS and pnl_pct >= 20.0:
                 # Only activate breakeven if market is moving AGAINST our position
                 is_moving_against = False
                 if side == "UP" and current_price < entry_price:
@@ -366,11 +264,9 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     )  # Allow 5% drawback from peak before breakeven exit
                     sl_label = "BREAKEVEN PROTECTION"
 
-            if (
-                ENABLE_STOP_LOSS
-                and current_buy_status == "FILLED"
-                and pnl_pct <= stop_threshold
-            ):
+            # CRITICAL: Stop loss works regardless of order_status
+            # If size > 0, we have a position that needs stop loss protection
+            if ENABLE_STOP_LOSS and pnl_pct <= stop_threshold and size > 0:
                 log(
                     f"🛑 {sl_label} trade #{trade_id}: {price_change_pct:.1f}% move (Threshold: {stop_threshold}%)"
                 )
@@ -496,8 +392,117 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                             f"⚠️ Trade #{trade_id} has no target price - cannot determine if reversing is appropriate"
                         )
 
+            # ============================================================
+            # PRIORITY #2: Other Risk Management (after stop loss)
+            # ============================================================
+
+            # Calculate time left until window ends
+            window_end_dt = datetime.fromisoformat(window_end)
+            time_left_seconds = (window_end_dt - now).total_seconds()
+
+            # Place 0.99 limit sell order when 1 minute left (after scale-in/reversals complete)
+            if (
+                current_buy_status == "FILLED"
+                and not limit_sell_order_id
+                and time_left_seconds <= 60
+                and time_left_seconds > 0
+            ):
+                log(
+                    f"[{symbol}] 📉 Placing limit sell order at 0.99 for {size} units ({time_left_seconds:.0f}s left)"
+                )
+                sell_limit_result = place_limit_order(
+                    token_id, 0.99, size, SELL, silent_on_balance_error=True
+                )
+                if sell_limit_result["success"]:
+                    limit_sell_order_id = sell_limit_result["order_id"]
+                    log(
+                        f"[{symbol}] ✅ Limit sell order placed at 0.99: {limit_sell_order_id}"
+                    )
+                    c.execute(
+                        "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                        (limit_sell_order_id, trade_id),
+                    )
+                    conn.commit()
+                else:
+                    log(
+                        f"[{symbol}] ⚠️ Failed to place limit sell at 0.99 (will retry next cycle)"
+                    )
+
+            # Check if we should scale into position
+            if (
+                ENABLE_SCALE_IN
+                and not scaled_in
+                and time_left_seconds <= SCALE_IN_TIME_LEFT
+                and time_left_seconds > 0
+                and SCALE_IN_MIN_PRICE <= current_price <= SCALE_IN_MAX_PRICE
+            ):
+                log(
+                    f"📈 SCALE IN triggered for trade #{trade_id}: price=${current_price:.2f}, {time_left_seconds:.0f}s left"
+                )
+
+                # Calculate additional size
+                additional_size = size * SCALE_IN_MULTIPLIER
+                additional_bet = additional_size * current_price
+
+                # Place additional order
+                scale_result = place_order(token_id, current_price, additional_size)
+
+                if scale_result["success"]:
+                    # Update trade with new size and bet
+                    new_total_size = size + additional_size
+                    new_total_bet = bet_usd + additional_bet
+                    new_avg_price = new_total_bet / new_total_size
+
+                    # Update database with scaled-in position (don't place limit sell yet - will happen at 60s)
+                    c.execute(
+                        """UPDATE trades 
+                           SET size=?, bet_usd=?, entry_price=?, scaled_in=1 
+                           WHERE id=?""",
+                        (
+                            new_total_size,
+                            new_total_bet,
+                            new_avg_price,
+                            trade_id,
+                        ),
+                    )
+
+                    log(
+                        f"✅ Scaled in! Size: {size:.2f} → {new_total_size:.2f} (+{additional_size:.2f})"
+                    )
+                    log(f"   Avg price: ${entry_price:.4f} → ${new_avg_price:.4f}")
+                    send_discord(
+                        f"📈 **SCALED IN** [{symbol}] {side} +${additional_bet:.2f} @ ${current_price:.2f} ({time_left_seconds:.0f}s left)"
+                    )
+
+            # Handle unfilled order cancellation (separate from stop loss)
+            if (
+                CANCEL_UNFILLED_ORDERS
+                and current_buy_status != "FILLED"
+                and price_change_pct <= -UNFILLED_CANCEL_THRESHOLD
+            ):
+                log(
+                    f"🛑 Price moved away from unfilled bid for trade #{trade_id} ({price_change_pct:.1f}% < -{UNFILLED_CANCEL_THRESHOLD}%). CANCELLING BUY ORDER."
+                )
+                cancel_result = cancel_order(buy_order_id)
+
+                # Always settle the trade, regardless of cancellation success
+                # The order may already be cancelled, expired, or not found
+                c.execute(
+                    "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_UNFILLED' WHERE id = ?",
+                    (trade_id,),
+                )
+                conn.commit()
+
+                if cancel_result:
+                    log(f"✅ Buy order for trade #{trade_id} cancelled successfully")
+                else:
+                    log(
+                        f"⚠️ Buy order for trade #{trade_id} may already be cancelled or not found"
+                    )
+                continue
+
             # Check take profit
-            elif ENABLE_TAKE_PROFIT and pnl_pct >= TAKE_PROFIT_PERCENT:
+            if ENABLE_TAKE_PROFIT and pnl_pct >= TAKE_PROFIT_PERCENT:
                 log(
                     f"🎯 TAKE PROFIT triggered for trade #{trade_id}: {pnl_pct:.1f}% gain"
                 )

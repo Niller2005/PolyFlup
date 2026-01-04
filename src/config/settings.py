@@ -16,10 +16,10 @@ MAX_PORTFOLIO_EXPOSURE = float(os.getenv("MAX_PORTFOLIO_EXPOSURE", "0.80"))
 
 # Position Management
 ENABLE_STOP_LOSS = os.getenv("ENABLE_STOP_LOSS", "YES").upper() == "YES"
-STOP_LOSS_PERCENT = float(os.getenv("STOP_LOSS_PERCENT", "50.0"))
+STOP_LOSS_PERCENT = float(os.getenv("STOP_LOSS_PERCENT", "40.0"))
 ENABLE_TAKE_PROFIT = os.getenv("ENABLE_TAKE_PROFIT", "NO").upper() == "YES"
 TAKE_PROFIT_PERCENT = float(os.getenv("TAKE_PROFIT_PERCENT", "80.0"))
-ENABLE_REVERSAL = os.getenv("ENABLE_REVERSAL", "NO").upper() == "YES"
+ENABLE_REVERSAL = os.getenv("ENABLE_REVERSAL", "YES").upper() == "YES"
 
 # Unfilled Order Management (separate from stop loss)
 CANCEL_UNFILLED_ORDERS = os.getenv("CANCEL_UNFILLED_ORDERS", "NO").upper() == "YES"
