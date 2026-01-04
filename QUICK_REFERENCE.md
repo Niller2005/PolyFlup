@@ -258,9 +258,17 @@ print(f"Cancelled {len(result['canceled'])} orders")
 **Cause:** Timeout logic retrying every second  
 **Solution:** Anti-spam fix checks order_status before retry
 
+### "Exit plan monitoring spam"
+**Cause:** Logging every position check (every 1-2 seconds)  
+**Solution:** Monitoring logs only on verbose cycles (every 60 seconds)
+
 ### "Price validation failed"
 **Cause:** Floating point precision (0.485 instead of 0.48)  
 **Solution:** All prices now rounded to tick size
+
+### "Exit plan only sold half position"
+**Cause:** Scale-in increased position size but exit plan order wasn't updated  
+**Solution:** Exit plan order automatically updated when scale-in fills
 
 ---
 
