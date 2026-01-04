@@ -246,3 +246,12 @@ When modifying code:
 4. Test with actual API if possible
 5. Consider Discord notifications for user-facing events
 6. Document complex trading logic in comments
+
+## Documentation Reference
+
+For additional information about the codebase and recent improvements:
+
+- **SESSION_IMPROVEMENTS.md** - Full details on all improvements from latest session (bug fixes, features, API integrations)
+- **QUICK_REFERENCE.md** - Code examples and quick lookup for new features (batch orders, market orders, notifications, etc.)
+- **MIGRATIONS.md** - How to add database migrations (step-by-step guide with examples)
+- **AGENTS.md** - This file - General coding standards and project overview
