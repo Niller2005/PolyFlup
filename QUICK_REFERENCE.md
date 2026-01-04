@@ -211,6 +211,17 @@ UNFILLED_RETRY_ON_WINNING_SIDE=YES     # Retry at market if winning (default: YE
 
 ## Common Use Cases
 
+### Scale-In with Exit Plan
+```python
+# Exit plan automatically updates when scale-in fills
+# No manual intervention needed!
+
+# 1. Exit plan places order at 300s for initial size
+# 2. Scale-in triggers and fills
+# 3. Exit plan order automatically updated for new total size
+# 4. Full position covered ✅
+```
+
 ### Pre-Flight Checks
 ```python
 # Check balance before trading
@@ -262,6 +273,10 @@ print(f"Cancelled {len(result['canceled'])} orders")
 **Cause:** Logging every position check (every 1-2 seconds)  
 **Solution:** Monitoring logs only on verbose cycles (every 60 seconds)
 
+### "Notification spam with None values"
+**Cause:** Logging all order fills including untracked orders  
+**Solution:** Only log fills for orders tracked in database, skip others silently
+
 ### "Price validation failed"
 **Cause:** Floating point precision (0.485 instead of 0.48)  
 **Solution:** All prices now rounded to tick size
@@ -269,6 +284,14 @@ print(f"Cancelled {len(result['canceled'])} orders")
 ### "Exit plan only sold half position"
 **Cause:** Scale-in increased position size but exit plan order wasn't updated  
 **Solution:** Exit plan order automatically updated when scale-in fills
+
+**Example:**
+```
+Initial: 5.62 shares, Exit plan: 5.62 @ $0.99
+Scale-in: +5.62 shares → Total: 11.24
+Auto-update: Cancel old, place new exit plan for 11.24 shares
+Result: Full position covered ✅
+```
 
 ---
 
@@ -286,6 +309,8 @@ print(f"Cancelled {len(result['canceled'])} orders")
 | `get_notifications()` | Real-time fills | Automatic monitoring |
 | `cancel_all()` | Emergency stop | Cancel everything |
 | `run_migrations()` | Schema updates | No data loss |
+| `process_notifications()` | Monitor fills | Real-time updates |
+| `_update_exit_plan_after_scale_in()` | Update exit after scale | Cover full position |
 
 ---
 

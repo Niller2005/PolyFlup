@@ -114,8 +114,8 @@ This document summarizes all improvements made during the development session.
 
 ---
 
-### 6. Scale-In Order Tracking
-**Description:** Scale-in now works like exit plan - tracks pending orders and monitors fill status. Automatically updates exit plan order when scale-in fills.
+### 6. Scale-In Order Tracking with Exit Plan Update
+**Description:** Scale-in now works like exit plan - tracks pending orders and monitors fill status. **Critically**, automatically updates exit plan order when scale-in fills to cover the entire position.
 
 **Features:**
 - Saves `scale_in_order_id` to database
@@ -123,21 +123,25 @@ This document summarizes all improvements made during the development session.
 - Updates position when order fills with actual price/size
 - Prevents duplicate scale-in orders
 - Handles partial fills
-- **NEW:** Automatically updates exit plan order with new position size
+- **CRITICAL:** Automatically updates exit plan order with new position size
+
+**Problem Solved:**
+Without this fix, if exit plan places an order for 5.62 shares, then scale-in adds 5.62 more shares, the exit plan would only sell the original 5.62 shares, leaving half the position open.
 
 **Example Flow:**
 ```
-1. Exit plan placed: 5.62 shares @ $0.99
-2. Scale-in fills: +5.62 shares @ $0.85
-3. Cancel old exit plan: 5.62 shares
-4. Place new exit plan: 11.24 shares @ $0.99
-5. Full position now covered by exit plan
+1. Position: 5.62 shares
+2. Exit plan placed: 5.62 shares @ $0.99
+3. Scale-in fills: +5.62 shares @ $0.85 → Total: 11.24 shares
+4. Cancel old exit plan order (5.62 shares)
+5. Place new exit plan order (11.24 shares @ $0.99)
+6. Full position now covered by exit plan ✅
 ```
 
-**Impact:** Exit plan always covers entire position, no partial exits.
+**Impact:** Exit plan always covers entire position. No more partial exits leaving shares stranded.
 
 **Files Changed:**
-- `src/trading/position_manager.py` - Enhanced `_check_scale_in()`, added `_update_exit_plan_after_scale_in()`
+- `src/trading/position_manager.py` - Enhanced `_check_scale_in()`, added `_update_exit_plan_after_scale_in()` helper
 - `src/data/database.py` - Added `scale_in_order_id` column to schema
 
 ---
@@ -426,7 +430,7 @@ UNFILLED_CANCEL_THRESHOLD=15.0         # Cancel if price moves -15%
 
 ---
 
-## User Experience Improvements (3 items)
+## User Experience Improvements (4 items)
 
 ### 23. Log Spacing
 **Description:** Added blank lines between symbols during trade evaluation.
@@ -458,16 +462,58 @@ UNFILLED_CANCEL_THRESHOLD=15.0         # Cancel if price moves -15%
 **Issues Fixed:**
 1. **Unfilled order spam** - Attempting to cancel the same order every second
 2. **Exit plan monitoring spam** - Logging monitoring status every 1-2 seconds
+3. **Notification spam** - Logging untracked/irrelevant order fills with `None` values
 
 **Solutions:**
 1. Check database status before retry attempts
 2. Only log monitoring on verbose cycles (60s intervals)
 3. Update database to prevent infinite loops
+4. Only log notifications for tracked orders in our database
+5. Skip untracked orders silently
+6. Format notifications in single line with context
 
 **Impact:** Clean, readable logs with only meaningful information.
 
 **Files Changed:**
 - `src/trading/position_manager.py` - Anti-spam logic for unfilled orders and exit plan
+- `src/utils/notifications.py` - Filter and format notifications
+
+---
+
+### 26. Exit Plan Update After Scale-In
+**Description:** Automatically update exit plan limit order when scale-in increases position size.
+
+**Critical Problem:**
+When scale-in doubles position size (e.g., 5.62 → 11.24 shares), the exit plan order placed before scale-in only covered the original size. When exit plan filled, it only sold half the position, leaving shares stranded.
+
+**Fix:**
+- Created `_update_exit_plan_after_scale_in()` helper function
+- When scale-in fills, automatically:
+  1. Cancel old exit plan order (original size)
+  2. Place new exit plan order (new total size)
+  3. Update database with new order ID
+
+**Real Example (ETH):**
+```
+Initial: 5.62 shares @ $0.36
+Exit plan: 5.62 shares @ $0.99
+Scale-in: +5.62 shares @ $0.85
+Total: 11.24 shares
+
+OLD BEHAVIOR:
+Exit plan fills → Only 5.62 shares sold
+Result: 5.62 shares stranded ❌
+
+NEW BEHAVIOR:
+Scale-in fills → Update exit plan to 11.24 shares
+Exit plan fills → All 11.24 shares sold
+Result: Complete exit ✅
+```
+
+**Impact:** Exit plan always covers entire position. No more partial exits.
+
+**Files Changed:**
+- `src/trading/position_manager.py` - Added `_update_exit_plan_after_scale_in()`, integrated into both scale-in fill paths
 
 ---
 
@@ -485,10 +531,10 @@ UNFILLED_CANCEL_THRESHOLD=15.0         # Cancel if price moves -15%
 
 ### Features
 - **Critical Bugs Fixed:** 5
-- **Features Added:** 20
+- **Features Added:** 21
 - **API Methods Integrated:** 8
-- **UX Improvements:** 3
-- **Total Improvements:** 36+
+- **UX Improvements:** 4
+- **Total Improvements:** 38+
 
 ---
 
@@ -688,7 +734,8 @@ All features tested and verified:
 3. Market orders for stop loss (no more FOK failures)
 4. Migration system (no data loss on schema changes)
 5. Unfilled timeout with retry (capture winning trades)
-6. Anti-spam fixes (clean, readable logs)
+6. Exit plan update after scale-in (no more partial exits)
+7. Anti-spam fixes (clean, readable logs)
 
 **Code Quality:**
 - Validation before API calls
@@ -719,5 +766,5 @@ These were noted but not implemented (low priority):
 
 **Session Date:** 2026-01-04  
 **Total Development Time:** ~3 hours  
-**Improvements Made:** 36+  
+**Improvements Made:** 38+  
 **Status:** Production Ready ✅
