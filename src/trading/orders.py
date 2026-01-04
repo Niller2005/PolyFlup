@@ -13,7 +13,7 @@ from src.config.settings import (
     SIGNATURE_TYPE,
     FUNDER_PROXY,
 )
-from src.utils.logger import log
+from src.utils.logger import log, send_discord
 
 # API Constraints
 MIN_TICK_SIZE = 0.01
@@ -274,6 +274,7 @@ def place_limit_order(
     side: str,
     silent_on_balance_error: bool = False,
     order_type: str = "GTC",
+    expiration: Optional[int] = None,
 ) -> dict:
     """
     Place a limit order (BUY or SELL) on CLOB with validation and retry logic
@@ -285,6 +286,8 @@ def place_limit_order(
         side: BUY or SELL
         silent_on_balance_error: Suppress balance error logs
         order_type: Order type (GTC, FOK, FAK, GTD)
+        expiration: Unix timestamp for GTD orders (required if order_type='GTD')
+                   Must be at least 61 seconds in the future (security threshold + desired time)
 
     Returns:
         Dict with success, status, order_id, error, errorMsg, orderHashes
@@ -302,6 +305,37 @@ def place_limit_order(
             "orderHashes": [],
         }
 
+    # Validate GTD expiration
+    if order_type.upper() == "GTD":
+        if not expiration:
+            error_msg = "GTD order type requires expiration timestamp"
+            log(f"❌ {error_msg}")
+            return {
+                "success": False,
+                "status": "VALIDATION_ERROR",
+                "order_id": None,
+                "error": error_msg,
+                "errorMsg": error_msg,
+                "orderHashes": [],
+            }
+
+        import time
+
+        now = int(time.time())
+        min_expiration = now + 61  # 1 minute security threshold + 1 second buffer
+
+        if expiration < min_expiration:
+            error_msg = f"GTD expiration must be at least 61 seconds in the future (got {expiration - now}s)"
+            log(f"❌ {error_msg}")
+            return {
+                "success": False,
+                "status": "VALIDATION_ERROR",
+                "order_id": None,
+                "error": error_msg,
+                "errorMsg": error_msg,
+                "orderHashes": [],
+            }
+
     # Map string order type to OrderType enum
     order_type_map = {
         "GTC": OrderType.GTC,
@@ -316,13 +350,19 @@ def place_limit_order(
         order_client = client
         _ensure_api_creds(order_client)
 
-        order_args = OrderArgs(
-            token_id=token_id,
-            price=price,
-            size=size,
-            side=side,
-        )
+        # Build order args with optional expiration
+        order_args_dict = {
+            "token_id": token_id,
+            "price": price,
+            "size": size,
+            "side": side,
+        }
 
+        # Add expiration for GTD orders
+        if order_type.upper() == "GTD" and expiration:
+            order_args_dict["expiration"] = expiration
+
+        order_args = OrderArgs(**order_args_dict)
         signed_order = order_client.create_order(order_args)
         return order_client.post_order(signed_order, order_type_enum)
 
@@ -511,17 +551,108 @@ def place_batch_orders(orders: List[Dict[str, any]]) -> List[dict]:
 
 
 def get_order_status(order_id: str) -> str:
-    """Get current status of an order"""
+    """
+    Get current status of an order
+
+    Possible statuses:
+    - matched: Order placed and matched with existing resting order
+    - live: Order placed and resting on the book
+    - delayed: Order marketable but subject to matching delay
+    - unmatched: Order marketable but failure delaying, placement successful
+    - FILLED: Order completely filled
+    - CANCELED: Order cancelled
+    - EXPIRED: Order expired
+    - NOT_FOUND: Order not found (404)
+    - ERROR: Error fetching status
+    """
     try:
         order_data = client.get_order(order_id)
         if isinstance(order_data, dict):
-            return order_data.get("status", "UNKNOWN")
-        return getattr(order_data, "status", "UNKNOWN")
+            status = order_data.get("status", "UNKNOWN")
+        else:
+            status = getattr(order_data, "status", "UNKNOWN")
+
+        # Normalize status for consistency
+        status_upper = status.upper() if status else "UNKNOWN"
+
+        # Map known statuses
+        if status_upper in [
+            "MATCHED",
+            "LIVE",
+            "DELAYED",
+            "UNMATCHED",
+            "FILLED",
+            "CANCELED",
+            "EXPIRED",
+        ]:
+            return status_upper
+
+        return status if status else "UNKNOWN"
+
     except Exception as e:
         if "404" in str(e):
             return "NOT_FOUND"
         log(f"⚠️ Error checking order status {order_id}: {e}")
         return "ERROR"
+
+
+def get_order(order_id: str) -> Optional[dict]:
+    """
+    Get detailed information about an order
+
+    Returns:
+        Dict with order details including:
+        - id: Order ID
+        - status: Current status
+        - market: Market/condition ID
+        - original_size: Original order size at placement
+        - size_matched: Size matched/filled so far
+        - outcome: Human readable outcome
+        - maker_address: Maker address (funder)
+        - owner: API key owner
+        - price: Order price
+        - side: BUY or SELL
+        - asset_id: Token ID
+        - expiration: Unix timestamp or 0
+        - type: Order type (GTC, FOK, etc)
+        - created_at: Unix timestamp when created
+        - associate_trades: List of trade IDs
+    """
+    try:
+        order_data = client.get_order(order_id)
+
+        # Handle both dict and object responses
+        if isinstance(order_data, dict):
+            return order_data
+
+        # Convert object to dict
+        result = {}
+        for field in [
+            "id",
+            "status",
+            "market",
+            "original_size",
+            "size_matched",
+            "outcome",
+            "maker_address",
+            "owner",
+            "price",
+            "side",
+            "asset_id",
+            "expiration",
+            "type",
+            "created_at",
+            "associate_trades",
+        ]:
+            if hasattr(order_data, field):
+                result[field] = getattr(order_data, field)
+
+        return result if result else None
+
+    except Exception as e:
+        if "404" not in str(e):
+            log(f"⚠️ Error fetching order {order_id}: {e}")
+        return None
 
 
 def get_orders(
@@ -614,6 +745,83 @@ def cancel_orders(order_ids: List[str]) -> dict:
             "canceled": [],
             "not_canceled": {order_id: str(e) for order_id in order_ids},
         }
+
+
+def cancel_market_orders(
+    market: Optional[str] = None, asset_id: Optional[str] = None
+) -> dict:
+    """
+    Cancel all orders for a specific market or asset
+
+    Args:
+        market: Condition ID of market to cancel orders for
+        asset_id: Token ID to cancel orders for
+
+    Returns:
+        Dict with 'canceled' (list) and 'not_canceled' (dict) fields
+    """
+    if not market and not asset_id:
+        log("⚠️ Must provide either market or asset_id")
+        return {"canceled": [], "not_canceled": {}}
+
+    try:
+        resp = client.cancel_market_orders(market=market, asset_id=asset_id)
+
+        # Response format: {"canceled": [...], "not_canceled": {...}}
+        if isinstance(resp, dict):
+            canceled = resp.get("canceled", [])
+            not_canceled = resp.get("not_canceled", {})
+
+            # Log summary
+            market_info = (
+                f"market {market[:10]}..." if market else f"asset {asset_id[:10]}..."
+            )
+            if canceled:
+                log(f"✅ Cancelled {len(canceled)} orders for {market_info}")
+            if not_canceled:
+                log(f"⚠️ Failed to cancel {len(not_canceled)} orders for {market_info}")
+
+            return {"canceled": canceled, "not_canceled": not_canceled}
+
+        return {"canceled": [], "not_canceled": {}}
+
+    except Exception as e:
+        log(f"⚠️ Error cancelling market orders: {e}")
+        return {"canceled": [], "not_canceled": {}}
+
+
+def cancel_all() -> dict:
+    """
+    Cancel ALL open orders (emergency function)
+
+    Returns:
+        Dict with 'canceled' (list) and 'not_canceled' (dict) fields
+    """
+    try:
+        log("⚠️ CANCELLING ALL OPEN ORDERS...")
+        resp = client.cancel_all()
+
+        # Response format: {"canceled": [...], "not_canceled": {...}}
+        if isinstance(resp, dict):
+            canceled = resp.get("canceled", [])
+            not_canceled = resp.get("not_canceled", {})
+
+            # Log summary
+            if canceled:
+                log(f"✅ Cancelled {len(canceled)} orders")
+                send_discord(
+                    f"🛑 **EMERGENCY CANCEL**: Cancelled {len(canceled)} orders"
+                )
+            if not_canceled:
+                log(f"⚠️ Failed to cancel {len(not_canceled)} orders")
+
+            return {"canceled": canceled, "not_canceled": not_canceled}
+
+        return {"canceled": [], "not_canceled": {}}
+
+    except Exception as e:
+        log(f"⚠️ Error cancelling all orders: {e}")
+        return {"canceled": [], "not_canceled": {}}
 
 
 def sell_position(
