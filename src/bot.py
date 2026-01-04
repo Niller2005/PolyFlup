@@ -30,11 +30,9 @@ from src.config.settings import (
     ENABLE_DIVERGENCE,
     ENABLE_VWM,
     ENABLE_BFXD,
-    CONFIDENCE_SCALING_FACTOR,
-    MAX_PORTFOLIO_EXPOSURE,
-    HIGH_CONFIDENCE_EDGE_THRESHOLD,
-    HIGH_CONFIDENCE_MOMENTUM_THRESHOLD,
+    BET_PERCENT,
 )
+
 from src.utils.logger import log, send_discord
 from src.utils.web3_utils import get_balance
 from src.data.database import (
@@ -52,10 +50,12 @@ from src.data.market_data import (
     get_current_spot_price,
 )
 from src.trading.strategy import (
+    calculate_confidence,
     calculate_edge,
     adx_allows_trade,
     bfxd_allows_trade,
 )
+
 from src.trading.orders import (
     setup_api_creds,
     place_order,
@@ -73,18 +73,19 @@ def trade_symbol(symbol: str, balance: float):
         return
 
     client = get_clob_client()
-    edge, reason, p_up, best_bid, best_ask, imbalance, signals = calculate_edge(
+    confidence, bias, p_up, best_bid, best_ask, signals = calculate_confidence(
         symbol, up_id, client
     )
 
-    # Determine bias
-    if edge <= (1.0 - MIN_EDGE):
-        token_id, side, price, bias_text = up_id, "UP", p_up, "UP Undervalued"
-    elif edge >= MIN_EDGE:
-        token_id, side, price, bias_text = down_id, "DOWN", 1.0 - p_up, "UP Overvalued"
-    else:
-        log(f"[{symbol}] ⚪ Edge: {edge:.1%} (Neutral) - NO TRADE")
+    if bias == "NEUTRAL" or confidence < 0.2:
+        log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
         return
+
+    # Set token and side based on bias
+    if bias == "UP":
+        token_id, side, price = up_id, "UP", p_up
+    else:
+        token_id, side, price = down_id, "DOWN", 1.0 - p_up
 
     # Check filters
     adx_ok, adx_val = adx_allows_trade(symbol)
@@ -93,12 +94,13 @@ def trade_symbol(symbol: str, balance: float):
     # RSI from signals
     rsi = signals.get("momentum", {}).get("rsi", 50.0)
 
-    status_icon = "✅" if (adx_ok and bfxd_ok) else "❌"
     filter_text = f"ADX: {adx_val:.1f} {'✅' if adx_ok else '❌'}"
     if ENABLE_BFXD and symbol == "BTC":
         filter_text += f" | BFXD: {bfxd_trend} {'✅' if bfxd_ok else '❌'}"
 
-    core_summary = f"Edge: {edge:.1%} ({bias_text}) | {filter_text} | RSI: {rsi:.1f}"
+    core_summary = (
+        f"Confidence: {confidence:.1%} ({bias}) | {filter_text} | RSI: {rsi:.1f}"
+    )
 
     if not adx_ok or not bfxd_ok:
         log(f"[{symbol}] ⛔ {core_summary} | status: BLOCKED")
@@ -106,31 +108,16 @@ def trade_symbol(symbol: str, balance: float):
 
     log(f"[{symbol}] ✅ {core_summary} | status: ENTERING TRADE")
 
-    # Check portfolio exposure limit
-    total_exposure = get_total_exposure()
-    max_exposure_usd = balance * MAX_PORTFOLIO_EXPOSURE
-    if total_exposure + (balance * (BET_PERCENT / 100.0)) > max_exposure_usd:
-        log(
-            f"[{symbol}] ⛔ Exposure limit reached (${total_exposure:.2f} / ${max_exposure_usd:.2f}) - SKIPPING"
-        )
-        return
-
     if price <= 0:
         log(f"[{symbol}] ERROR: Invalid price {price}")
         return
 
     price = max(0.01, min(0.99, price))
+
+    # NEW SIZING: base_bet scaled by confidence (0.2 to 1.0)
+    # Higher confidence = larger position, up to 4x base_bet
     base_bet = balance * (BET_PERCENT / 100.0)
-    # Scale bet based on edge strength
-    # Edge is between MIN_EDGE (e.g. 0.565) and 1.0
-    raw_edge = edge if edge > 0.5 else (1.0 - edge)
-    edge_delta = max(0.0, raw_edge - MIN_EDGE)
-    confidence_multiplier = 1.0 + (edge_delta * CONFIDENCE_SCALING_FACTOR)
-
-    # Dynamic cap based on scaling factor (e.g., 5.0 factor -> 3x cap, 10.0 factor -> 6x cap)
-    max_cap = max(2.0, CONFIDENCE_SCALING_FACTOR * 0.6)
-    confidence_multiplier = min(confidence_multiplier, max_cap)
-
+    confidence_multiplier = 0.5 + (confidence * 3.5)  # Scale to 0.5x - 4.0x
     target_bet = base_bet * confidence_multiplier
 
     size = round(target_bet / price, 6)
@@ -150,7 +137,7 @@ def trade_symbol(symbol: str, balance: float):
         return
 
     send_discord(
-        f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Edge {edge:.1%} | Price {price:.4f}"
+        f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Confidence {confidence:.1%} | Price {price:.4f}"
     )
 
     try:
@@ -164,18 +151,18 @@ def trade_symbol(symbol: str, balance: float):
             slug=get_current_slug(symbol),
             token_id=token_id,
             side=side,
-            edge=edge,
+            edge=confidence,  # Store confidence in edge column for now
             price=price,
             size=size,
             bet_usd=bet_usd_effective,
             p_yes=p_up,
             best_bid=best_bid,
             best_ask=best_ask,
-            imbalance=imbalance,
+            imbalance=signals.get("order_flow", {}).get("buy_pressure", 0.5),
             funding_bias=get_funding_bias(symbol),
             order_status=result["status"],
             order_id=result["order_id"],
-            limit_sell_order_id=None,  # Will be set by position manager at 1 minute left
+            limit_sell_order_id=None,
             target_price=target_price if target_price > 0 else None,
         )
         log(

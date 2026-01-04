@@ -27,6 +27,130 @@ from src.data.market_data import (
 import requests
 
 
+def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
+    """
+    Calculate confidence score and directional bias combining Polymarket and Binance data.
+    Goal: Higher quality entries, fewer stop losses.
+
+    Returns:
+        tuple: (confidence, bias, p_up, best_bid, best_ask, signals)
+        - confidence: 0.0 to 1.0 (sizing)
+        - bias: "UP", "DOWN", or "NEUTRAL"
+    """
+    try:
+        book = client.get_order_book(up_token)
+        if isinstance(book, dict):
+            bids = book.get("bids", []) or []
+            asks = book.get("asks", []) or []
+        else:
+            bids = getattr(book, "bids", []) or []
+            asks = getattr(book, "asks", []) or []
+    except Exception as e:
+        log(f"[{symbol}] Order book error: {e}")
+        return 0.0, "NEUTRAL", 0.5, None, None, {}
+
+    if not bids or not asks:
+        return 0.0, "NEUTRAL", 0.5, None, None, {}
+
+    best_bid = float(
+        bids[-1].price if hasattr(bids[-1], "price") else bids[-1].get("price", 0)
+    )
+    best_ask = float(
+        asks[-1].price if hasattr(asks[-1], "price") else asks[-1].get("price", 0)
+    )
+
+    if not best_bid or not best_ask:
+        return 0.0, "NEUTRAL", 0.5, best_bid, best_ask, {}
+
+    spread = best_ask - best_bid
+    if spread > MAX_SPREAD:
+        return 0.0, "NEUTRAL", 0.5, best_bid, best_ask, {"reason": "spread_too_wide"}
+
+    # Base Polymarket probability
+    p_up = (best_bid + best_ask) / 2.0
+
+    # 1. Price Momentum (Binance) - Weight: 0.35
+    momentum_score = 0.0
+    momentum_dir = "NEUTRAL"
+    momentum = get_price_momentum(symbol, lookback_minutes=MOMENTUM_LOOKBACK_MINUTES)
+    if momentum["direction"] != "NEUTRAL":
+        momentum_score = momentum["strength"]
+        momentum_dir = momentum["direction"]
+        if momentum["acceleration"] > 0 and momentum_dir == "UP":
+            momentum_score *= 1.2
+        if momentum["acceleration"] < 0 and momentum_dir == "DOWN":
+            momentum_score *= 1.2
+
+    # 2. Order Flow (Binance) - Weight: 0.25
+    flow_score = 0.0
+    flow_dir = "NEUTRAL"
+    order_flow = get_order_flow_analysis(symbol)
+    flow_score = abs(order_flow["buy_pressure"] - 0.5) * 2.0  # 0 to 1
+    flow_dir = "UP" if order_flow["buy_pressure"] > 0.5 else "DOWN"
+
+    # 3. Divergence (Poly vs Binance) - Weight: 0.25
+    divergence_score = 0.0
+    divergence_dir = "NEUTRAL"
+    divergence = get_cross_exchange_divergence(symbol, p_up)
+    divergence_score = min(
+        abs(divergence["divergence"]) * 5.0, 1.0
+    )  # Scale 0.2 div to 1.0 score
+    divergence_dir = (
+        "UP"
+        if divergence["opportunity"] == "BUY_UP"
+        else "DOWN"
+        if divergence["opportunity"] == "BUY_DOWN"
+        else "NEUTRAL"
+    )
+
+    # 4. VWAP / VWM - Weight: 0.15
+    vwm_score = 0.0
+    vwm_dir = "NEUTRAL"
+    vwm = get_volume_weighted_momentum(symbol)
+    vwm_score = vwm["momentum_quality"]
+    vwm_dir = "UP" if vwm["vwap_distance"] > 0 else "DOWN"
+
+    # Aggregate Scores for each direction
+    up_total = 0.0
+    down_total = 0.0
+
+    # Apply weights and directions
+    for score, direction, weight in [
+        (momentum_score, momentum_dir, 0.35),
+        (flow_score, flow_dir, 0.25),
+        (divergence_score, divergence_dir, 0.25),
+        (vwm_score, vwm_dir, 0.15),
+    ]:
+        if direction == "UP":
+            up_total += score * weight
+        elif direction == "DOWN":
+            down_total += score * weight
+
+    # Final Decision
+    if up_total > down_total:
+        bias = "UP"
+        confidence = up_total - (down_total * 0.5)  # Penalty for conflicting signals
+    elif down_total > up_total:
+        bias = "DOWN"
+        confidence = down_total - (up_total * 0.5)
+    else:
+        bias = "NEUTRAL"
+        confidence = 0.0
+
+    # Normalize confidence to 0-1
+    confidence = max(0.0, min(1.0, confidence))
+
+    signals = {
+        "momentum": momentum,
+        "order_flow": order_flow,
+        "divergence": divergence,
+        "vwm": vwm,
+        "scores": {"up": up_total, "down": down_total},
+    }
+
+    return confidence, bias, p_up, best_bid, best_ask, signals
+
+
 def calculate_edge(symbol: str, up_token: str, client: ClobClient):
     """
     Calculate edge for trading decision combining Polymarket and Binance data.
