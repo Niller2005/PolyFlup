@@ -17,20 +17,9 @@ app.use(express.json());
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Ensure DB exists before opening or handle error
-let db;
-try {
-    if (!fs.existsSync(dbPath)) {
-        console.warn(`Warning: Database not found at ${dbPath}. Waiting for bot to create it...`);
-    }
-    db = new Database(dbPath, { readonly: true, fileMustExist: false });
-} catch (error) {
-    console.error("Failed to open database:", error);
-}
-
 app.get('/api/stats', (req, res) => {
     try {
-        if (!db || !fs.existsSync(dbPath)) {
+        if (!fs.existsSync(dbPath)) {
             return res.json({
                 summary: { total: 0, settled: 0, wins: 0, invested: 0, total_pnl: 0, avg_roi: 0 },
                 per_symbol: [],
@@ -38,6 +27,9 @@ app.get('/api/stats', (req, res) => {
                 pnl_history: []
             });
         }
+        
+        // Create a new connection for each request to avoid caching
+        const db = new Database(dbPath, { readonly: true, fileMustExist: false });
         
         // Summary statistics
         const summary = db.prepare(`
@@ -90,6 +82,9 @@ app.get('/api/stats', (req, res) => {
             recent_trades,
             pnl_history
         });
+        
+        // Close the connection after use
+        db.close();
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: error.message });
