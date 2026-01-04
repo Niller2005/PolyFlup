@@ -904,6 +904,21 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                             )
 
                 if should_cancel:
+                    # Only log once per trade (check if we already tried)
+                    c.execute(
+                        "SELECT order_status FROM trades WHERE id = ?", (trade_id,)
+                    )
+                    status_row = c.fetchone()
+                    current_status = status_row[0] if status_row else None
+
+                    # Skip if we already attempted cancellation (status will be different from 'live')
+                    if current_status and current_status.upper() not in [
+                        "LIVE",
+                        "DELAYED",
+                        "UNMATCHED",
+                    ]:
+                        continue
+
                     log(
                         f"🛑 CANCELLING unfilled order for trade #{trade_id}: {cancel_reason}"
                     )
@@ -951,12 +966,62 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
                         # Mark as cancelled if not retrying or retry failed
                         c.execute(
-                            "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_UNFILLED' WHERE id = ?",
+                            "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_UNFILLED', order_status = 'CANCELED' WHERE id = ?",
                             (trade_id,),
                         )
                         conn.commit()
                     else:
-                        log(f"⚠️ Buy order may already be cancelled or not found")
+                        # Cancel failed - likely order already filled or cancelled
+                        # Update status so we don't keep trying
+                        log(
+                            f"ℹ️ Cancel returned False - order may already be filled/cancelled, checking status..."
+                        )
+
+                        # Re-check order status
+                        actual_status = get_order_status(buy_order_id)
+                        log(f"   Order status: {actual_status}")
+
+                        if actual_status in ["FILLED", "matched"]:
+                            # Order was filled! Update status and continue monitoring
+                            log(f"✅ Order was actually FILLED, updating database")
+                            c.execute(
+                                "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
+                                (trade_id,),
+                            )
+                            conn.commit()
+                            continue
+                        elif actual_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
+                            # Order already cancelled/expired, settle it
+                            log(f"ℹ️ Order already {actual_status}, settling trade")
+                            c.execute(
+                                "UPDATE trades SET settled = 1, final_outcome = ?, order_status = ? WHERE id = ?",
+                                (
+                                    f"CANCELLED_UNFILLED_{actual_status}",
+                                    actual_status,
+                                    trade_id,
+                                ),
+                            )
+                            conn.commit()
+                            continue
+                        elif actual_status == "ERROR":
+                            # Can't determine status (API error) - mark to prevent infinite retry
+                            log(
+                                f"⚠️ Can't determine order status, marking as CANCEL_ATTEMPTED to prevent spam"
+                            )
+                            c.execute(
+                                "UPDATE trades SET order_status = 'CANCEL_ATTEMPTED' WHERE id = ?",
+                                (trade_id,),
+                            )
+                            conn.commit()
+                            continue
+                        else:
+                            # Unknown state (LIVE, DELAYED, etc.), mark to prevent spam
+                            c.execute(
+                                "UPDATE trades SET order_status = 'CANCEL_ATTEMPTED' WHERE id = ?",
+                                (trade_id,),
+                            )
+                            conn.commit()
+                            continue
 
                     continue
 
