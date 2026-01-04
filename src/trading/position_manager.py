@@ -265,7 +265,13 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
                 # Cancel existing limit sell order if it exists
                 if limit_sell_order_id:
-                    cancel_order(limit_sell_order_id)
+                    if cancel_order(limit_sell_order_id):
+                        log(
+                            f"[{symbol}] ⏳ Limit sell order cancelled, waiting for tokens to be freed..."
+                        )
+                        import time
+
+                        time.sleep(2)  # Wait for exchange to free up tokens
 
                 # Sell current position
                 sell_result = sell_position(token_id, size, current_price)
@@ -388,7 +394,13 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
                 # Cancel existing limit sell order if it exists
                 if limit_sell_order_id:
-                    cancel_order(limit_sell_order_id)
+                    if cancel_order(limit_sell_order_id):
+                        log(
+                            f"[{symbol}] ⏳ Limit sell order cancelled, waiting for tokens to be freed..."
+                        )
+                        import time
+
+                        time.sleep(2)  # Wait for exchange to free up tokens
 
                 # Sell current position
                 sell_result = sell_position(token_id, size, current_price)

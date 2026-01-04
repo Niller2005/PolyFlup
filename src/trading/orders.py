@@ -129,7 +129,7 @@ def place_order(token_id: str, price: float, size: float) -> dict:
 def cancel_order(order_id: str) -> bool:
     """Cancel an open order on CLOB"""
     try:
-        resp = client.cancel_order(order_id)
+        resp = client.cancel(order_id)
         return resp == "OK" or (isinstance(resp, dict) and resp.get("status") == "OK")
     except Exception as e:
         log(f"⚠️ Error cancelling order {order_id}: {e}")
