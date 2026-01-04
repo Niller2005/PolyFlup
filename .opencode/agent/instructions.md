@@ -1,7 +1,7 @@
 ---
 description: Keep instructions up-to-date
 mode: subagent
-model: opencode/gemini-3-flash
+model: opencode/claude-sonnet-4.5
 ---
 
 ## Overview

@@ -123,13 +123,32 @@ docker compose down
 #### Logging
 - Use the `log()` function from `src.utils.logger`
 - Include context: `log(f"[{symbol}] message")`
-- Use emojis for visual categorization:
-  - ✅ Success/Go
+- **Always start log lines with relevant emojis** for visual scanning
+- Keep logs concise - only log significant events and state changes
+- Use verbose cycles (every 60s) for routine monitoring logs
+
+**Standard Emoji Guide:**
+  - 👀 Monitoring/watching positions
+  - 📈 Position with positive P&L
+  - 📉 Position with negative P&L / Exit plan
+  - 🛑 Stop loss triggered
+  - 🎯 Take profit / Exit plan filled
+  - ✅ Success / Order filled
   - ❌ Error/Failure
   - ⚠️ Warning
-  - 🔄 Processing/Cycle
+  - 🔄 Reversal / Retry / Update
+  - 🔔 Notification
+  - 💪 Holding despite negative P&L (on winning side)
+  - ⏳ Waiting / Processing
+  - 📊 Position size/average price updates
   - 💰 Money/Balance
-  - 📊 Statistics
+  - 🚀 Trade execution
+
+**Logging Best Practices:**
+- Only log position details on verbose cycles (60s) and only when P&L is significant (>20% or <-30%)
+- Don't log routine order status checks (LIVE, DELAYED, UNMATCHED) unless there's an issue
+- Consolidate related information into single log lines
+- Use emojis consistently to make log scanning effortless
 
 #### Configuration
 - All config in `src/config/settings.py`
