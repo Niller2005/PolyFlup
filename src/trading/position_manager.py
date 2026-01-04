@@ -369,7 +369,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             if (
                 ENABLE_STOP_LOSS
                 and current_buy_status == "FILLED"
-                and price_change_pct <= stop_threshold
+                and pnl_pct <= stop_threshold
             ):
                 log(
                     f"🛑 {sl_label} trade #{trade_id}: {price_change_pct:.1f}% move (Threshold: {stop_threshold}%)"
