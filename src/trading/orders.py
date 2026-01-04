@@ -1,8 +1,9 @@
 """Order placement and management"""
 
 import os
+from typing import List, Dict, Optional
 from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import OrderArgs, OrderType, ApiCreds
+from py_clob_client.clob_types import OrderArgs, OrderType, ApiCreds, PostOrdersArgs
 from py_clob_client.order_builder.constants import BUY, SELL
 from dotenv import set_key
 from src.config.settings import (
@@ -13,6 +14,10 @@ from src.config.settings import (
     FUNDER_PROXY,
 )
 from src.utils.logger import log
+
+# API Constraints
+MIN_TICK_SIZE = 0.01
+MIN_ORDER_SIZE = 5.0  # Minimum size in shares
 
 # Initialize client
 client = ClobClient(
@@ -82,6 +87,65 @@ def _ensure_api_creds(order_client: ClobClient) -> None:
             log(f"⚠ Error setting API creds: {e}")
 
 
+def _validate_price(price: float) -> tuple[bool, Optional[str]]:
+    """
+    Validate order price meets minimum tick size requirements
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if price <= 0:
+        return False, "Price must be greater than 0"
+
+    if price < 0.01 or price > 0.99:
+        return False, "Price must be between 0.01 and 0.99"
+
+    # Check tick size (must be multiple of 0.01)
+    if round(price, 2) != price:
+        return (
+            False,
+            f"Price must be rounded to minimum tick size of {MIN_TICK_SIZE} (got {price})",
+        )
+
+    return True, None
+
+
+def _validate_size(size: float) -> tuple[bool, Optional[str]]:
+    """
+    Validate order size meets minimum requirements
+
+    Returns:
+        (is_valid, error_message)
+    """
+    if size < MIN_ORDER_SIZE:
+        return (
+            False,
+            f"Order size must be at least {MIN_ORDER_SIZE} shares (got {size})",
+        )
+
+    return True, None
+
+
+def _validate_order(price: float, size: float) -> tuple[bool, Optional[str]]:
+    """
+    Validate order parameters before placement
+
+    Returns:
+        (is_valid, error_message)
+    """
+    # Validate price
+    is_valid, error = _validate_price(price)
+    if not is_valid:
+        return False, error
+
+    # Validate size
+    is_valid, error = _validate_size(size)
+    if not is_valid:
+        return False, error
+
+    return True, None
+
+
 def place_limit_order(
     token_id: str,
     price: float,
@@ -89,7 +153,18 @@ def place_limit_order(
     side: str,
     silent_on_balance_error: bool = False,
 ) -> dict:
-    """Place a limit order (BUY or SELL) on CLOB"""
+    """Place a limit order (BUY or SELL) on CLOB with validation"""
+    # Validate order parameters
+    is_valid, error_msg = _validate_order(price, size)
+    if not is_valid:
+        log(f"❌ Order validation failed: {error_msg}")
+        return {
+            "success": False,
+            "status": "VALIDATION_ERROR",
+            "order_id": None,
+            "error": error_msg,
+        }
+
     try:
         order_client = client
 
@@ -129,6 +204,137 @@ def place_limit_order(
 def place_order(token_id: str, price: float, size: float) -> dict:
     """Place BUY order on CLOB"""
     return place_limit_order(token_id, price, size, BUY)
+
+
+def place_batch_orders(orders: List[Dict[str, any]]) -> List[dict]:
+    """
+    Place multiple orders in a single batch (up to 15 orders)
+
+    Args:
+        orders: List of order dictionaries with keys:
+            - token_id: str
+            - price: float
+            - size: float
+            - side: str (BUY or SELL)
+
+    Returns:
+        List of result dictionaries with success, status, order_id, error
+    """
+    if not orders:
+        return []
+
+    if len(orders) > 15:
+        log(f"⚠️ Batch order limit is 15, got {len(orders)}. Truncating to first 15.")
+        orders = orders[:15]
+
+    # Validate all orders first
+    validated_orders = []
+    results = []
+
+    for i, order_params in enumerate(orders):
+        token_id = order_params.get("token_id")
+        price = order_params.get("price")
+        size = order_params.get("size")
+        side = order_params.get("side", BUY)
+
+        # Validate
+        is_valid, error_msg = _validate_order(price, size)
+        if not is_valid:
+            log(f"❌ Batch order {i + 1} validation failed: {error_msg}")
+            results.append(
+                {
+                    "success": False,
+                    "status": "VALIDATION_ERROR",
+                    "order_id": None,
+                    "error": error_msg,
+                }
+            )
+            continue
+
+        validated_orders.append((i, order_params))
+
+    if not validated_orders:
+        return results
+
+    try:
+        order_client = client
+        _ensure_api_creds(order_client)
+
+        # Build batch order args
+        batch_orders = []
+        for _, order_params in validated_orders:
+            order_args = OrderArgs(
+                token_id=order_params["token_id"],
+                price=order_params["price"],
+                size=order_params["size"],
+                side=order_params.get("side", BUY),
+            )
+            signed_order = order_client.create_order(order_args)
+            batch_orders.append(
+                PostOrdersArgs(
+                    order=signed_order,
+                    orderType=OrderType.GTC,
+                )
+            )
+
+        # Place batch order
+        responses = order_client.post_orders(batch_orders)
+
+        # Process responses
+        for idx, (original_idx, _) in enumerate(validated_orders):
+            if idx < len(responses):
+                resp = responses[idx]
+                status = (
+                    resp.get("status", "UNKNOWN")
+                    if isinstance(resp, dict)
+                    else "UNKNOWN"
+                )
+                order_id = resp.get("orderID") if isinstance(resp, dict) else None
+                error_msg = resp.get("errorMsg", "") if isinstance(resp, dict) else ""
+                success = resp.get("success", True) if isinstance(resp, dict) else True
+
+                # Insert result at correct position
+                while len(results) <= original_idx:
+                    results.append(None)
+
+                results[original_idx] = {
+                    "success": success and not error_msg,
+                    "status": status,
+                    "order_id": order_id,
+                    "error": error_msg or None,
+                }
+            else:
+                while len(results) <= original_idx:
+                    results.append(None)
+                results[original_idx] = {
+                    "success": False,
+                    "status": "ERROR",
+                    "order_id": None,
+                    "error": "No response from batch order API",
+                }
+
+        return results
+
+    except Exception as e:
+        error_str = str(e)
+        log(f"❌ Batch order error: {e}")
+        import traceback
+
+        log(traceback.format_exc())
+
+        # Return errors for all remaining orders
+        for i, _ in validated_orders:
+            while len(results) <= i:
+                results.append(None)
+            if results[i] is None:
+                results[i] = {
+                    "success": False,
+                    "status": "ERROR",
+                    "order_id": None,
+                    "error": error_str,
+                }
+
+        return results
 
 
 def get_order_status(order_id: str) -> str:

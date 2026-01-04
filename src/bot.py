@@ -1,6 +1,7 @@
 """Main bot loop"""
 
 import time
+from typing import Optional
 from datetime import datetime
 from eth_account import Account
 from src.config.settings import (
@@ -57,6 +58,7 @@ from src.trading.strategy import (
 from src.trading.orders import (
     setup_api_creds,
     place_order,
+    place_batch_orders,
     get_clob_client,
 )
 from src.trading.position_manager import (
@@ -133,8 +135,13 @@ def _calculate_bet_size(
     return size, bet_usd_effective
 
 
-def trade_symbol(symbol: str, balance: float):
-    """Execute trading logic for a symbol"""
+def _prepare_trade_params(symbol: str, balance: float) -> Optional[dict]:
+    """
+    Prepare trade parameters without executing the order
+
+    Returns:
+        Dict with trade parameters or None if no trade should be made
+    """
     up_id, down_id = get_token_ids(symbol)
     if not up_id or not down_id:
         log(f"[{symbol}] ❌ Market not found")
@@ -214,47 +221,146 @@ def trade_symbol(symbol: str, balance: float):
 
     size, bet_usd_effective = _calculate_bet_size(balance, price, sizing_confidence)
 
-    result = place_order(token_id, price, size)
+    # Return trade parameters
+    window_start, window_end = get_window_times(symbol)
+    target_price_final = get_window_start_price(symbol)
+
+    return {
+        "symbol": symbol,
+        "token_id": token_id,
+        "side": side,
+        "price": price,
+        "size": size,
+        "bet_usd": bet_usd_effective,
+        "confidence": confidence,
+        "p_up": p_up,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "imbalance": imbalance_val,
+        "funding_bias": get_funding_bias(symbol),
+        "target_price": target_price_final if target_price_final > 0 else None,
+        "window_start": window_start,
+        "window_end": window_end,
+        "slug": get_current_slug(symbol),
+    }
+
+
+def trade_symbol(symbol: str, balance: float):
+    """Execute trading logic for a symbol (single order)"""
+    trade_params = _prepare_trade_params(symbol, balance)
+
+    if not trade_params:
+        return
+
+    # Place order
+    result = place_order(
+        trade_params["token_id"], trade_params["price"], trade_params["size"]
+    )
 
     # Only proceed if order was successful
     if not result["success"]:
-        log(f"[{symbol}] ❌ Order failed, skipping trade tracking")
+        log(f"[{trade_params['symbol']}] ❌ Order failed, skipping trade tracking")
         return
 
     send_discord(
-        f"**[{symbol}] {side} ${bet_usd_effective:.2f}** | Confidence {confidence:.1%} | Price {price:.4f}"
+        f"**[{trade_params['symbol']}] {trade_params['side']} ${trade_params['bet_usd']:.2f}** | Confidence {trade_params['confidence']:.1%} | Price {trade_params['price']:.4f}"
     )
 
     try:
-        window_start, window_end = get_window_times(symbol)
-        target_price = get_window_start_price(symbol)
-
         trade_id = save_trade(
-            symbol=symbol,
-            window_start=window_start.isoformat(),
-            window_end=window_end.isoformat(),
-            slug=get_current_slug(symbol),
-            token_id=token_id,
-            side=side,
-            edge=confidence,  # Store confidence in edge column for now
-            price=price,
-            size=size,
-            bet_usd=bet_usd_effective,
-            p_yes=p_up,
-            best_bid=best_bid,
-            best_ask=best_ask,
-            imbalance=imbalance_val,
-            funding_bias=get_funding_bias(symbol),
+            symbol=trade_params["symbol"],
+            window_start=trade_params["window_start"].isoformat(),
+            window_end=trade_params["window_end"].isoformat(),
+            slug=trade_params["slug"],
+            token_id=trade_params["token_id"],
+            side=trade_params["side"],
+            edge=trade_params["confidence"],
+            price=trade_params["price"],
+            size=trade_params["size"],
+            bet_usd=trade_params["bet_usd"],
+            p_yes=trade_params["p_up"],
+            best_bid=trade_params["best_bid"],
+            best_ask=trade_params["best_ask"],
+            imbalance=trade_params["imbalance"],
+            funding_bias=trade_params["funding_bias"],
             order_status=result["status"],
             order_id=result["order_id"],
             limit_sell_order_id=None,
-            target_price=target_price if target_price > 0 else None,
+            target_price=trade_params["target_price"],
         )
         log(
-            f"[{symbol}] 🚀 #{trade_id} {side} ${bet_usd_effective:.2f} @ {price:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
+            f"[{trade_params['symbol']}] 🚀 #{trade_id} {trade_params['side']} ${trade_params['bet_usd']:.2f} @ {trade_params['price']:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
         )
     except Exception as e:
-        log(f"[{symbol}] Trade completion error: {e}")
+        log(f"[{trade_params['symbol']}] Trade completion error: {e}")
+
+
+def trade_symbols_batch(symbols: list, balance: float):
+    """Execute trading logic for multiple symbols using batch orders"""
+    # Prepare all trades
+    trade_params_list = []
+    for symbol in symbols:
+        params = _prepare_trade_params(symbol, balance)
+        if params:
+            trade_params_list.append(params)
+
+    if not trade_params_list:
+        return
+
+    # Build batch order list
+    batch_orders = []
+    for params in trade_params_list:
+        batch_orders.append(
+            {
+                "token_id": params["token_id"],
+                "price": params["price"],
+                "size": params["size"],
+                "side": "BUY",  # All initial orders are BUYs
+            }
+        )
+
+    # Place batch orders
+    results = place_batch_orders(batch_orders)
+
+    # Process results and save trades
+    for params, result in zip(trade_params_list, results):
+        if not result["success"]:
+            log(
+                f"[{params['symbol']}] ❌ Order failed: {result.get('error', 'Unknown error')}"
+            )
+            continue
+
+        send_discord(
+            f"**[{params['symbol']}] {params['side']} ${params['bet_usd']:.2f}** | Confidence {params['confidence']:.1%} | Price {params['price']:.4f}"
+        )
+
+        try:
+            trade_id = save_trade(
+                symbol=params["symbol"],
+                window_start=params["window_start"].isoformat(),
+                window_end=params["window_end"].isoformat(),
+                slug=params["slug"],
+                token_id=params["token_id"],
+                side=params["side"],
+                edge=params["confidence"],
+                price=params["price"],
+                size=params["size"],
+                bet_usd=params["bet_usd"],
+                p_yes=params["p_up"],
+                best_bid=params["best_bid"],
+                best_ask=params["best_ask"],
+                imbalance=params["imbalance"],
+                funding_bias=params["funding_bias"],
+                order_status=result["status"],
+                order_id=result["order_id"],
+                limit_sell_order_id=None,
+                target_price=params["target_price"],
+            )
+            log(
+                f"[{params['symbol']}] 🚀 #{trade_id} {params['side']} ${params['bet_usd']:.2f} @ {params['price']:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
+            )
+        except Exception as e:
+            log(f"[{params['symbol']}] Trade completion error: {e}")
 
 
 def main():
@@ -366,9 +472,11 @@ def main():
                 f"💰 Balance: {current_balance:.2f} USDC | Evaluating {len(MARKETS)} markets"
             )
 
-            for sym in MARKETS:
-                trade_symbol(sym, current_balance)
-                time.sleep(1)
+            # Use batch orders for multiple markets (more efficient)
+            if len(MARKETS) > 1:
+                trade_symbols_batch(MARKETS, current_balance)
+            elif len(MARKETS) == 1:
+                trade_symbol(MARKETS[0], current_balance)
 
             check_and_settle_trades()
             cycle += 1
