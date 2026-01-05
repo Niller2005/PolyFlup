@@ -565,30 +565,18 @@ def _check_exit_plan(
             limit_sell_id = oid
 
     if verbose and side:
-        scoring_text = ""
-        if limit_sell_id:
-            # Use passed value if available, otherwise check (fallback)
-            if is_scoring is None:
-                is_scoring = check_order_scoring(limit_sell_id)
-            
-            scoring_text = " | ✅ SCORING" if is_scoring else " | ❌ NOT SCORING"
-            
-            # REWARD OPTIMIZATION: Disabled to keep 0.99 target.
-            # Orders will only score when the midpoint naturally approaches 0.99.
-
-
-
         status = f"Trade #{trade_id} {side} PnL={price_change_pct:+.1f}%"
         if scaled_in:
             status += " | 📊 Scaled in"
         if limit_sell_id:
-            status += f" | ⏰ Exit active ({age:.0f}s){scoring_text}"
+            status += f" | ⏰ Exit active ({age:.0f}s)"
         else:
             wait_text = ""
             if age < EXIT_MIN_POSITION_AGE:
                 wait_text = f" (Waiting {EXIT_MIN_POSITION_AGE - age:.0f}s)"
             status += f" | ⏳ Exit pending ({age:.0f}s){wait_text}"
         log(f"  {'📈' if pnl_pct > 0 else '📉'} [{symbol}] {status}")
+
 
 
 def _check_scale_in(
