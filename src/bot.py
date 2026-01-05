@@ -67,9 +67,11 @@ from src.trading.position_manager import (
     check_open_positions,
     get_exit_plan_stats,
     recover_open_positions,
+    sync_positions_with_exchange,
 )
-from src.utils.notifications import process_notifications
+from src.utils.notifications import process_notifications, init_ws_callbacks
 from src.trading.settlement import check_and_settle_trades
+from src.utils.websocket_manager import ws_manager
 
 
 def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
@@ -153,6 +155,11 @@ def _prepare_trade_params(
         if add_spacing:
             log("")  # Add blank line
         return
+
+    # Register tokens with WebSocket manager for real-time price updates
+    ws_manager.subscribe_to_prices(
+        [up_id, down_id], {up_id: f"{symbol}-UP", down_id: f"{symbol}-DOWN"}
+    )
 
     client = get_clob_client()
     confidence, bias, p_up, best_bid, best_ask, signals = calculate_confidence(
@@ -411,6 +418,10 @@ def main():
     setup_api_creds()
     init_database()
 
+    # Start WebSocket Manager
+    ws_manager.start()
+    init_ws_callbacks()
+
     if FUNDER_PROXY and FUNDER_PROXY.startswith("0x"):
         addr = FUNDER_PROXY
         log_addr_type = "Funder"
@@ -427,6 +438,7 @@ def main():
 
     # Recover and start monitoring any existing open positions
     recover_open_positions()
+    sync_positions_with_exchange(addr)
 
     # Immediately check positions to ensure stop loss/take profit monitoring is active
     log("🔍 Performing initial position check...")

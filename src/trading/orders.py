@@ -41,10 +41,10 @@ API_ERRORS = {
 # Initialize client
 client = ClobClient(
     host=CLOB_HOST,
-    key=PROXY_PK,
+    key=PROXY_PK or "",
     chain_id=CHAIN_ID,
     signature_type=SIGNATURE_TYPE,
-    funder=FUNDER_PROXY or None,
+    funder=FUNDER_PROXY or "",
 )
 
 # Hotfix: ensure client has builder_config attribute
@@ -75,7 +75,8 @@ def get_midpoint(token_id: str) -> Optional[float]:
             if mid:
                 return float(mid)
         elif hasattr(result, "mid"):
-            return float(result.mid)
+            val = getattr(result, "mid")
+            return float(val) if val else None
 
         return None
 
@@ -125,7 +126,8 @@ def get_spread(token_id: str) -> Optional[float]:
             if spread:
                 return float(spread)
         elif hasattr(result, "spread"):
-            return float(result.spread)
+            val = getattr(result, "spread")
+            return float(val) if val else None
 
         return None
 
@@ -205,7 +207,7 @@ def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
 
         params = BalanceAllowanceParams(
             asset_type=AssetType.CONDITIONAL if token_id else AssetType.COLLATERAL,
-            token_id=token_id,
+            token_id=token_id or "",
         )
 
         result = client.get_balance_allowance(params)
@@ -217,8 +219,8 @@ def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
             }
         elif hasattr(result, "balance") and hasattr(result, "allowance"):
             return {
-                "balance": float(result.balance) / 1_000_000.0,
-                "allowance": float(result.allowance) / 1_000_000.0,
+                "balance": float(getattr(result, "balance")) / 1_000_000.0,
+                "allowance": float(getattr(result, "allowance")) / 1_000_000.0,
             }
 
         return None
@@ -289,6 +291,35 @@ def drop_notifications(notification_ids: List[str]) -> bool:
     except Exception as e:
         log(f"⚠️ Error dropping notifications: {e}")
         return False
+
+
+def get_current_positions(user_address: str) -> List[dict]:
+    """
+    Get current open positions for a user from Gamma API
+
+    Args:
+        user_address: Ethereum address of the user
+
+    Returns:
+        List of position dictionaries
+    """
+    try:
+        from src.config.settings import GAMMA_API_BASE
+        import requests
+
+        url = f"{GAMMA_API_BASE}/positions?user={user_address}"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+
+        data = resp.json()
+        if isinstance(data, list):
+            return data
+
+        return data.get("positions", []) if isinstance(data, dict) else []
+
+    except Exception as e:
+        log(f"⚠️ Error getting positions from Gamma: {e}")
+        return []
 
 
 def setup_api_creds() -> None:
@@ -516,7 +547,8 @@ def _execute_with_retry(func, *args, **kwargs):
                 log(f"❌ Max retries reached, giving up")
 
     # Raise last error if all retries failed
-    raise last_error
+    if last_error:
+        raise last_error
 
 
 def place_limit_order(
@@ -650,12 +682,14 @@ def place_limit_order(
         # CRITICAL FIX: Try to extract order_id from exception if it exists
         # Sometimes the API returns an error but still creates the order
         order_id_from_error = None
-        if hasattr(e, "response") and hasattr(e.response, "json"):
-            try:
-                error_json = e.response.json()
-                order_id_from_error = error_json.get("orderID")
-            except:
-                pass
+        if hasattr(e, "response"):
+            resp_attr = getattr(e, "response")
+            if hasattr(resp_attr, "json"):
+                try:
+                    error_json = resp_attr.json()
+                    order_id_from_error = error_json.get("orderID")
+                except:
+                    pass
 
         # Only log if not a balance error during retry, or if we want full logging
         if not (silent_on_balance_error and "balance" in error_str.lower()):
@@ -825,6 +859,17 @@ def place_batch_orders(orders: List[Dict[str, any]]) -> List[dict]:
         side = order_params.get("side", BUY)
 
         # Validate
+        if price is None or size is None:
+            results.append(
+                {
+                    "success": False,
+                    "status": "VALIDATION_ERROR",
+                    "order_id": None,
+                    "error": "Price and size are required",
+                }
+            )
+            continue
+
         is_valid, error_msg = _validate_order(price, size)
         if not is_valid:
             log(f"❌ Batch order {i + 1} validation failed: {error_msg}")
@@ -900,7 +945,8 @@ def place_batch_orders(orders: List[Dict[str, any]]) -> List[dict]:
                     "error": "No response from batch order API",
                 }
 
-        return results
+        # Filter out None values that might have been added to fill original indices
+        return [r for r in results if r is not None]
 
     except Exception as e:
         error_str = str(e)
@@ -921,7 +967,7 @@ def place_batch_orders(orders: List[Dict[str, any]]) -> List[dict]:
                     "error": error_str,
                 }
 
-        return results
+        return [r for r in results if r is not None]
 
 
 def get_order_status(order_id: str) -> str:
@@ -1139,7 +1185,7 @@ def cancel_market_orders(
         return {"canceled": [], "not_canceled": {}}
 
     try:
-        resp = client.cancel_market_orders(market=market, asset_id=asset_id)
+        resp = client.cancel_market_orders(market=market or "", asset_id=asset_id or "")
 
         # Response format: {"canceled": [...], "not_canceled": {...}}
         if isinstance(resp, dict):

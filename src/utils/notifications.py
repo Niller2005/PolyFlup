@@ -1,15 +1,37 @@
 """Notification monitoring and processing"""
 
+import time
 from typing import List, Dict
 from src.utils.logger import log, send_discord
 from src.trading.orders import get_notifications, drop_notifications
 from src.data.db_connection import db_connection
 
 
+from src.utils.websocket_manager import ws_manager
+
+
 # Notification type constants
 NOTIF_ORDER_CANCELLED = 1
 NOTIF_ORDER_FILLED = 2
 NOTIF_MARKET_RESOLVED = 4
+
+
+def init_ws_callbacks():
+    """Register WebSocket callbacks for real-time updates"""
+    ws_manager.register_callback("order", _handle_ws_order_event)
+
+
+def _handle_ws_order_event(event: str, order: dict):
+    """Bridge between WebSocket events and internal handlers"""
+    # Map WebSocket event types to internal notification types
+    # Polymarket WSS events: "fill", "cancel", etc.
+    if event == "fill":
+        # WebSocket 'order' message has the full order object
+        payload = {"order_id": order.get("id")}
+        _handle_order_fill(payload, int(time.time()))
+    elif event == "cancel":
+        payload = {"order_id": order.get("id")}
+        _handle_order_cancelled(payload, int(time.time()))
 
 
 def process_notifications() -> None:
