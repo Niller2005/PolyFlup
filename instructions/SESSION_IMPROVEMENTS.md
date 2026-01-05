@@ -538,6 +538,17 @@ When scale-in doubles position size (e.g., 5.62 → 11.24 shares), the exit plan
 
 ---
 
+### 29. Resilient Order Cancellation
+**Description:** Treat "Not Found" errors during cancellation as successful.
+
+**Fix:**
+- Updated `cancel_order` to return `True` if the API returns a 404 or "Order not found" error.
+- Prevents misleading "Failed to cancel" warnings when the exchange has already removed the order.
+
+**Impact:** Smoother scale-in updates and exit plan replacements.
+
+---
+
 ## Complete Statistics
 
 ### Lines of Code

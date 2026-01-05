@@ -208,6 +208,9 @@ MIGRATIONS = [
 
 ### New Settings (.env)
 ```env
+# Exit Plan Management
+EXIT_MIN_POSITION_AGE=60               # Wait 1 minute before exit plan (default: 60)
+
 # Unfilled Order Management
 UNFILLED_TIMEOUT_SECONDS=300           # Cancel after 5 minutes (default: 300)
 UNFILLED_RETRY_ON_WINNING_SIDE=YES     # Retry at market if winning (default: YES)
@@ -222,7 +225,7 @@ UNFILLED_RETRY_ON_WINNING_SIDE=YES     # Retry at market if winning (default: YE
 # Exit plan automatically updates when scale-in fills
 # No manual intervention needed!
 
-# 1. Exit plan places order at 300s for initial size
+# 1. Exit plan places order at 60s for initial size
 # 2. Scale-in triggers and fills
 # 3. Exit plan order automatically updated for new total size
 # 4. Full position covered ✅
@@ -289,7 +292,7 @@ print(f"Cancelled {len(result['canceled'])} orders")
 
 ### "Exit plan only sold half position"
 **Cause:** Scale-in increased position size but exit plan order wasn't updated  
-**Solution:** Exit plan order automatically updated when scale-in fills
+**Solution:** Exit plan order automatically updated when scale-in fills (robust status sync handles MATCHED/FILLED)
 
 **Example:**
 ```

@@ -152,11 +152,13 @@ docker compose down
 - Don't log routine order status checks (LIVE, DELAYED, UNMATCHED) unless there's an issue
 - Consolidate related information into single log lines (e.g., add `📋 Scale-in pending` or `📊 Scaled in` to status summary)
 - Use emojis consistently to make log scanning effortless
+- **Exit Plan Visibility**: Always show current status (Pending/Active) in verbose monitoring logs.
 
 **Action & Settlement Log Examples:**
 ```text
   📈 [XRP] Trade #154 UP PnL=+71.1% | 📈 SCALE IN triggered: price=$0.78, 119s left
   📈 [XRP] Trade #154 UP PnL=+71.1% | ✅ SCALE IN order placed: 28.92 shares @ $0.78 (status: live)
+  📈 [XRP] Trade #154 UP PnL=+71.1% | ⏳ Exit plan pending (45s/60s)
 🎯 [BTC] EXIT PLAN SUCCESS: Trade #143 MATCHED at 0.99! (matched 30.58 shares)
 💰 [BTC] #143 UP: +4.89$ (+19.2%)
 ```
