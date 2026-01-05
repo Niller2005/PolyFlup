@@ -1,6 +1,29 @@
 # Quick Reference - New Features
 
-Quick reference for all new features added in the 2026-01-04 session.
+Quick reference for all new features and modular architecture added in Jan 2026.
+
+---
+
+## Modular Architecture (New)
+
+The backend has been fully modularized into packages. You can still import from the main package, or directly from submodules for clarity:
+
+### Order Management (`src.trading.orders`)
+- `client.py`: CLOB Client & API Creds
+- `limit.py`: Limit & Batch Orders
+- `market.py`: Market Orders
+- `management.py`: Cancel & Status
+- `positions.py`: Balance & Positions
+- `market_info.py`: Prices & Spreads
+- `scoring.py`: Reward Verification
+- `utils.py`: `truncate_float` & Validation
+
+### Market Data (`src.data.market_data`)
+- `polymarket.py`: CLOB native data
+- `binance.py`: Spot price data
+- `indicators.py`: TA (ADX, RSI, VWM)
+- `analysis.py`: Order Flow & Divergence
+- `external.py`: Funding & Sentiment
 
 ---
 

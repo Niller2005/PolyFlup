@@ -212,10 +212,13 @@ docker compose down
 ```
 src/
 ├── config/         # Settings and environment variables
-├── data/           # Database, market data fetching
-├── trading/        # Orders, strategy, package-based position management
-│   ├── position_manager/ # Modular position monitoring
+├── data/           # Database and market data
+│   ├── market_data/ # Modular data fetching (Polymarket, Binance, Indicators)
 │   └── ...
+├── trading/        # Core trading logic
+│   ├── orders/      # Modular order management (Limit, Market, Batch)
+│   ├── position_manager/ # Modular position monitoring
+│   └── strategy.py  # Entry signals and confidence logic
 └── utils/          # Logging, web3 utilities, WebSocket manager
 ```
 
