@@ -188,6 +188,7 @@ def check_open_positions(verbose=True, check_orders=False):
                         conn,
                         side,
                         p_chg_val,
+                        target_price=target,
                         verbose=verbose,
                     )
 

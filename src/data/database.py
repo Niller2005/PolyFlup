@@ -154,6 +154,10 @@ def generate_statistics():
         winning_trades = c.fetchone()[0]
         win_rate = (winning_trades / total_trades) * 100
 
+        # Outcome Breakdown
+        c.execute("SELECT final_outcome, COUNT(*) FROM trades WHERE settled = 1 GROUP BY final_outcome")
+        outcomes = c.fetchall()
+
     report = []
     report.append("=" * 80)
     report.append("📊 POLYASTRA TRADING PERFORMANCE REPORT")
@@ -164,6 +168,13 @@ def generate_statistics():
     report.append(f"Total invested:   ${total_invested:.2f}")
     report.append(f"Average ROI:      {avg_roi:.2f}%")
     report.append(f"Total ROI:        {(total_pnl / total_invested) * 100:.2f}%")
+    
+    if outcomes:
+        report.append("-" * 40)
+        report.append("OUTCOME BREAKDOWN:")
+        for outcome, count in outcomes:
+            report.append(f"  {str(outcome or 'UNKNOWN'):<20}: {count}")
+    
     report.append("=" * 80)
 
     report_text = "\n".join(report)

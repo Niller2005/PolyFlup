@@ -11,6 +11,8 @@ from src.utils.logger import log
 from src.trading.orders import get_order, place_order
 from .exit_plan import _update_exit_plan_after_scale_in
 
+from src.data.market_data import get_current_spot_price
+
 def _check_scale_in(
     symbol,
     trade_id,
@@ -27,6 +29,7 @@ def _check_scale_in(
     conn,
     side,
     price_change_pct,
+    target_price=None,
     verbose=False,
 ):
     if not ENABLE_SCALE_IN:
@@ -76,6 +79,21 @@ def _check_scale_in(
         if verbose:
             log(f"   ⏳ [{symbol}] Scale-in skipped: price ${current_price:.2f} outside range (${SCALE_IN_MIN_PRICE}-${SCALE_IN_MAX_PRICE})")
         return
+
+    # Winning side check (Spot price confirmation)
+    if target_price:
+        current_spot = get_current_spot_price(symbol)
+        if current_spot > 0:
+            is_on_winning_side = False
+            if side == "UP" and current_spot >= target_price:
+                is_on_winning_side = True
+            elif side == "DOWN" and current_spot <= target_price:
+                is_on_winning_side = True
+            
+            if not is_on_winning_side:
+                if verbose:
+                    log(f"   ⏳ [{symbol}] Scale-in skipped: Midpoint range OK (${current_price:.2f}) but Spot (${current_spot:.2f}) on LOSING side of target (${target_price:.2f})")
+                return
 
 
     s_size = size * SCALE_IN_MULTIPLIER

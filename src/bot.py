@@ -161,7 +161,7 @@ def _calculate_bet_size(
 
 
 def _prepare_trade_params(
-    symbol: str, balance: float, add_spacing: bool = True
+    symbol: str, balance: float, add_spacing: bool = True, verbose: bool = True
 ) -> Optional[dict]:
     """
     Prepare trade parameters without executing the order
@@ -171,9 +171,10 @@ def _prepare_trade_params(
     """
     up_id, down_id = get_token_ids(symbol)
     if not up_id or not down_id:
-        log(f"[{symbol}] ❌ Market not found")
-        if add_spacing:
-            log("")  # Add blank line
+        if verbose:
+            log(f"[{symbol}] ❌ Market not found")
+            if add_spacing:
+                log("")  # Add blank line
         return
 
     client = get_clob_client()
@@ -182,22 +183,24 @@ def _prepare_trade_params(
     )
 
     if bias == "NEUTRAL":
-        log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
-        if add_spacing:
-            log("")  # Add blank line
+        if verbose:
+            log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
+            if add_spacing:
+                log("")  # Add blank line
         return
 
     actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
 
     if actual_side == "NEUTRAL":
-        # Check if this is an "Empty Book" scenario or just low confidence
-        if confidence == 0 and bias == "NEUTRAL":
-            log(f"[{symbol}] ⚪ Neutral / No Signal")
-        else:
-            log(f"[{symbol}] ⏳ WAIT ZONE: {bias} ({confidence:.1%}) | {CONTRARIAN_THRESHOLD} < x < {MIN_EDGE}")
-        
-        if add_spacing:
-            log("")
+        if verbose:
+            # Check if this is an "Empty Book" scenario or just low confidence
+            if confidence == 0 and bias == "NEUTRAL":
+                log(f"[{symbol}] ⚪ Neutral / No Signal")
+            else:
+                log(f"[{symbol}] ⏳ WAIT ZONE: {bias} ({confidence:.1%}) | {CONTRARIAN_THRESHOLD} < x < {MIN_EDGE}")
+            
+            if add_spacing:
+                log("")
         return
 
     if actual_side == bias:
@@ -221,11 +224,12 @@ def _prepare_trade_params(
     time_left = (window_end - now_et).total_seconds()
 
     if lateness > MAX_ENTRY_LATENESS_SEC:
-        log(
-            f"[{symbol}] ⚠️  Cycle is TOO LATE ({lateness:.0f}s into window, {time_left:.0f}s left). SKIPPING."
-        )
-        if add_spacing:
-            log("")
+        if verbose:
+            log(
+                f"[{symbol}] ⚠️  Cycle is TOO LATE ({lateness:.0f}s into window, {time_left:.0f}s left). SKIPPING."
+            )
+            if add_spacing:
+                log("")
         return
     elif lateness > 60:
         log(
@@ -241,7 +245,7 @@ def _prepare_trade_params(
     if not _check_target_price_alignment(
         symbol, side, confidence, current_spot, target_price
     ):
-        if add_spacing:
+        if add_spacing and verbose:
             log("")  # Add blank line
         return
 
@@ -311,12 +315,12 @@ def _prepare_trade_params(
     }
 
 
-def trade_symbol(symbol: str, balance: float) -> int:
+def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
     """
     Execute trading logic for a symbol (single order)
     Returns the number of successful trades placed (0 or 1).
     """
-    trade_params = _prepare_trade_params(symbol, balance, add_spacing=True)
+    trade_params = _prepare_trade_params(symbol, balance, add_spacing=True, verbose=verbose)
 
     if not trade_params:
         return 0
@@ -367,7 +371,7 @@ def trade_symbol(symbol: str, balance: float) -> int:
         return 0
 
 
-def trade_symbols_batch(symbols: list, balance: float) -> int:
+def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> int:
     """
     Execute trading logic for multiple symbols using batch orders
     Returns the number of successful trades placed. 
@@ -414,14 +418,16 @@ def trade_symbols_batch(symbols: list, balance: float) -> int:
 
         if up_spread >= 1.0 or down_spread >= 1.0:
             # Spread of 1.0 means NO orders on one side - typical at window start
-            log(f"[{symbol}] ⏳ No liquidity yet (Spread: 1.0). Waiting for market makers...")
+            if verbose:
+                log(f"[{symbol}] ⏳ No liquidity yet (Spread: 1.0). Waiting for market makers...")
             skipped_due_to_empty_book += 1
             continue
 
         if up_spread > MAX_SPREAD or down_spread > MAX_SPREAD:
-            log(
-                f"[{symbol}] ⚠️ Spread too wide (UP: {up_spread:.3f}, DOWN: {down_spread:.3f}). SKIPPING."
-            )
+            if verbose:
+                log(
+                    f"[{symbol}] ⚠️ Spread too wide (UP: {up_spread:.3f}, DOWN: {down_spread:.3f}). SKIPPING."
+                )
             continue
         valid_symbols.append(symbol)
 
@@ -433,12 +439,12 @@ def trade_symbols_batch(symbols: list, balance: float) -> int:
     # 2. Prepare trades for remaining symbols
     trade_params_list = []
     for i, symbol in enumerate(valid_symbols):
-        params = _prepare_trade_params(symbol, balance, add_spacing=False)
+        params = _prepare_trade_params(symbol, balance, add_spacing=False, verbose=verbose)
         if params:
             trade_params_list.append(params)
 
         # Add spacing between symbols
-        if i < len(valid_symbols) - 1:
+        if i < len(valid_symbols) - 1 and verbose:
             log("")
 
     if not trade_params_list:
@@ -534,162 +540,74 @@ def main():
     log("🔍 Performing initial position check...")
     check_open_positions(verbose=True, check_orders=True)
 
-    cycle = 0
     last_position_check = time.time()
     last_order_check = time.time()
     last_verbose_log = time.time()
     last_exit_stats_log = time.time()
+    last_entry_check = 0  # To control entry evaluation frequency
+    last_settle_check = time.time()
     
-    # Check if we should trade immediately (if we haven't traded for current window yet)
-    now_utc = datetime.utcnow()
-    window_start_min = (now_utc.minute // 15) * 15
-    # Since market_data.get_window_times uses ET, we should match that for consistency
-    # but here we just need to know if we are in the window.
-    
-    log("🏁 Bot initialized. Checking for immediate trading opportunities...")
-    
-    # First, run a cycle immediately if we are within lateness limits
-    current_balance = get_balance(addr)
-    
-    # Filter markets that haven't been traded this window
-    eligible_markets = []
-    for m in MARKETS:
-        w_start_et, _ = get_window_times(m)
-        w_start_iso = w_start_et.isoformat()
-        if not has_trade_for_window(m, w_start_iso):
-            eligible_markets.append(m)
-        else:
-            log(f"[{m}] ⏭️ Already traded for current window ({w_start_et.strftime('%H:%M')}).")
-
-    if eligible_markets:
-        log(f"🔍 Evaluating {len(eligible_markets)} eligible markets: {', '.join(eligible_markets)}")
-        # Check lateness for the first market in the list (assuming same windows)
-        w_start_et, _ = get_window_times(eligible_markets[0])
-        now_et = datetime.now(tz=ZoneInfo("America/New_York"))
-        lateness = (now_et - w_start_et).total_seconds()
-        
-        if lateness <= MAX_ENTRY_LATENESS_SEC:
-            if len(eligible_markets) > 1:
-                trade_symbols_batch(eligible_markets, current_balance)
-            else:
-                trade_symbol(eligible_markets[0], current_balance)
-        else:
-            log(f"⏳ Too late in current window ({lateness:.0f}s > {MAX_ENTRY_LATENESS_SEC}s). Waiting for next window.")
+    log("🏁 Bot initialized. Entering continuous monitoring loop...")
 
     while True:
         try:
-            # Check positions every 1 second (verbose log every 60 seconds)
             now_ts = time.time()
-            if now_ts - last_position_check >= 1:
-                is_verbose_cycle = now_ts - last_verbose_log >= 60
-                is_order_check_cycle = now_ts - last_order_check >= 30
+            now_et = datetime.now(tz=ZoneInfo("America/New_York"))
+            is_verbose_cycle = now_ts - last_verbose_log >= 60
+            is_order_check_cycle = now_ts - last_order_check >= 30
 
+            # 1. Check Positions (Every 1 second)
+            if now_ts - last_position_check >= 1:
                 check_open_positions(
                     verbose=is_verbose_cycle, check_orders=is_order_check_cycle
                 )
-
                 last_position_check = now_ts
-                if is_verbose_cycle:
-                    last_verbose_log = now_ts
-                if is_order_check_cycle:
-                    last_order_check = now_ts
 
-                # Process notifications every 30 seconds (when checking orders)
-                if is_order_check_cycle:
-                    process_notifications()
+            # 2. Check for New Entries (Every 20 seconds)
+            # Only if within MAX_ENTRY_LATENESS_SEC (10 mins) of any market window
+            if now_ts - last_entry_check >= 20:
+                last_entry_check = now_ts
+                current_balance = get_balance(addr)
+                
+                eligible_markets = []
+                for m in MARKETS:
+                    w_start_et, _ = get_window_times(m)
+                    lateness = (now_et - w_start_et).total_seconds()
+                    
+                    if 0 <= lateness <= MAX_ENTRY_LATENESS_SEC:
+                        if not has_trade_for_window(m, w_start_et.isoformat()):
+                            eligible_markets.append(m)
 
-                # Log exit plan stats every 15 minutes (every 15th verbose cycle)
-                if (
-                    is_verbose_cycle and now_ts - last_exit_stats_log >= 900
-                ):  # 15 minutes
-                    exit_stats = get_exit_plan_stats()
-                    if exit_stats:
-                        log(
-                            f"📈 Exit Plan Performance: {exit_stats['exit_success_rate']:.1f}% success rate "
-                            f"({exit_stats['exit_plan_successes']}/{exit_stats['exit_plan_successes'] + exit_stats['natural_settlements'] + exit_stats['legacy_limit_sells']}) "
-                            f"| Avg ROI: Exit {exit_stats['avg_exit_plan_roi']:.1f}%, Natural {exit_stats['avg_natural_roi']:.1f}%"
-                        )
-                    last_exit_stats_log = now_ts
-
-            now = datetime.utcnow()
-            wait = 900 - ((now.minute % 15) * 60 + now.second)
-            if wait <= 0:
-                wait += 900
-
-            # Wait in 1-second chunks so we can check positions
-            if cycle == 0 or wait > 30:
-                log(f"⏱️  Waiting {wait}s until next window...")
-            elif wait <= 5:
-                log(f"⏳ Window starting in {wait}s...")
-
-            remaining = wait + WINDOW_DELAY_SEC
-            while remaining > 0:
-                sleep_time = min(1, remaining)
-                time.sleep(sleep_time)
-                remaining -= sleep_time
-
-                # Check positions during wait (silent unless it's been 60s)
-                if remaining > 0:
-                    now_ts = time.time()
-                    if now_ts - last_position_check >= 1:
-                        is_verbose_cycle = now_ts - last_verbose_log >= 60
-                        is_order_check_cycle = now_ts - last_order_check >= 30
-
-                        check_open_positions(
-                            verbose=is_verbose_cycle, check_orders=is_order_check_cycle
-                        )
-
-                        last_position_check = now_ts
-                        if is_verbose_cycle:
-                            last_verbose_log = now_ts
-                        if is_order_check_cycle:
-                            last_order_check = now_ts
-
-            log(
-                f"\n{'=' * 90}\n🔄 CYCLE #{cycle + 1} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}\n{'=' * 90}\n"
-            )
-
-            # Fetch balance once for the cycle
-            current_balance = get_balance(addr)
-            log(f"💰 Balance: {current_balance:.2f} USDC")
-            log(f"🔍 Evaluating {len(MARKETS)} markets: {', '.join(MARKETS)}")
-
-            # Filter markets that haven't been traded this window
-            current_window_markets = []
-            for m in MARKETS:
-                w_start_et, _ = get_window_times(m)
-                if not has_trade_for_window(m, w_start_et.isoformat()):
-                    current_window_markets.append(m)
-                else:
-                    log(f"[{m}] ⏭️ Already traded for this window. Skipping.")
-
-            if current_window_markets:
-                # Use batch orders for multiple markets (more efficient)
-                # Try up to 3 times if we skip due to zero liquidity (Polymarket warm-up)
-                for attempt in range(3):
-                    if len(current_window_markets) > 1:
-                        placed = trade_symbols_batch(current_window_markets, current_balance)
-                    elif len(current_window_markets) == 1:
-                        placed = trade_symbol(current_window_markets[0], current_balance)
+                if eligible_markets:
+                    # Use batch orders if multiple eligible
+                    if len(eligible_markets) > 1:
+                        trade_symbols_batch(eligible_markets, current_balance, verbose=is_verbose_cycle)
                     else:
-                        placed = 0
-                    
-                    # If we placed a trade, or if we evaluated without hitting the "empty book" state (-1), we're done
-                    if placed != -1:
-                        break
-                    
-                    if attempt < 2:
-                        log(f"⏳ All markets skipped due to zero liquidity (warm-up). Retrying in 10s... (Attempt {attempt+2}/3)")
-                        time.sleep(10)
-            else:
-                log("ℹ️ No eligible markets to trade for this window (all already traded).")
+                        trade_symbol(eligible_markets[0], current_balance, verbose=is_verbose_cycle)
 
-            check_and_settle_trades()
-            cycle += 1
+            # 3. Process Notifications and Settle Trades (Every 30-60 seconds)
+            if is_order_check_cycle:
+                process_notifications()
+                last_order_check = now_ts
 
-            if cycle % 16 == 0:
-                log("\n📊 Generating performance report...")
-                generate_statistics()
+            if now_ts - last_settle_check >= 60:
+                check_and_settle_trades()
+                last_settle_check = now_ts
+
+            # 4. Reporting and Maintenance
+            if is_verbose_cycle:
+                last_verbose_log = now_ts
+                # Log exit plan stats every 15 minutes
+                if now_ts - last_exit_stats_log >= 900:
+                    exit_stats = get_exit_plan_stats()
+                    last_exit_stats_log = now_ts
+                
+                # Performance report every ~4 hours
+                if int(now_ts) % 14400 < 60:
+                    generate_statistics()
+
+            # Small sleep to prevent CPU spiking
+            time.sleep(0.5)
 
         except KeyboardInterrupt:
             log("\n⛔ Bot stopped by user")
@@ -704,3 +622,7 @@ def main():
             log(traceback.format_exc())
             send_discord(f"❌ Error: {e}")
             time.sleep(60)
+
+
+if __name__ == "__main__":
+    main()
