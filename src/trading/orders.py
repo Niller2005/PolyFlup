@@ -629,11 +629,13 @@ def place_limit_order(
         order_hashes = resp.get("orderHashes", []) if isinstance(resp, dict) else []
         success = resp.get("success", True) if isinstance(resp, dict) else True
 
-        # Check if there's an error message even with success=true
-        has_error = bool(error_msg)
+        # CRITICAL FIX: If we got an order_id, the order was placed successfully even if there's an error message
+        # This happens when Polymarket API returns "Insufficient balance" warnings but still places the order
+        has_error = bool(error_msg) and not bool(order_id)
 
         return {
-            "success": success and not has_error,
+            "success": (success and not has_error)
+            or bool(order_id),  # Success if we got an order_id
             "status": status,
             "order_id": order_id,
             "error": error_msg if has_error else None,

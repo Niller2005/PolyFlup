@@ -282,6 +282,31 @@ def _check_stop_loss(
     sell_result = sell_position(token_id, size, current_price)
 
     if not sell_result["success"]:
+        error_msg = sell_result.get("error", "Unknown error")
+
+        # If position is old enough (>60s) and still can't sell, the order likely never filled
+        # Mark it as settled with a special outcome to prevent infinite retry
+        if "balance" in error_msg.lower() or "allowance" in error_msg.lower():
+            c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+            row = c.fetchone()
+            if row:
+                trade_timestamp = datetime.fromisoformat(row[0])
+                position_age = (now - trade_timestamp).total_seconds()
+
+                if position_age > 60:
+                    # Position is old but still can't sell - likely order never truly filled
+                    log(
+                        f"⚠️ [{symbol}] Trade #{trade_id}: Can't sell after {position_age:.0f}s - marking as unfilled/cancelled"
+                    )
+                    c.execute(
+                        """UPDATE trades
+                           SET settled=1, final_outcome='UNFILLED_NO_BALANCE', 
+                               order_status='UNFILLED'
+                           WHERE id=?""",
+                        (trade_id,),
+                    )
+                    return True  # Position closed (marked as unfilled)
+
         return False
 
     c.execute(
@@ -695,6 +720,31 @@ def _check_take_profit(
     sell_result = sell_position(token_id, size, current_price)
 
     if not sell_result["success"]:
+        error_msg = sell_result.get("error", "Unknown error")
+
+        # If position is old enough (>60s) and still can't sell, the order likely never filled
+        # Mark it as settled with a special outcome to prevent infinite retry
+        if "balance" in error_msg.lower() or "allowance" in error_msg.lower():
+            c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+            row = c.fetchone()
+            if row:
+                trade_timestamp = datetime.fromisoformat(row[0])
+                position_age = (now - trade_timestamp).total_seconds()
+
+                if position_age > 60:
+                    # Position is old but still can't sell - likely order never truly filled
+                    log(
+                        f"⚠️ [{symbol}] Trade #{trade_id}: Can't sell after {position_age:.0f}s - marking as unfilled/cancelled"
+                    )
+                    c.execute(
+                        """UPDATE trades
+                           SET settled=1, final_outcome='UNFILLED_NO_BALANCE', 
+                               order_status='UNFILLED'
+                           WHERE id=?""",
+                        (trade_id,),
+                    )
+                    return True  # Position closed (marked as unfilled)
+
         return False
 
     c.execute(
