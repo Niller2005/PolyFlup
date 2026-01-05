@@ -72,7 +72,7 @@ from src.trading.position_manager import (
 from src.utils.notifications import process_notifications, init_ws_callbacks
 from src.trading.settlement import check_and_settle_trades
 from src.utils.websocket_manager import ws_manager
-from src.trading.orders import get_bulk_spreads, check_liquidity
+from src.trading.orders import get_bulk_spreads, check_liquidity, BUY, SELL, SELL
 
 
 def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
@@ -431,53 +431,9 @@ def trade_symbols_batch(symbols: list, balance: float):
             except Exception as e:
                 log(f"[{p['symbol']}] Trade completion error: {e}")
         elif i < len(trade_params_list):
-            log(
-                f"[{trade_params_list[i]['symbol']}] ❌ Batch order failed: {result.get('error')}"
-            )
-
-    # Place batch orders
-    results = place_batch_orders(batch_orders)
-
-    # Process results and save trades
-    log("")
-    for i, (params, result) in enumerate(zip(trade_params_list, results)):
-        if not result["success"]:
-            log(
-                f"[{params['symbol']}] ❌ Order failed: {result.get('error', 'Unknown error')}"
-            )
-            continue
-
-        send_discord(
-            f"**[{params['symbol']}] {params['side']} ${params['bet_usd']:.2f}** | Confidence {params['confidence']:.1%} | Price {params['price']:.4f}"
-        )
-
-        try:
-            trade_id = save_trade(
-                symbol=params["symbol"],
-                window_start=params["window_start"].isoformat(),
-                window_end=params["window_end"].isoformat(),
-                slug=params["slug"],
-                token_id=params["token_id"],
-                side=params["side"],
-                edge=params["confidence"],
-                price=params["price"],
-                size=params["size"],
-                bet_usd=params["bet_usd"],
-                p_yes=params["p_up"],
-                best_bid=params["best_bid"],
-                best_ask=params["best_ask"],
-                imbalance=params["imbalance"],
-                funding_bias=params["funding_bias"],
-                order_status=result["status"],
-                order_id=result["order_id"],
-                limit_sell_order_id=None,
-                target_price=params["target_price"],
-            )
-            log(
-                f"[{params['symbol']}] 🚀 #{trade_id} {params['side']} ${params['bet_usd']:.2f} @ {params['price']:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
-            )
-        except Exception as e:
-            log(f"[{params['symbol']}] Trade completion error: {e}")
+            p = trade_params_list[i]
+            log(f"[{p['symbol']}] ❌ Batch order failed: {result.get('error')}")
+    return
 
 
 def main():

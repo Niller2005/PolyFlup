@@ -64,7 +64,6 @@ class WebSocketManager:
 
     async def _market_loop(self):
         """Handles connection to the public market data channel"""
-        # Exact URL format from Quickstart: wss://ws-subscriptions-clob.polymarket.com/ws/market
         url = f"{self.wss_base_url}/ws/market"
         while self._running:
             try:
@@ -72,14 +71,10 @@ class WebSocketManager:
                     url, ping_interval=10, ping_timeout=10
                 ) as ws:
                     log(f"✅ WebSocket connected to Market Channel")
-
-                    # Initial subscription
                     if self.subscribed_tokens:
                         await self._subscribe_market(ws, self.subscribed_tokens)
 
-                    # Receive task
                     recv_task = asyncio.create_task(self._receive_messages(ws))
-                    # Subscription queue task
                     sub_task = asyncio.create_task(
                         self._process_market_subscription_queue(ws)
                     )
@@ -100,7 +95,6 @@ class WebSocketManager:
 
     async def _user_loop(self):
         """Handles connection to the private authenticated user channel"""
-        # Exact URL format from Quickstart: wss://ws-subscriptions-clob.polymarket.com/ws/user
         url = f"{self.wss_base_url}/ws/user"
         while self._running:
             try:
@@ -116,19 +110,14 @@ class WebSocketManager:
                     url, ping_interval=10, ping_timeout=10
                 ) as ws:
                     log(f"✅ WebSocket connected to User Channel")
-
-                    # Auth format from Quickstart
                     auth_data = {
                         "apiKey": api_key,
                         "secret": api_secret,
                         "passphrase": api_passphrase,
                     }
-
-                    # Subscription message from Quickstart
                     msg = {"type": "user", "auth": auth_data, "markets": []}
                     await ws.send(json.dumps(msg))
 
-                    # Heartbeat thread/task
                     ping_task = asyncio.create_task(self._ping_loop(ws))
                     recv_task = asyncio.create_task(self._receive_messages(ws))
 
@@ -153,7 +142,7 @@ class WebSocketManager:
             await ws.send("PING")
 
     async def _subscribe_market(self, ws, token_ids: List[str]):
-        """Subscribe to market channel as per Quickstart"""
+        """Subscribe to market channel"""
         if not token_ids:
             return
         msg = {"type": "market", "assets_ids": token_ids}
@@ -181,9 +170,27 @@ class WebSocketManager:
         try:
             if isinstance(message, bytes):
                 message = message.decode("utf-8")
-            data = json.loads(message)
+            if message in ["PONG", "PING"]:
+                return
 
-            # Handle Market Channel messages
+            try:
+                data = json.loads(message)
+            except:
+                return
+
+            if isinstance(data, list):
+                for item in data:
+                    await self._process_single_message(item)
+            else:
+                await self._process_single_message(data)
+        except Exception as e:
+            log(f"⚠️ Error handling WSS message: {e}")
+
+    async def _process_single_message(self, data: Any):
+        """Process a single message object from WSS"""
+        if not isinstance(data, dict):
+            return
+        try:
             event_type = data.get("event_type")
             if event_type in [
                 "book",
@@ -192,46 +199,56 @@ class WebSocketManager:
                 "last_trade_price",
             ]:
                 asset_id = data.get("asset_id")
+                if not asset_id:
+                    return
+
                 if event_type == "best_bid_ask":
-                    bid, ask = data.get("best_bid"), data.get("best_ask")
-                    if bid and ask:
-                        self.prices[asset_id] = (float(bid) + float(ask)) / 2.0
+                    b, a = data.get("best_bid"), data.get("best_ask")
+                    if b and a:
+                        self.prices[str(asset_id)] = (float(b) + float(a)) / 2.0
                 elif event_type == "price_change":
                     for c in data.get("price_changes", []):
-                        a_id, b, a = (
+                        aid, b, a = (
                             c.get("asset_id"),
                             c.get("best_bid"),
                             c.get("best_ask"),
                         )
-                        if b and a and float(b) > 0:
-                            self.prices[a_id] = (float(b) + float(a)) / 2.0
+                        if aid and b and a and float(b) > 0:
+                            self.prices[str(aid)] = (float(b) + float(a)) / 2.0
+                            await self._trigger_price_callbacks(
+                                str(aid), self.prices[str(aid)]
+                            )
                 elif event_type == "last_trade_price":
-                    if asset_id and data.get("price"):
-                        self.prices[asset_id] = float(data.get("price"))
+                    p = data.get("price")
+                    if p:
+                        self.prices[str(asset_id)] = float(p)
 
-                new_price = self.prices.get(asset_id)
-                if new_price:
-                    for cb in self.callbacks["price"]:
-                        try:
-                            cb(asset_id, new_price)
-                        except:
-                            pass
+                new_p = self.prices.get(str(asset_id))
+                if new_p and event_type != "price_change":
+                    await self._trigger_price_callbacks(str(asset_id), new_p)
 
-            # Handle User Channel messages
             elif data.get("type") == "order":
-                event, order = data.get("event"), data.get("order", {})
+                ev, order = data.get("event"), data.get("order", {})
                 for cb in self.callbacks["order"]:
                     try:
-                        cb(event, order)
+                        cb(ev, order)
                     except:
                         pass
-
             elif data.get("type") == "error":
                 log(f"❌ WebSocket API Error: {data.get('message')}")
-
         except Exception as e:
-            if message != "PONG":
-                log(f"⚠️ Error handling WSS message: {e}")
+            log(f"⚠️ Error processing single WSS message: {e}")
+
+    async def _trigger_price_callbacks(self, asset_id: str, price: float):
+        """Execute all registered price callbacks"""
+        for cb in self.callbacks["price"]:
+            try:
+                if asyncio.iscoroutinefunction(cb):
+                    await cb(asset_id, price)
+                else:
+                    cb(asset_id, price)
+            except:
+                pass
 
     def subscribe_to_prices(
         self, token_ids: List[str], symbol_map: Optional[Dict[str, str]] = None
@@ -240,11 +257,9 @@ class WebSocketManager:
         new_tokens = [t for t in token_ids if t not in self.subscribed_tokens]
         if not new_tokens:
             return
-
         self.subscribed_tokens.extend(new_tokens)
         if symbol_map:
             self.token_to_symbol.update(symbol_map)
-
         if self._loop and self._running:
             self._loop.call_soon_threadsafe(
                 self.subscription_queue.put_nowait, new_tokens
@@ -252,7 +267,7 @@ class WebSocketManager:
 
     def get_price(self, token_id: str) -> Optional[float]:
         """Get the latest cached price for a token"""
-        return self.prices.get(token_id)
+        return self.prices.get(str(token_id))
 
     def register_callback(self, event_type: str, callback: Callable):
         """Register a function to be called on WSS events"""

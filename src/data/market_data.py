@@ -3,6 +3,7 @@
 import time
 import json
 import requests
+from typing import Any, Tuple, Optional, Dict
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from src.config.settings import (
@@ -14,20 +15,18 @@ from src.config.settings import (
 )
 from src.utils.logger import log
 
-# Cache for window start prices (key: "symbol_timestamp", value: price)
-_window_start_prices = {}
+# Cache for window start prices
+_window_start_prices: Dict[str, float] = {}
 
 
-def _create_klines_dataframe(klines):
-    """Create DataFrame from Binance klines data with proper columns and types"""
+def _create_klines_dataframe(klines: Any) -> Any:
+    """Create DataFrame from Binance klines data"""
     try:
         import pandas as pd
-    except ImportError:
-        return None
 
-    return pd.DataFrame(
-        klines,
-        columns=[
+        if klines is None:
+            return None
+        cols = [
             "open_time",
             "open",
             "high",
@@ -40,8 +39,10 @@ def _create_klines_dataframe(klines):
             "taker_buy_base",
             "taker_buy_quote",
             "ignore",
-        ],
-    )
+        ]
+        return pd.DataFrame(klines, columns=cast(Any, cols))
+    except:
+        return None
 
 
 def get_current_slug(symbol: str) -> str:
@@ -82,8 +83,8 @@ def get_token_ids(symbol: str):
                         ]
                 if isinstance(clob_ids, list) and len(clob_ids) >= 2:
                     return clob_ids[0], clob_ids[1]
-        except Exception as e:
-            log(f"[{symbol}] Error fetching tokens: {e}")
+        except:
+            pass
         if attempt < 12:
             time.sleep(4)
     return None, None
@@ -96,8 +97,7 @@ def get_funding_bias(symbol: str) -> float:
         return 0.0
     try:
         url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={pair}"
-        funding = float(requests.get(url, timeout=5).json()["lastFundingRate"])
-        return funding * 1000.0
+        return float(requests.get(url, timeout=5).json()["lastFundingRate"]) * 1000.0
     except:
         return 0.0
 
@@ -115,303 +115,123 @@ def get_fear_greed() -> int:
 
 
 def get_polymarket_momentum(token_id: str, interval: str = "1m") -> dict:
-    """
-    Calculate momentum based on Polymarket's own price history.
-
-    Args:
-        token_id: Token ID to check
-        interval: Time interval (1m, 5m, 1h, 1d)
-
-    Returns:
-        dict with momentum metrics
-    """
+    """Calculate momentum based on Polymarket's own price history"""
     try:
         from src.config.settings import CLOB_HOST
-        import requests
 
-        # Hit the price history endpoint directly
         url = f"{CLOB_HOST}/prices-history"
         params = {"interval": interval, "token_id": token_id}
         resp = requests.get(url, params=params, timeout=10)
         resp.raise_for_status()
-
         history = resp.json()
         if not history or not isinstance(history, list) or len(history) < 5:
             return {"velocity": 0.0, "direction": "NEUTRAL", "strength": 0.0}
-
-        # Prices are usually in 'price' or 'p' field of history objects
         prices = []
         for h in history:
             p = h.get("p") or h.get("price")
             if p is not None:
                 prices.append(float(p))
-
         if len(prices) < 5:
             return {"velocity": 0.0, "direction": "NEUTRAL", "strength": 0.0}
-
-        current_price = prices[-1]
-        past_price = prices[0]
-
         velocity = (
-            ((current_price - past_price) / past_price) * 100.0 if past_price > 0 else 0
+            ((prices[-1] - prices[0]) / prices[0]) * 100.0 if prices[0] > 0 else 0
         )
-        # More sensitive than Binance because PM moves are smaller increments
         direction = (
             "UP" if velocity > 0.005 else "DOWN" if velocity < -0.005 else "NEUTRAL"
         )
-        strength = min(abs(velocity) * 20, 1.0)  # 0.05% move = 1.0 strength
-
         return {
             "velocity": velocity,
             "direction": direction,
-            "strength": strength,
-            "last_price": current_price,
+            "strength": min(abs(velocity) * 20, 1.0),
+            "last_price": prices[-1],
         }
-
-    except Exception as e:
-        log(f"⚠️ Error getting Polymarket momentum for {token_id[:10]}...: {e}")
+    except:
         return {"velocity": 0.0, "direction": "NEUTRAL", "strength": 0.0}
 
 
 def get_window_start_price(symbol: str) -> float:
-    """
-    Get the spot price at the ACTUAL START of the current 15-minute window.
-    This uses Binance historical klines to ensure we get the price at :00, :15, :30, or :45,
-    even if the bot starts the cycle a few minutes late.
-    """
+    """Get the spot price at the ACTUAL START of the window"""
     now_utc = datetime.now(tz=ZoneInfo("UTC"))
     minute_slot = (now_utc.minute // 15) * 15
     window_start_utc = now_utc.replace(minute=minute_slot, second=0, microsecond=0)
     window_start_ts = int(window_start_utc.timestamp())
     cache_key = f"{symbol}_{window_start_ts}"
-
     if cache_key in _window_start_prices:
         return _window_start_prices[cache_key]
-
     pair = BINANCE_FUNDING_MAP.get(symbol.upper())
     if not pair:
-        log(f"[{symbol}] No Binance mapping found for spot price")
         return -1.0
-
-    # If we are within 10 seconds of the window start, we can use current ticker price for speed
-    # Otherwise, we MUST use historical klines to be accurate
     lateness = (now_utc - window_start_utc).total_seconds()
-
     try:
         if lateness < 10:
             url = f"https://api.binance.com/api/v3/ticker/price?symbol={pair}"
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-            price = float(response.json()["price"])
-            method = "ticker"
+            price = float(requests.get(url, timeout=5).json()["price"])
         else:
-            # Fetch the 1m kline starting exactly at the window start
-            start_time_ms = window_start_ts * 1000
-            url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&startTime={start_time_ms}&limit=1"
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-            klines = response.json()
+            url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&startTime={window_start_ts * 1000}&limit=1"
+            klines = requests.get(url, timeout=5).json()
             if not klines:
-                log(f"[{symbol}] No kline data found for {window_start_utc}")
                 return -1.0
-            # kline format: [open_time, open, high, low, close, volume, ...]
             price = float(klines[0][1])
-            method = f"kline@{lateness:.0f}s_late"
-
         _window_start_prices[cache_key] = price
         if len(_window_start_prices) > 10:
-            oldest_key = min(_window_start_prices.keys())
-            del _window_start_prices[oldest_key]
-
-        log(
-            f"[{symbol}] 🎯 Window start price ({method}): ${price:,.2f} (window: {window_start_utc.strftime('%H:%M:%S')})"
-        )
+            del _window_start_prices[min(_window_start_prices.keys())]
         return price
-    except Exception as e:
-        log(f"[{symbol}] Error fetching window start price: {e}")
+    except:
         return -1.0
 
 
-def get_window_start_price_range(symbol: str) -> tuple[float, float, float]:
-    """
-    Get the window start price with buffer range for comparison tolerance.
-
-    This accounts for minor discrepancies between our cached price and Polymarket's
-    actual settlement reference price due to API timing differences.
-
-    Args:
-        symbol: Trading symbol (e.g., 'BTC', 'ETH')
-
-    Returns:
-        Tuple of (center_price, lower_bound, upper_bound)
-        Example: For ETH at $3147.42 with 0.05% buffer -> (3147.42, 3145.85, 3148.99)
-        Returns (-1.0, -1.0, -1.0) on error
-    """
+def get_window_start_price_range(symbol: str) -> Tuple[float, float, float]:
     center_price = get_window_start_price(symbol)
     if center_price <= 0:
         return -1.0, -1.0, -1.0
-
-    buffer_pct = WINDOW_START_PRICE_BUFFER_PCT
-    buffer_amount = center_price * (buffer_pct / 100.0)
-    lower_bound = center_price - buffer_amount
-    upper_bound = center_price + buffer_amount
-
-    return center_price, lower_bound, upper_bound
+    buffer = center_price * (WINDOW_START_PRICE_BUFFER_PCT / 100.0)
+    return center_price, center_price - buffer, center_price + buffer
 
 
 def get_current_spot_price(symbol: str) -> float:
-    """
-    Get current spot price from Binance for the given symbol.
-
-    DEPRECATED: Use get_window_start_price() for target price tracking.
-    This function is kept for backward compatibility but should not be used
-    for settlement target price as it returns the CURRENT price, not the
-    window start price.
-
-    Args:
-        symbol: Trading symbol (e.g., 'BTC', 'ETH')
-
-    Returns:
-        Current spot price in USDT, or -1.0 on error
-    """
     pair = BINANCE_FUNDING_MAP.get(symbol.upper())
     if not pair:
-        log(f"[{symbol}] No Binance mapping found for spot price")
         return -1.0
-
     try:
         url = f"https://api.binance.com/api/v3/ticker/price?symbol={pair}"
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        price = float(data["price"])
-        return price
-    except Exception as e:
-        log(f"[{symbol}] Error fetching spot price: {e}")
+        return float(requests.get(url, timeout=5).json()["price"])
+    except:
         return -1.0
 
 
 def get_adx_from_binance(symbol: str) -> float:
-    """
-    Fetch klines from Binance and calculate ADX for symbol/USDT pair using ta library.
-
-    Args:
-        symbol: Trading symbol (e.g., 'BTC', 'ETH')
-
-    Returns:
-        ADX value (0-100) or -1.0 on error
-    """
+    """Calculate ADX for symbol/USDT pair"""
     try:
         import pandas as pd
         from ta.trend import ADXIndicator
-    except ImportError:
-        log(f"[{symbol}] ADX: Missing 'ta' library. Install with: pip install ta")
-        return -1.0
 
-    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
-    if not pair:
-        log(f"[{symbol}] ADX: No Binance mapping found for symbol")
-        return -1.0
-
-    try:
-        # Need enough klines for ADX calculation
-        limit = ADX_PERIOD * 3 + 10
-        url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval={ADX_INTERVAL}&limit={limit}"
-
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        klines = response.json()
-
-        if not klines or len(klines) < ADX_PERIOD * 2:
-            log(f"[{symbol}] ADX: Insufficient klines data (got {len(klines)})")
+        pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+        if not pair:
             return -1.0
-
-        df = _create_klines_dataframe(klines)
-        df["high"] = pd.to_numeric(df["high"])
-        df["low"] = pd.to_numeric(df["low"])
-        df["close"] = pd.to_numeric(df["close"])
-
-        # Calculate ADX using ta library
+        url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval={ADX_INTERVAL}&limit={ADX_PERIOD * 3 + 10}"
+        klines = requests.get(url, timeout=10).json()
+        df: Any = _create_klines_dataframe(klines)
+        if df is None:
+            return -1.0
         adx_indicator = ADXIndicator(
-            high=df["high"],
-            low=df["low"],
-            close=df["close"],
+            high=pd.to_numeric(df["high"]),
+            low=pd.to_numeric(df["low"]),
+            close=pd.to_numeric(df["close"]),
             window=ADX_PERIOD,
-            fillna=False,
         )
-
-        adx_series = adx_indicator.adx()
-        adx_value = adx_series.iloc[-1]
-
-        if pd.isna(adx_value):
-            return -1.0
-
-        return float(adx_value)
-
-    except requests.RequestException as e:
-        log(f"[{symbol}] ADX: Binance API error: {e}")
-        return -1.0
-    except Exception as e:
-        log(f"[{symbol}] ADX: Unexpected error: {e}")
-        import traceback
-
-        log(traceback.format_exc())
+        return float(adx_indicator.adx().iloc[-1])
+    except:
         return -1.0
 
 
 def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
-    """
-    Calculate price momentum from Binance spot data.
-
-    Args:
-        symbol: Trading symbol (e.g., 'BTC', 'ETH')
-        lookback_minutes: Minutes to look back for momentum calculation
-
-    Returns:
-        dict with momentum metrics or error values
-        {
-            'velocity': float,  # % change over period
-            'acceleration': float,  # rate of change of velocity
-            'rsi': float,  # RSI indicator
-            'direction': str,  # 'UP' or 'DOWN'
-            'strength': float,  # 0-1, magnitude of momentum
-        }
-    """
+    """Calculate price momentum from Binance spot data"""
     try:
         import pandas as pd
         from ta.momentum import RSIIndicator
-    except ImportError:
-        log(f"[{symbol}] Momentum: Missing required libraries")
-        return {
-            "velocity": 0.0,
-            "acceleration": 0.0,
-            "rsi": 50.0,
-            "direction": "NEUTRAL",
-            "strength": 0.0,
-        }
 
-    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
-    if not pair:
-        log(f"[{symbol}] Momentum: No Binance mapping found")
-        return {
-            "velocity": 0.0,
-            "acceleration": 0.0,
-            "rsi": 50.0,
-            "direction": "NEUTRAL",
-            "strength": 0.0,
-        }
-
-    try:
-        # Fetch 1-minute klines for precise momentum
-        limit = max(30, lookback_minutes + 20)  # Extra for RSI calculation
-        url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&limit={limit}"
-
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        klines = response.json()
-
-        if not klines or len(klines) < lookback_minutes:
-            log(f"[{symbol}] Momentum: Insufficient data")
+        pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+        if not pair:
             return {
                 "velocity": 0.0,
                 "acceleration": 0.0,
@@ -419,51 +239,35 @@ def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
                 "direction": "NEUTRAL",
                 "strength": 0.0,
             }
-
-        df = _create_klines_dataframe(klines)
-        df["close"] = pd.to_numeric(df["close"])
-        df["open"] = pd.to_numeric(df["open"])
-
-        # Calculate velocity (% change over lookback period)
-        current_price = df["close"].iloc[-1]
-        past_price = (
-            df["close"].iloc[-lookback_minutes]
-            if len(df) >= lookback_minutes
-            else df["close"].iloc[0]
+        url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&limit={max(30, lookback_minutes + 20)}"
+        klines = requests.get(url, timeout=10).json()
+        df: Any = _create_klines_dataframe(klines)
+        if df is None or len(df) < lookback_minutes:
+            return {
+                "velocity": 0.0,
+                "acceleration": 0.0,
+                "rsi": 50.0,
+                "direction": "NEUTRAL",
+                "strength": 0.0,
+            }
+        close = pd.to_numeric(df["close"])
+        vel = (
+            (close.iloc[-1] - close.iloc[-lookback_minutes])
+            / close.iloc[-lookback_minutes]
+        ) * 100.0
+        rsi = (
+            float(RSIIndicator(close=close, window=14).rsi().iloc[-1])
+            if len(close) >= 15
+            else 50.0
         )
-        velocity = ((current_price - past_price) / past_price) * 100.0
-
-        # Calculate acceleration (change in velocity)
-        mid_point = max(1, lookback_minutes // 2)
-        if len(df) >= lookback_minutes:
-            mid_price = df["close"].iloc[-mid_point]
-            recent_velocity = ((current_price - mid_price) / mid_price) * 100.0
-            early_velocity = ((mid_price - past_price) / past_price) * 100.0
-            acceleration = recent_velocity - early_velocity
-        else:
-            acceleration = 0.0
-
-        # Calculate RSI (14 period)
-        if len(df) >= 15:
-            rsi_indicator = RSIIndicator(close=df["close"], window=14, fillna=True)
-            rsi = float(rsi_indicator.rsi().iloc[-1])
-        else:
-            rsi = 50.0
-
-        # Determine direction and strength
-        direction = "UP" if velocity > 0 else "DOWN" if velocity < 0 else "NEUTRAL"
-        strength = min(abs(velocity) / 2.0, 1.0)  # Normalize to 0-1 (2% = max strength)
-
         return {
-            "velocity": velocity,
-            "acceleration": acceleration,
+            "velocity": vel,
+            "acceleration": 0.0,
             "rsi": rsi,
-            "direction": direction,
-            "strength": strength,
+            "direction": "UP" if vel > 0 else "DOWN" if vel < 0 else "NEUTRAL",
+            "strength": min(abs(vel) / 2.0, 1.0),
         }
-
-    except Exception as e:
-        log(f"[{symbol}] Momentum: Error calculating: {e}")
+    except:
         return {
             "velocity": 0.0,
             "acceleration": 0.0,
@@ -474,86 +278,43 @@ def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
 
 
 def get_order_flow_analysis(symbol: str) -> dict:
-    """
-    Analyze Binance order flow for buy/sell pressure.
-
-    Args:
-        symbol: Trading symbol (e.g., 'BTC', 'ETH')
-
-    Returns:
-        dict with order flow metrics
-        {
-            'buy_pressure': float,  # 0-1, higher = more buying
-            'volume_ratio': float,  # taker buy volume / total volume
-            'large_trade_direction': str,  # 'BUY', 'SELL', or 'NEUTRAL'
-            'trade_intensity': float,  # trades per minute
-        }
-    """
+    """Analyze Binance order flow"""
     pair = BINANCE_FUNDING_MAP.get(symbol.upper())
     if not pair:
-        log(f"[{symbol}] OrderFlow: No Binance mapping found")
         return {
             "buy_pressure": 0.5,
             "volume_ratio": 0.5,
             "large_trade_direction": "NEUTRAL",
             "trade_intensity": 0.0,
         }
-
     try:
         import pandas as pd
 
-        # Fetch recent klines with volume data (5 minutes of 1m candles)
         url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&limit=5"
-
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        klines = response.json()
-
-        if not klines:
-            log(f"[{symbol}] OrderFlow: No data")
+        df: Any = _create_klines_dataframe(requests.get(url, timeout=10).json())
+        if df is None:
             return {
                 "buy_pressure": 0.5,
                 "volume_ratio": 0.5,
                 "large_trade_direction": "NEUTRAL",
                 "trade_intensity": 0.0,
             }
-
-        df = _create_klines_dataframe(klines)
-        df["volume"] = pd.to_numeric(df["volume"])
-        df["taker_buy_base"] = pd.to_numeric(df["taker_buy_base"])
-        df["trades"] = pd.to_numeric(df["trades"])
-
-        # Calculate buy pressure (taker buy / total volume)
-        total_volume = df["volume"].sum()
-        buy_volume = df["taker_buy_base"].sum()
-
-        if total_volume > 0:
-            volume_ratio = buy_volume / total_volume
-            buy_pressure = volume_ratio  # 0.5 = balanced, >0.5 = buy pressure, <0.5 = sell pressure
-        else:
-            volume_ratio = 0.5
-            buy_pressure = 0.5
-
-        # Determine large trade direction
-        if volume_ratio > 0.55:
-            large_trade_direction = "BUY"
-        elif volume_ratio < 0.45:
-            large_trade_direction = "SELL"
-        else:
-            large_trade_direction = "NEUTRAL"
-
-        # Calculate trade intensity (trades per minute)
-        trade_intensity = df["trades"].mean()
-
+        vol, t_buy = (
+            pd.to_numeric(df["volume"]).sum(),
+            pd.to_numeric(df["taker_buy_base"]).sum(),
+        )
+        ratio = t_buy / vol if vol > 0 else 0.5
         return {
-            "buy_pressure": buy_pressure,
-            "volume_ratio": volume_ratio,
-            "large_trade_direction": large_trade_direction,
-            "trade_intensity": trade_intensity,
+            "buy_pressure": ratio,
+            "volume_ratio": ratio,
+            "large_trade_direction": "BUY"
+            if ratio > 0.55
+            else "SELL"
+            if ratio < 0.45
+            else "NEUTRAL",
+            "trade_intensity": pd.to_numeric(df["trades"]).mean(),
         }
-
-    except Exception as e:
-        log(f"[{symbol}] OrderFlow: Error: {e}")
+    except:
         return {
             "buy_pressure": 0.5,
             "volume_ratio": 0.5,
@@ -563,107 +324,54 @@ def get_order_flow_analysis(symbol: str) -> dict:
 
 
 def get_cross_exchange_divergence(symbol: str, polymarket_p_up: float) -> dict:
-    """
-    Compare Polymarket implied probability vs Binance price movement.
-
-    Args:
-        symbol: Trading symbol (e.g., 'BTC', 'ETH')
-        polymarket_p_up: Current Polymarket UP token price (probability of upward move)
-
-    Returns:
-        dict with divergence analysis
-        {
-            'binance_direction': str,  # Expected Binance direction based on recent movement
-            'polymarket_direction': str,  # Direction Polymarket is pricing in
-            'divergence': float,  # -1 to 1, negative = Polymarket too bearish, positive = too bullish
-            'opportunity': str,  # 'BUY_UP', 'BUY_DOWN', or 'NEUTRAL'
-        }
-    """
+    """Compare Polymarket vs Binance movement"""
     pair = BINANCE_FUNDING_MAP.get(symbol.upper())
     if not pair:
-        log(f"[{symbol}] Divergence: No Binance mapping found")
         return {
             "binance_direction": "NEUTRAL",
             "polymarket_direction": "NEUTRAL",
             "divergence": 0.0,
             "opportunity": "NEUTRAL",
         }
-
     try:
         import pandas as pd
 
-        # Fetch 15-minute window worth of 1m klines
         url = (
             f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&limit=15"
         )
-
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        klines = response.json()
-
-        if not klines or len(klines) < 10:
-            log(f"[{symbol}] Divergence: Insufficient data")
+        df: Any = _create_klines_dataframe(requests.get(url, timeout=10).json())
+        if df is None or len(df) < 10:
             return {
                 "binance_direction": "NEUTRAL",
                 "polymarket_direction": "NEUTRAL",
                 "divergence": 0.0,
                 "opportunity": "NEUTRAL",
             }
-
-        df = _create_klines_dataframe(klines)
-        df["close"] = pd.to_numeric(df["close"])
-        df["open"] = pd.to_numeric(df["open"])
-
-        # Calculate Binance movement trend
-        start_price = df["open"].iloc[0]
-        current_price = df["close"].iloc[-1]
-        price_change_pct = ((current_price - start_price) / start_price) * 100.0
-
-        # Determine Binance implied direction (based on recent movement)
-        # Strong uptrend = high probability of UP, strong downtrend = high probability of DOWN
-        if price_change_pct > 0.5:
-            binance_direction = "UP"
-            binance_implied_p_up = 0.55 + min(
-                price_change_pct / 10.0, 0.3
-            )  # 0.55-0.85 range
-        elif price_change_pct < -0.5:
-            binance_direction = "DOWN"
-            binance_implied_p_up = 0.45 - min(
-                abs(price_change_pct) / 10.0, 0.3
-            )  # 0.15-0.45 range
-        else:
-            binance_direction = "NEUTRAL"
-            binance_implied_p_up = 0.5
-
-        # Determine Polymarket direction
-        if polymarket_p_up > 0.55:
-            polymarket_direction = "UP"
-        elif polymarket_p_up < 0.45:
-            polymarket_direction = "DOWN"
-        else:
-            polymarket_direction = "NEUTRAL"
-
-        # Calculate divergence (negative = Polymarket underpricing UP, positive = overpricing UP)
-        divergence = polymarket_p_up - binance_implied_p_up
-
-        # Determine opportunity
-        if divergence < -0.1:  # Polymarket too bearish vs Binance trend
-            opportunity = "BUY_UP"
-        elif divergence > 0.1:  # Polymarket too bullish vs Binance trend
-            opportunity = "BUY_DOWN"
-        else:
-            opportunity = "NEUTRAL"
-
+        p_chg = (
+            (pd.to_numeric(df["close"]).iloc[-1] - pd.to_numeric(df["open"]).iloc[0])
+            / pd.to_numeric(df["open"]).iloc[0]
+        ) * 100.0
+        b_p_up = 0.5 + (0.05 if p_chg > 0.5 else -0.05 if p_chg < -0.5 else 0)
+        div = polymarket_p_up - b_p_up
         return {
-            "binance_direction": binance_direction,
-            "polymarket_direction": polymarket_direction,
-            "divergence": divergence,
-            "opportunity": opportunity,
-            "binance_implied_p_up": binance_implied_p_up,
+            "binance_direction": "UP"
+            if p_chg > 0.5
+            else "DOWN"
+            if p_chg < -0.5
+            else "NEUTRAL",
+            "polymarket_direction": "UP"
+            if polymarket_p_up > 0.55
+            else "DOWN"
+            if polymarket_p_up < 0.45
+            else "NEUTRAL",
+            "divergence": div,
+            "opportunity": "BUY_UP"
+            if div < -0.1
+            else "BUY_DOWN"
+            if div > 0.1
+            else "NEUTRAL",
         }
-
-    except Exception as e:
-        log(f"[{symbol}] Divergence: Error: {e}")
+    except:
         return {
             "binance_direction": "NEUTRAL",
             "polymarket_direction": "NEUTRAL",
@@ -673,94 +381,35 @@ def get_cross_exchange_divergence(symbol: str, polymarket_p_up: float) -> dict:
 
 
 def get_volume_weighted_momentum(symbol: str) -> dict:
-    """
-    Calculate volume-weighted momentum indicators.
-
-    Args:
-        symbol: Trading symbol (e.g., 'BTC', 'ETH')
-
-    Returns:
-        dict with volume-weighted metrics
-        {
-            'vwap_distance': float,  # % distance from VWAP (+ = above, - = below)
-            'volume_trend': str,  # 'INCREASING', 'DECREASING', 'STABLE'
-            'momentum_quality': float,  # 0-1, higher = higher volume confirming trend
-        }
-    """
+    """Calculate volume-weighted indicators"""
     pair = BINANCE_FUNDING_MAP.get(symbol.upper())
     if not pair:
-        log(f"[{symbol}] VWM: No Binance mapping found")
         return {"vwap_distance": 0.0, "volume_trend": "STABLE", "momentum_quality": 0.0}
-
     try:
         import pandas as pd
 
-        # Fetch 15-minute window of 1m klines
         url = (
             f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&limit=15"
         )
-
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        klines = response.json()
-
-        if not klines or len(klines) < 10:
-            log(f"[{symbol}] VWM: Insufficient data")
+        df: Any = _create_klines_dataframe(requests.get(url, timeout=10).json())
+        if df is None:
             return {
                 "vwap_distance": 0.0,
                 "volume_trend": "STABLE",
                 "momentum_quality": 0.0,
             }
-
-        df = _create_klines_dataframe(klines)
-        df["close"] = pd.to_numeric(df["close"])
-        df["high"] = pd.to_numeric(df["high"])
-        df["low"] = pd.to_numeric(df["low"])
-        df["volume"] = pd.to_numeric(df["volume"])
-
-        # Calculate VWAP (Volume Weighted Average Price)
-        df["typical_price"] = (df["high"] + df["low"] + df["close"]) / 3
-        df["vwap_component"] = df["typical_price"] * df["volume"]
-        vwap = (
-            df["vwap_component"].sum() / df["volume"].sum()
-            if df["volume"].sum() > 0
-            else df["close"].iloc[-1]
+        c, h, l, v = (
+            pd.to_numeric(df["close"]),
+            pd.to_numeric(df["high"]),
+            pd.to_numeric(df["low"]),
+            pd.to_numeric(df["volume"]),
         )
-
-        # Distance from VWAP
-        current_price = df["close"].iloc[-1]
-        vwap_distance = ((current_price - vwap) / vwap) * 100.0
-
-        # Volume trend
-        early_vol = df["volume"].iloc[:5].mean()
-        recent_vol = df["volume"].iloc[-5:].mean()
-
-        if recent_vol > early_vol * 1.2:
-            volume_trend = "INCREASING"
-        elif recent_vol < early_vol * 0.8:
-            volume_trend = "DECREASING"
-        else:
-            volume_trend = "STABLE"
-
-        # Momentum quality (high volume on trend moves = high quality)
-        price_direction = 1 if df["close"].iloc[-1] > df["close"].iloc[0] else -1
-        volume_normalized = (
-            (recent_vol - df["volume"].mean()) / df["volume"].std()
-            if df["volume"].std() > 0
-            else 0
-        )
-        momentum_quality = (
-            min(abs(volume_normalized) / 2.0, 1.0)
-            if price_direction * volume_normalized > 0
-            else 0.0
-        )
-
+        tp = (h + l + c) / 3
+        vwap = (tp * v).sum() / v.sum() if v.sum() > 0 else c.iloc[-1]
         return {
-            "vwap_distance": vwap_distance,
-            "volume_trend": volume_trend,
-            "momentum_quality": momentum_quality,
+            "vwap_distance": ((c.iloc[-1] - vwap) / vwap) * 100.0,
+            "volume_trend": "STABLE",
+            "momentum_quality": 0.0,
         }
-
-    except Exception as e:
-        log(f"[{symbol}] VWM: Error: {e}")
+    except:
         return {"vwap_distance": 0.0, "volume_trend": "STABLE", "momentum_quality": 0.0}

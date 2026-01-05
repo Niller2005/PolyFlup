@@ -319,7 +319,7 @@ def setup_api_creds() -> None:
             log("✓ API credentials loaded from .env")
             return
         except Exception as e:
-            log(f"⚠ Error loading API creds: {e}")
+            log(f"⚠ Error loading API creds from .env: {e}")
     try:
         creds = client.create_or_derive_api_creds()
         client.set_api_creds(creds)
@@ -571,9 +571,7 @@ def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
                 side=op.get("side", BUY),
             )
             signed = client.create_order(oa)
-            batch.append(
-                PostOrdersArgs(order=signed, orderType=cast(Any, OrderType.GTC))
-            )
+            batch.append(PostOrdersArgs(order=signed, orderType=OrderType.GTC))
         responses: Any = client.post_orders(batch)
         for r in responses:
             if isinstance(r, dict):

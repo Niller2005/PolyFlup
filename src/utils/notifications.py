@@ -27,7 +27,11 @@ def _handle_ws_order_event(event: str, order: dict):
     # Polymarket WSS events: "fill", "cancel", etc.
     if event == "fill":
         # WebSocket 'order' message has the full order object
-        payload = {"order_id": order.get("id")}
+        payload = {
+            "order_id": order.get("id"),
+            "price": order.get("price"),
+            "size": order.get("size_matched") or order.get("original_size"),
+        }
         _handle_order_fill(payload, int(time.time()))
     elif event == "cancel":
         payload = {"order_id": order.get("id")}
@@ -80,6 +84,8 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
     """Handle order fill notification"""
     try:
         order_id = payload.get("order_id")
+        fill_price = payload.get("price")
+        fill_size = payload.get("size")
 
         if not order_id:
             return  # Skip if no order ID
@@ -90,19 +96,26 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
             # Check if this is a buy order
             c.execute(
-                "SELECT id, symbol, side, size FROM trades WHERE order_id = ? AND settled = 0",
+                "SELECT id, symbol, side, size, entry_price FROM trades WHERE order_id = ? AND settled = 0",
                 (order_id,),
             )
             row = c.fetchone()
 
             if row:
-                trade_id, symbol, trade_side, size = row
-                log(f"🔔 [{symbol}] #{trade_id} Buy filled: {trade_side} ({size:.2f})")
-                c.execute(
-                    "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
-                    (trade_id,),
+                trade_id, symbol, trade_side, db_size, db_price = row
+
+                # Update price/size if provided in notification
+                new_price = float(fill_price) if fill_price else db_price
+                new_size = float(fill_size) if fill_size else db_size
+
+                log(
+                    f"🔔 [{symbol}] #{trade_id} Buy filled: {trade_side} {new_size:.2f} @ ${new_price:.4f}"
                 )
-                # Context manager handles commit automatically
+
+                c.execute(
+                    "UPDATE trades SET order_status = 'FILLED', entry_price = ?, size = ?, bet_usd = ? * ? WHERE id = ?",
+                    (new_price, new_size, new_price, new_size, trade_id),
+                )
                 return  # Found and logged, done
 
             # Check if this is a limit sell order (exit plan)
@@ -126,17 +139,30 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
             # Check if this is a scale-in order
             c.execute(
-                "SELECT id, symbol, side, size FROM trades WHERE scale_in_order_id = ? AND settled = 0",
+                "SELECT id, symbol, side, size, entry_price, bet_usd FROM trades WHERE scale_in_order_id = ? AND settled = 0",
                 (order_id,),
             )
             row = c.fetchone()
 
             if row:
-                trade_id, symbol, trade_side, size = row
-                log(
-                    f"📈 [{symbol}] Scale-in filled: #{trade_id} - updating position on next check"
-                )
-                # Position manager will detect status=FILLED on next check and update everything
+                trade_id, symbol, trade_side, db_size, db_price, db_bet = row
+                new_scale_price = float(fill_price) if fill_price else db_price
+                new_scale_size = float(fill_size) if fill_size else 0
+
+                if new_scale_size > 0:
+                    log(
+                        f"📈 [{symbol}] Scale-in filled: #{trade_id} (+{new_scale_size:.2f} @ ${new_scale_price:.4f})"
+                    )
+
+                    # Immediate update of averages
+                    new_total_size = db_size + new_scale_size
+                    new_total_bet = db_bet + (new_scale_size * new_scale_price)
+                    new_avg_price = new_total_bet / new_total_size
+
+                    c.execute(
+                        "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
+                        (new_total_size, new_total_bet, new_avg_price, trade_id),
+                    )
                 return
 
             # Order not tracked in our database - skip logging (likely old or other trader's order)
