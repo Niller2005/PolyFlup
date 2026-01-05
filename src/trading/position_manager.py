@@ -665,15 +665,28 @@ def _check_scale_in(
     if res["success"]:
         if res["status"].upper() in ["FILLED", "MATCHED"]:
             new_size, new_bet = size + s_size, bet + (s_size * s_price)
+            # Fetch existing exit plan order ID to update it
+            c.execute(
+                "SELECT limit_sell_order_id FROM trades WHERE id = ?",
+                (trade_id,),
+            )
+            ls_row = c.fetchone()
+            l_sell_id = ls_row[0] if ls_row else None
+            
             c.execute(
                 "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
                 (new_size, new_bet, new_bet / new_size, trade_id),
+            )
+            # CRITICAL: Update exit plan to cover the new total size
+            _update_exit_plan_after_scale_in(
+                symbol, trade_id, token_id, new_size, l_sell_id, c, conn
             )
         else:
             c.execute(
                 "UPDATE trades SET scale_in_order_id = ? WHERE id = ?",
                 (res["order_id"], trade_id),
             )
+
 
 
 def check_open_positions(verbose=True, check_orders=False):
@@ -775,20 +788,29 @@ def check_open_positions(verbose=True, check_orders=False):
 
                     if check_orders and l_sell:
                         o_data = get_order(l_sell)
-                        if o_data and o_data.get("status", "").upper() in [
-                            "FILLED",
-                            "MATCHED",
-                        ]:
-                            ex_p = float(o_data.get("price", EXIT_PRICE_TARGET))
-                            sz_m = float(o_data.get("size_matched", size))
-                            pnl_val_f = (ex_p * sz_m) - bet
-                            roi_val_f = (pnl_val_f / bet) * 100 if bet > 0 else 0
-                            log(f"💰 [{sym}] #{tid} {side}: {pnl_val_f:+.2f}$ ({roi_val_f:+.1f}%)")
-                            c.execute(
-                                "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, settled_at=? WHERE id=?",
-                                (ex_p, pnl_val_f, roi_val_f, now.isoformat(), tid),
-                            )
-                            continue
+                        if o_data:
+                            o_status = o_data.get("status", "").upper()
+                            if o_status in ["FILLED", "MATCHED"]:
+                                ex_p = float(o_data.get("price", EXIT_PRICE_TARGET))
+                                sz_m = float(o_data.get("size_matched", size))
+                                pnl_val_f = (ex_p * sz_m) - bet
+                                roi_val_f = (pnl_val_f / bet) * 100 if bet > 0 else 0
+                                log(f"💰 [{sym}] #{tid} {side}: {pnl_val_f:+.2f}$ ({roi_val_f:+.1f}%)")
+                                c.execute(
+                                    "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, settled_at=? WHERE id=?",
+                                    (ex_p, pnl_val_f, roi_val_f, now.isoformat(), tid),
+                                )
+                                continue
+                            elif o_status == "LIVE":
+                                # Self-healing: Ensure exit plan size matches current trade size
+                                o_size = float(o_data.get("original_size", 0))
+                                if abs(o_size - size) > 0.001:
+                                    log(f"   🔧 [{sym}] #{tid} Exit plan size mismatch: {o_size} != {size}. Repairing...")
+                                    _update_exit_plan_after_scale_in(sym, tid, tok, size, l_sell, c, conn)
+                                    # Update l_sell reference for subsequent checks in this loop
+                                    c.execute("SELECT limit_sell_order_id FROM trades WHERE id = ?", (tid,))
+                                    l_sell = c.fetchone()[0]
+
 
                     pnl_i = _get_position_pnl(tok, entry, size, cached_prices)
                     if not pnl_i:
