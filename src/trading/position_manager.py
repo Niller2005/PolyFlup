@@ -354,7 +354,9 @@ def _check_stop_loss(
                 try:
                     window_start, window_end = get_window_times(symbol.split("-")[0])
                     bet_usd_effective = size * opposite_price
+                    # Pass cursor to avoid opening nested connection (database lock)
                     save_trade(
+                        cursor=c,
                         symbol=symbol,
                         window_start=window_start.isoformat(),
                         window_end=window_end.isoformat(),

@@ -40,11 +40,17 @@ def init_database():
     run_migrations()
 
 
-def save_trade(**kwargs):
-    """Save trade to database"""
-    with db_connection() as conn:
-        c = conn.cursor()
-        c.execute(
+def save_trade(cursor=None, **kwargs):
+    """
+    Save trade to database
+
+    Args:
+        cursor: Optional cursor from existing connection. If None, opens new connection.
+        **kwargs: Trade parameters
+    """
+    # If cursor provided, use it (already inside a transaction)
+    if cursor:
+        cursor.execute(
             """
             INSERT INTO trades (timestamp, symbol, window_start, window_end, slug, token_id,
             side, edge, entry_price, size, bet_usd, p_yes, best_bid, best_ask,
@@ -75,8 +81,44 @@ def save_trade(**kwargs):
                 kwargs.get("target_price"),
             ),
         )
-        trade_id = c.lastrowid
-        return trade_id
+        return cursor.lastrowid
+    else:
+        # No cursor provided, open new connection (for backward compatibility)
+        with db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                """
+                INSERT INTO trades (timestamp, symbol, window_start, window_end, slug, token_id,
+                side, edge, entry_price, size, bet_usd, p_yes, best_bid, best_ask,
+                imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    datetime.now(tz=ZoneInfo("UTC")).isoformat(),
+                    kwargs.get("symbol"),
+                    kwargs.get("window_start"),
+                    kwargs.get("window_end"),
+                    kwargs.get("slug"),
+                    kwargs.get("token_id"),
+                    kwargs.get("side"),
+                    kwargs.get("edge", 0.0),
+                    kwargs.get("price", 0.0),
+                    kwargs.get("size", 0.0),
+                    kwargs.get("bet_usd", 0.0),
+                    kwargs.get("p_yes", 0.5),
+                    kwargs.get("best_bid"),
+                    kwargs.get("best_ask"),
+                    kwargs.get("imbalance", 0.5),
+                    kwargs.get("funding_bias", 0.0),
+                    kwargs.get("order_status", "UNKNOWN"),
+                    kwargs.get("order_id", "N/A"),
+                    kwargs.get("limit_sell_order_id"),
+                    kwargs.get("is_reversal", False),
+                    kwargs.get("target_price"),
+                ),
+            )
+            trade_id = c.lastrowid
+            return trade_id
 
 
 def generate_statistics():
