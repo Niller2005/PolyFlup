@@ -24,6 +24,9 @@ from src.config.settings import (
     ENABLE_EXIT_PLAN,
     EXIT_PRICE_TARGET,
     ENABLE_REWARD_OPTIMIZATION,
+    REWARD_OPT_MIN_MIDPOINT,
+    REWARD_OPT_MIN_PRICE,
+    REWARD_OPT_PRICE_OFFSET,
     EXIT_MIN_POSITION_AGE,
     EXIT_CHECK_INTERVAL,
     EXIT_AGGRESSIVE_MODE,
@@ -44,9 +47,10 @@ from src.trading.orders import (
     drop_notifications,
     get_current_positions,
     check_order_scoring,
+    check_orders_scoring,
     get_orders,
     BUY,
-    SELL,
+    SELL
 )
 from src.data.market_data import (
     get_token_ids,
@@ -485,6 +489,7 @@ def _check_exit_plan(
     scale_in_id,
     entry,
     current_price,
+    is_scoring=None,
 ):
     if not ENABLE_EXIT_PLAN or buy_status not in ["FILLED", "MATCHED"] or size == 0:
         return
@@ -496,6 +501,7 @@ def _check_exit_plan(
     on_cd = now.timestamp() - last_att < 30
 
     if not limit_sell_id and age >= EXIT_MIN_POSITION_AGE:
+        # ... (keep existing logic for placing new exit order)
         if on_cd:
             if verbose:
                 log(f"   ⏳ [{symbol}] Exit plan cooldown: {30 - (now.timestamp() - last_att):.0f}s left (Trade age: {age:.0f}s)")
@@ -561,22 +567,16 @@ def _check_exit_plan(
     if verbose and side:
         scoring_text = ""
         if limit_sell_id:
-            is_scoring = check_order_scoring(limit_sell_id)
+            # Use passed value if available, otherwise check (fallback)
+            if is_scoring is None:
+                is_scoring = check_order_scoring(limit_sell_id)
+            
             scoring_text = " | ✅ SCORING" if is_scoring else " | ❌ NOT SCORING"
-            if not is_scoring and ENABLE_REWARD_OPTIMIZATION and current_price > 0.90:
-                opt_price = round(current_price + 0.01, 2)
-                if opt_price < EXIT_PRICE_TARGET and opt_price >= 0.95:
-                    _update_exit_plan_to_new_price(
-                        symbol,
-                        trade_id,
-                        token_id,
-                        size,
-                        limit_sell_id,
-                        opt_price,
-                        c,
-                        conn,
-                    )
-                    scoring_text = " | 🔄 OPTIMIZING"
+            
+            # REWARD OPTIMIZATION: Disabled to keep 0.99 target.
+            # Orders will only score when the midpoint naturally approaches 0.99.
+
+
 
         status = f"Trade #{trade_id} {side} PnL={price_change_pct:+.1f}%"
         if scaled_in:
@@ -698,6 +698,16 @@ def check_open_positions(verbose=True, check_orders=False):
             if missing_tokens:
                 batch_prices = get_multiple_market_prices(missing_tokens)
                 cached_prices.update(batch_prices)
+
+            # PRIORITY 2: Batch reward scoring check
+            # We only check scoring if we are in verbose mode (every 60s) or explicitly requested
+            sell_order_ids = [p[12] for p in open_positions if p[12]]
+            scoring_map = {}
+            if sell_order_ids and (verbose or check_orders):
+                try:
+                    scoring_map = check_orders_scoring(sell_order_ids)
+                except Exception as e:
+                    log(f"⚠️ Error in batch scoring check: {e}")
 
             if verbose:
                 log(f"👀 Monitoring {len(open_positions)} positions...")
@@ -853,6 +863,7 @@ def check_open_positions(verbose=True, check_orders=False):
                         sc_id,
                         entry,
                         cur_p,
+                        is_scoring=scoring_map.get(l_sell) if l_sell else None,
                     )
                 except Exception as e:
                     log(f"⚠️ [{sym}] #{tid} Error: {e}")
