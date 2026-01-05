@@ -47,6 +47,30 @@ result = place_limit_order(
 )
 ```
 
+### Batch Prices
+```python
+from src.trading.orders import get_multiple_market_prices
+
+# Fetch prices for all open positions in 1 call
+prices = get_multiple_market_prices(["token_id1", "token_id2"])
+```
+
+### Get Accurate Fill Details
+```python
+from src.trading.orders import get_trades_for_user
+
+# Get exact fill prices and fees for current user
+trades = get_trades_for_user(user_address, asset_id="123...")
+```
+
+### Audit Closed Positions
+```python
+from src.trading.orders import get_closed_positions
+
+# Verify settled trades against exchange history
+closed = get_closed_positions(user_address, limit=20)
+```
+
 ---
 
 ## Order Management
@@ -294,17 +318,14 @@ print(f"Cancelled {len(result['canceled'])} orders")
 **Cause:** Scale-in increased position size but exit plan order wasn't updated  
 **Solution:** Exit plan order automatically updated when scale-in fills (robust status sync handles MATCHED/FILLED)
 
-**Example:**
-```
-Initial: 5.62 shares, Exit plan: 5.62 @ $0.99
-Scale-in: +5.62 shares → Total: 11.24
-Auto-update: Cancel old, place new exit plan for 11.24 shares
-Result: Full position covered ✅
-```
+### "Evaluating 4 markets ... Spread too wide (UP: 1.000, DOWN: 1.000). SKIPPING."
+**Cause:** New window just started, order book is empty (warm-up phase)  
+**Solution:** Bot now retries evaluation every 10s up to 3 times when it detects zero liquidity.
 
 ---
 
 ## Function Reference
+
 
 ### Most Useful New Functions
 
@@ -313,15 +334,18 @@ Result: Full position covered ✅
 | `place_batch_orders()` | Place multiple orders | 4 markets in 1 call |
 | `place_market_order()` | Market sell/buy | Stop loss execution |
 | `get_midpoint()` | Get accurate price | P&L calculation |
+| `get_multiple_market_prices()` | Batch price fetch | Efficient P&L monitoring |
 | `get_balance_allowance()` | Check balance | Pre-flight validation |
 | `check_liquidity()` | Check spread | Avoid illiquid markets |
 | `get_notifications()` | Real-time fills | Automatic monitoring |
+| `get_trades_for_user()` | Exchange fill history | Accurate execution audit |
+| `get_closed_positions()` | Closed trade history | Settlement verification |
 | `cancel_all()` | Emergency stop | Cancel everything |
 | `run_migrations()` | Schema updates | No data loss |
 | `process_notifications()` | Monitor fills | Real-time updates |
 | `_update_exit_plan_after_scale_in()` | Update exit after scale | Cover full position |
 | `check_order_scoring()` | Reward verification | Earn liquidity rewards |
-| `sync_positions_with_exchange()` | Startup sync | Prevent ghost positions |
+| `sync_positions_with_exchange()` | Startup sync | Adopts untracked positions |
 | `get_polymarket_momentum()` | Native trend | Better entry accuracy |
 | `get_bulk_spreads()` | Bulk liquidity check | Efficient market filtering |
 

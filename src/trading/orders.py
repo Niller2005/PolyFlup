@@ -301,17 +301,41 @@ def get_current_positions(user_address: str) -> List[dict]:
     try:
         from src.config.settings import DATA_API_BASE
         import requests
+        
+        # ENSURE user_address is valid
+        if not user_address:
+            log("   ❌ Error: user_address is empty for position fetch")
+            return []
 
         url = f"{DATA_API_BASE}/positions?user={user_address}"
+        log(f"   🔍 Fetching positions from Data API for {user_address[:10]}...")
+        
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
+        
+        positions = []
         if isinstance(data, list):
-            return data
-        return data.get("positions", []) if isinstance(data, dict) else []
+            positions = data
+        elif isinstance(data, dict):
+            positions = data.get("positions", [])
+            
+        # Clean up data: ensure size is a float and filter out dust
+        valid_positions = []
+        for p in positions:
+            try:
+                size = float(p.get("size", 0))
+                if size > 0.001: # Filter out dust
+                    valid_positions.append(p)
+            except:
+                continue
+                
+        log(f"   ✅ Data API returned {len(valid_positions)} active positions")
+        return valid_positions
     except Exception as e:
         log(f"⚠️ Error getting positions from Data API: {e}")
         return []
+
 
 
 def check_order_scoring(order_id: str) -> bool:

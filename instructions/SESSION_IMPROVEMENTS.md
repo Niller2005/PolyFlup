@@ -18,6 +18,7 @@ This document summarizes all improvements made during the development session.
 - **Gamma Sync:** Added `sync_positions_with_exchange` to fetch actual positions from Gamma API on startup.
 - **Auto-Correction:** Automatically updates database size and entry prices if discrepancies are detected.
 - **Cleanup:** Settles "ghost" trades in the DB that were closed while the bot was offline.
+- **Position Adoption:** Automatically "adopts" untracked positions found on the exchange, creating a local DB record to enable automated management and exit.
 
 ### 3. Reward Scoring Monitoring (Priority 1.3)
 **Description:** Integrated liquidity reward tracking for active orders.
@@ -29,7 +30,23 @@ This document summarizes all improvements made during the development session.
 **Description:** Enhanced entry strategy confirm directional bias using Polymarket's own price history.
 - **Internal Confirmation:** Added `get_polymarket_momentum` to fetch 1m price history from CLOB.
 - **Signal Correlation:** The strategy now requires both Binance and Polymarket trends to show strength before assigning high confidence.
+- **Lead/Lag Indicator:** Strategy now applies a 1.2x bonus when signals agree and 0.8x penalty when they diverge.
 - **Reduced Noise:** Filters out Binance volatility that isn't reflected in the prediction market pricing.
+
+### 5. Batch Price Fetching (Efficiency)
+**Description:** Drastically reduced API overhead during position monitoring.
+- **Bulk Midpoints:** Replaced individual `get_midpoint` calls with `get_multiple_market_prices`.
+- **Hybrid Source:** Bot now prefers WebSocket price cache, falling back to batch API, then single API, then order book.
+
+### 6. Settlement Audit System (Reliability)
+**Description:** Automated P&L verification against actual exchange history.
+- **Official History:** Added `_audit_settlements` using the `closed-positions` Data API endpoint.
+- **Discrepancy Logging:** Detects and logs any mismatch (> $0.10) between local P&L and exchange P&L.
+
+### 7. Warm-up Retry Logic (UX)
+**Description:** Solved the "Spread 1.0" issue where the bot skipped new 15m markets before they "woke up."
+- **Empty Book Detection:** Bot now identifies when a 1.0 spread means "zero liquidity" rather than "bad liquidity."
+- **Persistence:** Automatically retries evaluation every 10s for up to 30s to catch the window start after market makers place initial orders.
 
 ---
 

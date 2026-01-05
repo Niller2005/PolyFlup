@@ -74,17 +74,21 @@ def sync_positions_with_exchange(user_address: str):
     log(f"🔄 Syncing positions with exchange for {user_address[:10]}...")
 
     try:
-        # 1. Get positions from Data API
+            # 1. Get positions from Data API
         exchange_positions = get_current_positions(user_address)
 
         # Create a map of token_id -> position_data for easy lookup
-        pos_map = {
-            p.get("assetId"): p
-            for p in exchange_positions
-            if float(p.get("size", 0)) > 0
-        }
+        # ENSURE token_id is handled as a string for consistent comparison
+        pos_map = {}
+        for p in exchange_positions:
+            aid = p.get("assetId")
+            if aid:
+                pos_map[str(aid)] = p
+                
+        log(f"   📊 Exchange map built with {len(pos_map)} assets: {list(pos_map.keys())[:2]}")
 
         with db_connection() as conn:
+
             c = conn.cursor()
             now = datetime.now(tz=ZoneInfo("UTC"))
 
@@ -93,14 +97,17 @@ def sync_positions_with_exchange(user_address: str):
                 "SELECT id, symbol, side, size, token_id, entry_price FROM trades WHERE settled = 0"
             )
             db_trades = c.fetchall()
+            
+            log(f"   📊 DB has {len(db_trades)} open trades. Comparing with {len(pos_map)} exchange positions...")
 
             db_token_ids = []
 
             for trade_id, symbol, side, db_size, token_id, db_entry in db_trades:
-                db_token_ids.append(token_id)
+                tid_str = str(token_id)
+                db_token_ids.append(tid_str)
 
-                if token_id in pos_map:
-                    pos = pos_map[token_id]
+                if tid_str in pos_map:
+                    pos = pos_map[tid_str]
                     actual_size = float(pos.get("size", 0))
                     actual_price = float(pos.get("avgPrice", db_entry))
 
@@ -142,7 +149,8 @@ def sync_positions_with_exchange(user_address: str):
 
             # 3. Check for untracked positions
             for t_id, p_data in pos_map.items():
-                if t_id and t_id not in db_token_ids:
+                t_id_str = str(t_id)
+                if t_id_str and t_id_str not in db_token_ids:
                     size = float(p_data.get("size", 0))
                     if size < 1.0:
                         continue
