@@ -77,6 +77,65 @@ def _audit_settlements():
         log(f"⚠️ Settlement audit error: {e}")
 
 
+def force_settle_trade(trade_id: int):
+    """Force settle a specific trade regardless of window_end"""
+    with db_connection() as conn:
+        c = conn.cursor()
+        c.execute(
+            "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, limit_sell_order_id FROM trades WHERE id = ?",
+            (trade_id,),
+        )
+        trade = c.fetchone()
+        if not trade:
+            return
+            
+        now = datetime.now(tz=ZoneInfo("UTC"))
+        (
+            trade_id,
+            symbol,
+            slug,
+            token_id,
+            side,
+            entry_price,
+            size,
+            bet_usd,
+            limit_sell_order_id,
+        ) = trade
+        
+        try:
+            # 1. Get resolution from API
+            is_resolved, prices = get_market_resolution(slug)
+            if not is_resolved:
+                return
+
+            # 2. Identify which token we hold
+            r = requests.get(f"{GAMMA_API_BASE}/markets/slug/{slug}", timeout=5)
+            data = r.json()
+            clob_ids = data.get("clobTokenIds") or data.get("clob_token_ids")
+            if isinstance(clob_ids, str):
+                try: clob_ids = json.loads(clob_ids)
+                except: pass
+
+            final_price = 0.0
+            if prices and clob_ids and len(clob_ids) >= 2:
+                final_price = float(prices[0]) if str(token_id) == str(clob_ids[0]) else float(prices[1])
+            else:
+                return
+
+            if limit_sell_order_id:
+                cancel_order(limit_sell_order_id)
+
+            pnl_usd = (final_price * size) - bet_usd
+            roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
+
+            c.execute(
+                "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=? WHERE id=?",
+                ("FORCE_SETTLED", final_price, pnl_usd, roi_pct, now.isoformat(), trade_id),
+            )
+            log(f"✅ Force settled zombie trade [{symbol}] #{trade_id}: {pnl_usd:+.2f}$")
+        except Exception as e:
+            log(f"⚠️ Error force settling trade #{trade_id}: {e}")
+
 def check_and_settle_trades():
     """Check and settle completed trades using definitive API resolution"""
     with db_connection() as conn:

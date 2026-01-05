@@ -39,9 +39,11 @@ def get_multiple_market_prices(token_ids: List[str]) -> Dict[str, float]:
         return result
     except Exception as e:
         now = time.time()
-        if now - _last_midpoint_error_time > 60: # Log once per minute
-            log(f"⚠️ Error getting bulk midpoints (falling back to single calls): {e}")
-            _last_midpoint_error_time = now
+        # Don't log 404s (market closed/no orderbook) to avoid spam
+        if "404" not in str(e):
+            if now - _last_midpoint_error_time > 60: # Log once per minute
+                log(f"⚠️ Error getting bulk midpoints (falling back to single calls): {e}")
+                _last_midpoint_error_time = now
         return {}
 
 def get_midpoint(token_id: str) -> Optional[float]:
@@ -58,7 +60,9 @@ def get_midpoint(token_id: str) -> Optional[float]:
                 return float(val)
         return None
     except Exception as e:
-        log(f"⚠️ Error getting midpoint for {token_id[:10]}...: {e}")
+        # Don't log 404s (market closed/no orderbook) to avoid spam
+        if "404" not in str(e):
+            log(f"⚠️ Error getting midpoint for {token_id[:10]}...: {e}")
         return None
 
 def get_tick_size(token_id: str) -> float:

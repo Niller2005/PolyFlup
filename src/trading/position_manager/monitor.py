@@ -13,15 +13,19 @@ from src.trading.orders import (
     check_orders_scoring,
 )
 from src.utils.websocket_manager import ws_manager
+from src.trading.settlement import force_settle_trade
 from .shared import _position_check_lock
 from .pnl import _get_position_pnl
 from .stop_loss import _check_stop_loss
 from .scale_in import _check_scale_in
 from .exit_plan import _check_exit_plan
 
+_failed_pnl_checks = {}
+
 def check_open_positions(verbose=True, check_orders=False):
     if not _position_check_lock.acquire(blocking=False):
         return
+    global _failed_pnl_checks
     try:
         with db_connection() as conn:
             c = conn.cursor()
@@ -135,7 +139,16 @@ def check_open_positions(verbose=True, check_orders=False):
 
                     pnl_i = _get_position_pnl(tok, entry, size, cached_prices)
                     if not pnl_i:
+                        # Increment failure counter
+                        _failed_pnl_checks[tid] = _failed_pnl_checks.get(tid, 0) + 1
+                        if _failed_pnl_checks[tid] >= 3:
+                            log(f"🧟 [{sym}] #{tid} price unavailable for 3 cycles - attempting force settlement...")
+                            force_settle_trade(tid)
+                            _failed_pnl_checks[tid] = 0 # Reset
                         continue
+                    
+                    # Reset failure counter on success
+                    _failed_pnl_checks[tid] = 0
                     cur_p, p_pct_val, p_usd_val, p_chg_val = (
                         pnl_i["current_price"],
                         pnl_i["pnl_pct"],
