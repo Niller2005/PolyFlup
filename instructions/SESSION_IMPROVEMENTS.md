@@ -33,74 +33,55 @@ This document summarizes all improvements made during the development session.
 - **Lead/Lag Indicator:** Strategy now applies a 1.2x bonus when signals agree and 0.8x penalty when they diverge.
 - **Reduced Noise:** Filters out Binance volatility that isn't reflected in the prediction market pricing.
 
-### 5. Batch Price Fetching (Efficiency)
+### 5. Modular Position Manager (Architecture)
+**Description:** Refactored the monolithic `position_manager.py` into a clean package structure.
+- **Separation of Concerns:** Split logic into `monitor.py`, `pnl.py`, `stop_loss.py`, `scale_in.py`, `exit_plan.py`, `sync.py`, and `stats.py`.
+- **Maintainability:** Easier to debug and extend individual components without affecting the entire monitoring loop.
+
+### 6. Batch Price Fetching (Efficiency)
 **Description:** Drastically reduced API overhead during position monitoring.
 - **Bulk Midpoints:** Replaced individual `get_midpoint` calls with `get_multiple_market_prices`.
 - **Hybrid Source:** Bot now prefers WebSocket price cache, falling back to batch API, then single API, then order book.
 
-### 6. Settlement Audit System (Reliability)
+### 7. Settlement Audit System (Reliability)
 **Description:** Automated P&L verification against actual exchange history.
 - **Official History:** Added `_audit_settlements` using the `closed-positions` Data API endpoint.
 - **Discrepancy Logging:** Detects and logs any mismatch (> $0.10) between local P&L and exchange P&L.
 
-### 7. Warm-up Retry Logic (UX)
-**Description:** Solved the "Spread 1.0" issue where the bot skipped new 15m markets before they "woke up."
-- **Empty Book Detection:** Bot now identifies when a 1.0 spread means "zero liquidity" rather than "bad liquidity."
-- **Persistence:** Automatically retries evaluation every 10s for up to 30s to catch the window start after market makers place initial orders.
-
 ---
 
-## Critical Bug Fixes (3 items)
+## Critical Bug Fixes (5 items)
 
-### 1. Exit Plan Timer/Cooldown Stuck
-**Issue:** Trades were stuck in "Exit plan cooldown" because of a silent mismatch between the wallet balance and the database size. The bot would skip placing the exit plan to avoid "Insufficient Balance" errors but wouldn't tell the user why.
+### 1. Robust Exit Plan Repair Flow
+**Issue:** Repairs (after scale-ins) were failing silently or getting stuck on cancelled order IDs if placement of the new 0.99 order failed.
+**Fix:** Added explicit status verification every cycle. If placement fails, the DB record is cleared to allow a fresh retry in the next cycle.
 
-**Fix:** 
-- Added **Self-Healing Size Logic**: Automatically updates database size to match actual wallet balance if a mismatch is detected.
-- Added **Descriptive Cooldown Logs**: Shows seconds left in cooldown and trade age.
-- Fixed **Silent Failures**: Balance-related errors during placement are now logged clearly.
+### 2. Size Precision (Truncation Fix)
+**Issue:** `round(size, 2)` would occasionally round up (e.g., .806 -> .81), causing "Insufficient funds" errors if the actual balance was lower.
+**Fix:** Replaced rounding with `truncate_float(val, 2)` in `src/trading/orders.py`. All orders now use truncation to ensure safety against balance limits.
 
-**Impact:** Exit plans now place reliably even with minor rounding discrepancies from the API.
+### 3. Bulletproof Logging
+**Issue:** `UnicodeEncodeError` in the logger during transaction-heavy cycles could cause database rollbacks, leading to "ghost" trades.
+**Fix:** Rewrote `src/utils/logger.py` with nested `try...except` and ASCII fallback to ensure logging never crashes the bot or rolls back transactions.
 
----
+### 4. Exit Plan Timer/Cooldown Stuck
+**Issue:** Trades were stuck in "Exit plan cooldown" because of a silent mismatch between the wallet balance and the database size.
+**Fix:** Added **Self-Healing Size Logic** to automatically sync DB size with actual wallet balance during exit plan placement.
 
-### 2. Zero-Balance Trade Loop
-**Issue:** Trades marked as `FILLED` but with `0.0` actual balance (e.g., manually sold) would stay open forever, with the bot trying to place exit plans repeatedly.
-
-**Fix:** Added a 5-minute timeout for trades with 0 balance. They are now automatically marked as `UNFILLED_TIMEOUT` and settled.
-
-**Impact:** Cleans up stale database entries and prevents log spam.
-
----
-
-### 3. Exit Plan Already Filled Protection
-**Issue:** In some cases, the bot might try to replace or update an exit plan order that was already filled by the exchange, leading to redundant orders or errors.
-
-**Fix:** Added a status check for the existing `limit_sell_order_id`. If the status is `FILLED` or `MATCHED`, the bot skips any further updates.
-
-**Impact:** Prevents duplicate sell orders and unnecessary API calls.
-
----
-
-## Technical Enhancements
-
-### 4. Robust Order Verification
-**Description:** Enhanced how the bot verifies if an order exists on the exchange.
-
-**Features:**
-- Checks for existing `SELL` orders on the CLOB before attempting to place a new exit plan.
-- If an existing order is found, it automatically links it to the trade in the database.
-- Prevents "Duplicate Order" errors from the Polymarket API.
+### 5. Zero-Balance Trade Loop
+**Issue:** Trades marked as `FILLED` but with `0.0` actual balance would stay open forever.
+**Fix:** Added a 5-minute timeout for trades with 0 balance; they are now automatically settled.
 
 ---
 
 ## Complete Session Statistics (2026-01-05)
 
 ### Lines of Code
-- **Modified:** ~150 lines in `position_manager.py`
+- **Modified/Refactored:** ~1,200 lines (Full split of `position_manager.py`)
 
 ### Features
-- **Critical Bugs Fixed:** 3
+- **Critical Bugs Fixed:** 5
+- **Architecture Improvements:** 1
 - **Reliability Improvements:** 2
 - **Log Clarity Updates:** 1
 

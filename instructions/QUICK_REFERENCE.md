@@ -345,6 +345,7 @@ print(f"Cancelled {len(result['canceled'])} orders")
 | `process_notifications()` | Monitor fills | Real-time updates |
 | `_update_exit_plan_after_scale_in()` | Update exit after scale | Cover full position |
 | `check_order_scoring()` | Reward verification | Earn liquidity rewards |
+| `truncate_float()` | Precision safety | Prevent balance errors |
 | `sync_positions_with_exchange()` | Startup sync | Adopts untracked positions |
 | `get_polymarket_momentum()` | Native trend | Better entry accuracy |
 | `get_bulk_spreads()` | Bulk liquidity check | Efficient market filtering |

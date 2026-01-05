@@ -213,8 +213,10 @@ docker compose down
 src/
 ├── config/         # Settings and environment variables
 ├── data/           # Database, market data fetching
-├── trading/        # Orders, strategy, position management
-└── utils/          # Logging, web3 utilities
+├── trading/        # Orders, strategy, package-based position management
+│   ├── position_manager/ # Modular position monitoring
+│   └── ...
+└── utils/          # Logging, web3 utilities, WebSocket manager
 ```
 
 ### Key Patterns
