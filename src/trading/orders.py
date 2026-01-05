@@ -20,7 +20,14 @@ from py_clob_client.clob_types import (
     MarketOrderArgs,
     BookParams,
 )
-from py_clob_client.order_builder.constants import BUY, SELL
+try:
+    from py_clob_client.order_builder.constants import BUY as CLOB_BUY, SELL as CLOB_SELL
+except ImportError:
+    CLOB_BUY = "BUY"
+    CLOB_SELL = "SELL"
+
+BUY = CLOB_BUY
+SELL = CLOB_SELL
 from dotenv import set_key
 from src.config.settings import (
     CLOB_HOST,
@@ -62,6 +69,40 @@ client = ClobClient(
     signature_type=SIGNATURE_TYPE,
     funder=FUNDER_PROXY or "",
 )
+
+__all__ = [
+    "setup_api_creds",
+    "place_order",
+    "place_limit_order",
+    "place_market_order",
+    "place_batch_orders",
+    "get_orders",
+    "get_order",
+    "get_order_status",
+    "get_midpoint",
+    "get_tick_size",
+    "get_spread",
+    "get_bulk_spreads",
+    "get_multiple_market_prices",
+    "get_server_time",
+    "get_trades",
+    "get_trades_for_user",
+    "get_closed_positions",
+    "get_balance_allowance",
+    "get_notifications",
+    "drop_notifications",
+    "get_current_positions",
+    "check_order_scoring",
+    "check_orders_scoring",
+    "cancel_order",
+    "cancel_orders",
+    "cancel_market_orders",
+    "cancel_all",
+    "sell_position",
+    "get_clob_client",
+    "BUY",
+    "SELL",
+]
 
 # Hotfix: ensure client has builder_config attribute
 if not hasattr(client, "builder_config"):
@@ -560,7 +601,9 @@ def place_limit_order(
 
     def _place():
         _ensure_api_creds(client)
-        oa = OrderArgs(token_id=token_id, price=price, size=size, side=side)
+        # Use round(size, 2) to ensure compatibility with Polymarket rounding/truncation
+        rounded_size = round(size, 2)
+        oa = OrderArgs(token_id=token_id, price=price, size=rounded_size, side=side)
         if otype == OrderType.GTD and expiration:
             oa.expiration = expiration
         signed = client.create_order(oa)

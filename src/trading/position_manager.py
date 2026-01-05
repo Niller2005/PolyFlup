@@ -451,35 +451,64 @@ def _check_stop_loss(
 
 def _update_exit_plan_after_scale_in(
     symbol, trade_id, token_id, new_size, old_order_id, c, conn
-):
+) -> bool:
+    """Updates exit plan order with new size after scale-in. Returns True if successful."""
     if not old_order_id or not ENABLE_EXIT_PLAN:
-        return
+        return False
+        
     status = get_order_status(old_order_id)
     if status in ["FILLED", "MATCHED"]:
-        return
+        return True
+        
+    # If we successfully cancel (or it's already gone), try to place new one
     if cancel_order(old_order_id):
+        # Clear the old ID first to avoid being stuck if placement fails
+        c.execute(
+            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+            (trade_id,),
+        )
+        
         res = place_limit_order(token_id, EXIT_PRICE_TARGET, new_size, SELL, True)
         if res["success"]:
             c.execute(
                 "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
                 (res["order_id"], trade_id),
             )
+            return True
+        else:
+            log(f"   ❌ [{symbol}] Failed to place new exit plan after cancel: {res.get('error')}")
+            return False
+    return False
 
 
 def _update_exit_plan_to_new_price(
     symbol, trade_id, token_id, size, old_order_id, new_price, c, conn
-):
+) -> bool:
+    """Updates exit plan order with new price. Returns True if successful."""
     if not old_order_id:
-        return
+        return False
+        
     if get_order_status(old_order_id) in ["FILLED", "MATCHED"]:
-        return
+        return True
+        
     if cancel_order(old_order_id):
+        # Clear the old ID first
+        c.execute(
+            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+            (trade_id,),
+        )
+        
         res = place_limit_order(token_id, new_price, size, SELL, True)
         if res["success"]:
             c.execute(
                 "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
                 (res["order_id"], trade_id),
             )
+            return True
+        else:
+            log(f"   ❌ [{symbol}] Failed to update exit plan price: {res.get('error')}")
+            return False
+    return False
 
 
 def _check_exit_plan(
@@ -799,13 +828,23 @@ def check_open_positions(verbose=True, check_orders=False):
                                 continue
                             elif o_status == "LIVE":
                                 # Self-healing: Ensure exit plan size matches current trade size
+                                # Use rounding to avoid issues with floating point precision
                                 o_size = float(o_data.get("original_size", 0))
-                                if abs(o_size - size) > 0.001:
+                                if round(o_size, 2) != round(size, 2):
                                     log(f"   🔧 [{sym}] #{tid} Exit plan size mismatch: {o_size} != {size}. Repairing...")
-                                    _update_exit_plan_after_scale_in(sym, tid, tok, size, l_sell, c, conn)
-                                    # Update l_sell reference for subsequent checks in this loop
-                                    c.execute("SELECT limit_sell_order_id FROM trades WHERE id = ?", (tid,))
-                                    l_sell = c.fetchone()[0]
+                                    if _update_exit_plan_after_scale_in(sym, tid, tok, size, l_sell, c, conn):
+                                        # Update l_sell reference for subsequent checks in this loop
+                                        c.execute("SELECT limit_sell_order_id FROM trades WHERE id = ?", (tid,))
+                                        l_sell = c.fetchone()[0]
+                            elif o_status in ["CANCELED", "EXPIRED"]:
+                                log(f"   ⚠️ [{sym}] #{tid} Exit plan order was {o_status}. Clearing from DB to allow retry.")
+                                c.execute("UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?", (tid,))
+                                l_sell = None
+                        else:
+                            # Order not found on exchange but we have an ID in DB
+                            log(f"   ⚠️ [{sym}] #{tid} Exit plan order {l_sell[:10]}... not found on exchange. Clearing.")
+                            c.execute("UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?", (tid,))
+                            l_sell = None
 
                     pnl_i = _get_position_pnl(tok, entry, size, cached_prices)
                     if not pnl_i:
