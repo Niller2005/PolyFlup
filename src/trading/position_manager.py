@@ -876,443 +876,453 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         )
         open_positions = c.fetchall()
 
-    if not open_positions:
-        return
+        if not open_positions:
+            return
 
-    if verbose:
-        log(
-            f"👀 Monitoring {len(open_positions)} position{'s' if len(open_positions) > 1 else ''}..."
-        )
+        if verbose:
+            log(
+                f"👀 Monitoring {len(open_positions)} position{'s' if len(open_positions) > 1 else ''}..."
+            )
 
-    client = get_clob_client()
+        client = get_clob_client()
 
-    for (
-        trade_id,
-        symbol,
-        slug,
-        token_id,
-        side,
-        entry_price,
-        size,
-        bet_usd,
-        window_end,
-        scaled_in,
-        is_reversal,
-        target_price,
-        limit_sell_order_id,
-        buy_order_id,
-        buy_order_status,
-        timestamp,
-        scale_in_order_id,
-    ) in open_positions:
-        try:
-            # CRITICAL FIX: Skip if already settled in this cycle
-            # This prevents processing trades that were just marked as settled
-            c.execute("SELECT settled FROM trades WHERE id = ?", (trade_id,))
-            row = c.fetchone()
-            if row and row[0] == 1:
-                continue  # Already settled, skip
+        for (
+            trade_id,
+            symbol,
+            slug,
+            token_id,
+            side,
+            entry_price,
+            size,
+            bet_usd,
+            window_end,
+            scaled_in,
+            is_reversal,
+            target_price,
+            limit_sell_order_id,
+            buy_order_id,
+            buy_order_status,
+            timestamp,
+            scale_in_order_id,
+        ) in open_positions:
+            try:
+                # CRITICAL FIX: Skip if already settled in this cycle
+                # This prevents processing trades that were just marked as settled
+                c.execute("SELECT settled FROM trades WHERE id = ?", (trade_id,))
+                row = c.fetchone()
+                if row and row[0] == 1:
+                    continue  # Already settled, skip
 
-            # 0. Check buy order status if not filled
-            current_buy_status = buy_order_status
-            if buy_order_status != "FILLED" and buy_order_id:
-                current_buy_status = get_order_status(buy_order_id)
+                # 0. Check buy order status if not filled
+                current_buy_status = buy_order_status
+                if buy_order_status != "FILLED" and buy_order_id:
+                    current_buy_status = get_order_status(buy_order_id)
 
-                if current_buy_status == "FILLED":
-                    log(
-                        f"✅ [{symbol}] BUY order for trade #{trade_id} has been FILLED"
-                    )
-                    c.execute(
-                        "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
-                        (trade_id,),
-                    )
-                elif current_buy_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
-                    log(
-                        f"⚠️ [{symbol}] BUY order for trade #{trade_id} was {current_buy_status}. Settling trade."
-                    )
-                    c.execute(
-                        "UPDATE trades SET settled = 1, final_outcome = ? WHERE id = ?",
-                        (current_buy_status, trade_id),
-                    )
-                    continue
-                elif current_buy_status in ["DELAYED", "UNMATCHED"]:
-                    # Order is pending, log status but continue monitoring
-                    if verbose:
+                    if current_buy_status == "FILLED":
                         log(
-                            f"ℹ️ [{symbol}] BUY order for trade #{trade_id} status: {current_buy_status}"
+                            f"✅ [{symbol}] BUY order for trade #{trade_id} has been FILLED"
                         )
-                elif current_buy_status == "LIVE":
-                    # Order is live on the book, waiting for fill
-                    if verbose:
+                        c.execute(
+                            "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
+                            (trade_id,),
+                        )
+                    elif current_buy_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
                         log(
-                            f"📋 [{symbol}] BUY order for trade #{trade_id} is LIVE on the book"
+                            f"⚠️ [{symbol}] BUY order for trade #{trade_id} was {current_buy_status}. Settling trade."
                         )
-                elif current_buy_status == "ERROR":
-                    log(f"⚠️ [{symbol}] Error checking BUY order for trade #{trade_id}")
-
-            # Note: Limit sell order placement moved to 60-second mark (after price checks below)
-
-            # 2. Check if limit sell order was filled (EXIT PLAN MONITORING)
-            if check_orders and limit_sell_order_id:
-                try:
-                    # Use enhanced get_order() for detailed information
-                    order_data = get_order(limit_sell_order_id)
-
-                    if order_data:
-                        status = order_data.get("status", "").upper()
-
-                        if status == "FILLED":
-                            # Get actual exit price from order data if available
-                            exit_price = order_data.get("price", EXIT_PRICE_TARGET)
-                            size_matched = order_data.get("size_matched", size)
-
-                            log(
-                                f"🎯 EXIT PLAN SUCCESS: Trade #{trade_id} filled at {exit_price}! (matched {size_matched} shares)"
-                            )
-
-                            pnl_usd = (exit_price * size_matched) - bet_usd
-                            roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
-
-                            c.execute(
-                                """UPDATE trades 
-                                   SET settled=1, exited_early=1, exit_price=?, 
-                                       pnl_usd=?, roi_pct=?, 
-                                       final_outcome='EXIT_PLAN_FILLED', settled_at=? 
-                                   WHERE id=?""",
-                                (
-                                    exit_price,
-                                    pnl_usd,
-                                    roi_pct,
-                                    now.isoformat(),
-                                    trade_id,
-                                ),
-                            )
-                            send_discord(
-                                f"🎯 **EXIT PLAN SUCCESS** [{symbol}] {side} closed at {exit_price} ({roi_pct:+.1f}%)"
-                            )
-                            continue
-                        elif status in ["CANCELED", "EXPIRED"]:
-                            log(
-                                f"⚠️ EXIT PLAN: Limit sell order for trade #{trade_id} was {status}"
-                            )
-                            # Clear the limit_sell_order_id so it can be re-placed
-                            c.execute(
-                                "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
-                                (trade_id,),
-                            )
-                        elif status == "LIVE" and verbose:
-                            log(
-                                f"📋 EXIT PLAN: Limit sell order for trade #{trade_id} is LIVE at {EXIT_PRICE_TARGET}"
-                            )
-                    else:
-                        # Order not found, might be too old
+                        c.execute(
+                            "UPDATE trades SET settled = 1, final_outcome = ? WHERE id = ?",
+                            (current_buy_status, trade_id),
+                        )
+                        continue
+                    elif current_buy_status in ["DELAYED", "UNMATCHED"]:
+                        # Order is pending, log status but continue monitoring
                         if verbose:
                             log(
-                                f"⚠️ EXIT PLAN: Could not find limit sell order {limit_sell_order_id[:10]}..."
+                                f"ℹ️ [{symbol}] BUY order for trade #{trade_id} status: {current_buy_status}"
                             )
-
-                except Exception as e:
-                    # Order might be too old or other error, log if significant
-                    if "404" not in str(e):
-                        log(
-                            f"⚠️ Error checking exit plan order {limit_sell_order_id}: {e}"
-                        )
-
-            # Get current market price and calculate P&L
-            pnl_info = _get_position_pnl(token_id, entry_price, size)
-            if not pnl_info:
-                continue
-
-            current_price = pnl_info["current_price"]
-            pnl_pct = pnl_info["pnl_pct"]
-            pnl_usd = pnl_info["pnl_usd"]
-            price_change_pct = pnl_info["price_change_pct"]
-
-            if verbose:
-                # Add emoji based on P&L direction
-                emoji = "📈" if pnl_pct > 0 else "📉"
-                log(
-                    f"  {emoji} [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={price_change_pct:+.1f}%"
-                )
-
-            # ============================================================
-            # PRIORITY #1: STOP LOSS (checked FIRST, before everything else)
-            # ============================================================
-            closed = _check_stop_loss(
-                symbol=symbol,
-                trade_id=trade_id,
-                token_id=token_id,
-                side=side,
-                entry_price=entry_price,
-                size=size,
-                pnl_pct=pnl_pct,
-                pnl_usd=pnl_usd,
-                current_price=current_price,
-                target_price=target_price,
-                limit_sell_order_id=limit_sell_order_id,
-                is_reversal=is_reversal,
-                c=c,
-                conn=conn,
-                now=now,
-                buy_order_status=current_buy_status,
-            )
-            if closed:
-                continue
-
-            # ============================================================
-            # PRIORITY #2: Other Risk Management (after stop loss)
-            # ============================================================
-
-            # Calculate time left until window ends
-            if isinstance(window_end, str):
-                window_end_dt = datetime.fromisoformat(window_end)
-            else:
-                window_end_dt = window_end
-
-            time_left_seconds = (window_end_dt - now).total_seconds()
-
-            # ============================================================
-            # EXIT PLAN: Check and manage limit sell orders
-            # ============================================================
-            # Re-fetch limit_sell_order_id in case it was updated by a previous position in this cycle
-            c.execute(
-                "SELECT limit_sell_order_id FROM trades WHERE id = ?", (trade_id,)
-            )
-            row = c.fetchone()
-            if row:
-                limit_sell_order_id = row[0]
-
-            _check_exit_plan(
-                symbol=symbol,
-                trade_id=trade_id,
-                token_id=token_id,
-                size=size,
-                buy_order_status=current_buy_status,
-                limit_sell_order_id=limit_sell_order_id,
-                timestamp=timestamp,
-                c=c,
-                conn=conn,
-                now=now,
-                verbose=verbose,
-            )
-
-            # Re-fetch again after _check_exit_plan in case it was updated
-            c.execute(
-                "SELECT limit_sell_order_id FROM trades WHERE id = ?", (trade_id,)
-            )
-            row = c.fetchone()
-            if row:
-                limit_sell_order_id = row[0]
-
-            # ============================================================
-            # SCALE IN: Check if conditions are met or monitor pending orders
-            # ============================================================
-            # Re-fetch scale_in_order_id in case it was just placed
-            c.execute("SELECT scale_in_order_id FROM trades WHERE id = ?", (trade_id,))
-            row = c.fetchone()
-            if row:
-                scale_in_order_id = row[0]
-
-            _check_scale_in(
-                symbol=symbol,
-                trade_id=trade_id,
-                token_id=token_id,
-                entry_price=entry_price,
-                size=size,
-                bet_usd=bet_usd,
-                scaled_in=scaled_in,
-                scale_in_order_id=scale_in_order_id,
-                time_left_seconds=time_left_seconds,
-                current_price=current_price,
-                check_orders=check_orders,
-                c=c,
-                conn=conn,
-            )
-
-            # ============================================================
-            # UNFILLED ORDER MANAGEMENT
-            # ============================================================
-            if CANCEL_UNFILLED_ORDERS and current_buy_status.upper() not in [
-                "FILLED",
-                "MATCHED",
-            ]:
-                should_cancel = False
-                cancel_reason = ""
-                should_reverse = False
-
-                # Calculate position age
-                position_age_seconds = (
-                    now - datetime.fromisoformat(timestamp)
-                ).total_seconds()
-
-                # Reason 1: Price moved away (losing side)
-                if price_change_pct <= -UNFILLED_CANCEL_THRESHOLD:
-                    should_cancel = True
-                    cancel_reason = f"Price moved away ({price_change_pct:.1f}% < -{UNFILLED_CANCEL_THRESHOLD}%)"
-
-                # Reason 2: Timeout - order unfilled for too long
-                elif position_age_seconds > UNFILLED_TIMEOUT_SECONDS:
-                    should_cancel = True
-                    cancel_reason = f"Order unfilled for {position_age_seconds:.0f}s (timeout: {UNFILLED_TIMEOUT_SECONDS}s)"
-
-                    if verbose:
-                        log(
-                            f"⏰ [{symbol}] Trade #{trade_id} timeout: {position_age_seconds:.0f}s old, P&L: {pnl_pct:+.1f}%"
-                        )
-
-                    # Check if we're on the winning side with good P&L
-                    if UNFILLED_RETRY_ON_WINNING_SIDE and pnl_pct > 10.0:
-                        current_spot = get_current_spot_price(symbol)
-                        is_on_winning_side = False
-
-                        if current_spot > 0 and target_price is not None:
-                            if side == "UP" and current_spot >= target_price:
-                                is_on_winning_side = True
-                            elif side == "DOWN" and current_spot <= target_price:
-                                is_on_winning_side = True
-
-                        if is_on_winning_side:
-                            should_reverse = True
-                            cancel_reason += (
-                                f" - On winning side with {pnl_pct:+.1f}% P&L"
-                            )
-
-                if should_cancel:
-                    # Only log once per trade (check if we already tried)
-                    c.execute(
-                        "SELECT order_status FROM trades WHERE id = ?", (trade_id,)
-                    )
-                    status_row = c.fetchone()
-                    current_status = status_row[0] if status_row else None
-
-                    # Skip if we already attempted cancellation (status will be different from 'live')
-                    if current_status and current_status.upper() not in [
-                        "LIVE",
-                        "DELAYED",
-                        "UNMATCHED",
-                    ]:
-                        continue
-
-                    log(
-                        f"🛑 CANCELLING unfilled order for trade #{trade_id}: {cancel_reason}"
-                    )
-                    cancel_result = cancel_order(buy_order_id)
-
-                    if cancel_result:
-                        log(f"✅ Buy order cancelled successfully")
-
-                        if should_reverse:
-                            # Try to enter at current market price
+                    elif current_buy_status == "LIVE":
+                        # Order is live on the book, waiting for fill
+                        if verbose:
                             log(
-                                f"🔄 Retrying [{symbol}] {side} at current market price"
+                                f"📋 [{symbol}] BUY order for trade #{trade_id} is LIVE on the book"
                             )
+                    elif current_buy_status == "ERROR":
+                        log(
+                            f"⚠️ [{symbol}] Error checking BUY order for trade #{trade_id}"
+                        )
 
-                            # Get current market price
-                            retry_price = current_price
-                            retry_price = round(max(0.01, min(0.99, retry_price)), 2)
+                # Note: Limit sell order placement moved to 60-second mark (after price checks below)
 
-                            retry_result = place_order(token_id, retry_price, size)
+                # 2. Check if limit sell order was filled (EXIT PLAN MONITORING)
+                if check_orders and limit_sell_order_id:
+                    try:
+                        # Use enhanced get_order() for detailed information
+                        order_data = get_order(limit_sell_order_id)
 
-                            if retry_result["success"]:
+                        if order_data:
+                            status = order_data.get("status", "").upper()
+
+                            if status == "FILLED":
+                                # Get actual exit price from order data if available
+                                exit_price = order_data.get("price", EXIT_PRICE_TARGET)
+                                size_matched = order_data.get("size_matched", size)
+
                                 log(
-                                    f"✅ Retry order placed at ${retry_price:.2f} (was ${entry_price:.2f})"
+                                    f"🎯 EXIT PLAN SUCCESS: Trade #{trade_id} filled at {exit_price}! (matched {size_matched} shares)"
                                 )
-                                # Update the trade with new order info
+
+                                pnl_usd = (exit_price * size_matched) - bet_usd
+                                roi_pct = (
+                                    (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
+                                )
+
                                 c.execute(
                                     """UPDATE trades 
-                                       SET order_id = ?, order_status = ?, entry_price = ?
-                                       WHERE id = ?""",
+                                       SET settled=1, exited_early=1, exit_price=?, 
+                                           pnl_usd=?, roi_pct=?, 
+                                           final_outcome='EXIT_PLAN_FILLED', settled_at=? 
+                                       WHERE id=?""",
                                     (
-                                        retry_result["order_id"],
-                                        retry_result["status"],
-                                        retry_price,
+                                        exit_price,
+                                        pnl_usd,
+                                        roi_pct,
+                                        now.isoformat(),
                                         trade_id,
                                     ),
                                 )
                                 send_discord(
-                                    f"🔄 **RETRY** [{symbol}] {side} @ ${retry_price:.2f} (was ${entry_price:.2f}, waited {position_age_seconds:.0f}s)"
+                                    f"🎯 **EXIT PLAN SUCCESS** [{symbol}] {side} closed at {exit_price} ({roi_pct:+.1f}%)"
+                                )
+                                continue
+                            elif status in ["CANCELED", "EXPIRED"]:
+                                log(
+                                    f"⚠️ EXIT PLAN: Limit sell order for trade #{trade_id} was {status}"
+                                )
+                                # Clear the limit_sell_order_id so it can be re-placed
+                                c.execute(
+                                    "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                                    (trade_id,),
+                                )
+                            elif status == "LIVE" and verbose:
+                                log(
+                                    f"📋 EXIT PLAN: Limit sell order for trade #{trade_id} is LIVE at {EXIT_PRICE_TARGET}"
+                                )
+                        else:
+                            # Order not found, might be too old
+                            if verbose:
+                                log(
+                                    f"⚠️ EXIT PLAN: Could not find limit sell order {limit_sell_order_id[:10]}..."
+                                )
+
+                    except Exception as e:
+                        # Order might be too old or other error, log if significant
+                        if "404" not in str(e):
+                            log(
+                                f"⚠️ Error checking exit plan order {limit_sell_order_id}: {e}"
+                            )
+
+                # Get current market price and calculate P&L
+                pnl_info = _get_position_pnl(token_id, entry_price, size)
+                if not pnl_info:
+                    continue
+
+                current_price = pnl_info["current_price"]
+                pnl_pct = pnl_info["pnl_pct"]
+                pnl_usd = pnl_info["pnl_usd"]
+                price_change_pct = pnl_info["price_change_pct"]
+
+                if verbose:
+                    # Add emoji based on P&L direction
+                    emoji = "📈" if pnl_pct > 0 else "📉"
+                    log(
+                        f"  {emoji} [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={price_change_pct:+.1f}%"
+                    )
+
+                # ============================================================
+                # PRIORITY #1: STOP LOSS (checked FIRST, before everything else)
+                # ============================================================
+                closed = _check_stop_loss(
+                    symbol=symbol,
+                    trade_id=trade_id,
+                    token_id=token_id,
+                    side=side,
+                    entry_price=entry_price,
+                    size=size,
+                    pnl_pct=pnl_pct,
+                    pnl_usd=pnl_usd,
+                    current_price=current_price,
+                    target_price=target_price,
+                    limit_sell_order_id=limit_sell_order_id,
+                    is_reversal=is_reversal,
+                    c=c,
+                    conn=conn,
+                    now=now,
+                    buy_order_status=current_buy_status,
+                )
+                if closed:
+                    continue
+
+                # ============================================================
+                # PRIORITY #2: Other Risk Management (after stop loss)
+                # ============================================================
+
+                # Calculate time left until window ends
+                if isinstance(window_end, str):
+                    window_end_dt = datetime.fromisoformat(window_end)
+                else:
+                    window_end_dt = window_end
+
+                time_left_seconds = (window_end_dt - now).total_seconds()
+
+                # ============================================================
+                # EXIT PLAN: Check and manage limit sell orders
+                # ============================================================
+                # Re-fetch limit_sell_order_id in case it was updated by a previous position in this cycle
+                c.execute(
+                    "SELECT limit_sell_order_id FROM trades WHERE id = ?", (trade_id,)
+                )
+                row = c.fetchone()
+                if row:
+                    limit_sell_order_id = row[0]
+
+                _check_exit_plan(
+                    symbol=symbol,
+                    trade_id=trade_id,
+                    token_id=token_id,
+                    size=size,
+                    buy_order_status=current_buy_status,
+                    limit_sell_order_id=limit_sell_order_id,
+                    timestamp=timestamp,
+                    c=c,
+                    conn=conn,
+                    now=now,
+                    verbose=verbose,
+                )
+
+                # Re-fetch again after _check_exit_plan in case it was updated
+                c.execute(
+                    "SELECT limit_sell_order_id FROM trades WHERE id = ?", (trade_id,)
+                )
+                row = c.fetchone()
+                if row:
+                    limit_sell_order_id = row[0]
+
+                # ============================================================
+                # SCALE IN: Check if conditions are met or monitor pending orders
+                # ============================================================
+                # Re-fetch scale_in_order_id in case it was just placed
+                c.execute(
+                    "SELECT scale_in_order_id FROM trades WHERE id = ?", (trade_id,)
+                )
+                row = c.fetchone()
+                if row:
+                    scale_in_order_id = row[0]
+
+                _check_scale_in(
+                    symbol=symbol,
+                    trade_id=trade_id,
+                    token_id=token_id,
+                    entry_price=entry_price,
+                    size=size,
+                    bet_usd=bet_usd,
+                    scaled_in=scaled_in,
+                    scale_in_order_id=scale_in_order_id,
+                    time_left_seconds=time_left_seconds,
+                    current_price=current_price,
+                    check_orders=check_orders,
+                    c=c,
+                    conn=conn,
+                )
+
+                # ============================================================
+                # UNFILLED ORDER MANAGEMENT
+                # ============================================================
+                if CANCEL_UNFILLED_ORDERS and current_buy_status.upper() not in [
+                    "FILLED",
+                    "MATCHED",
+                ]:
+                    should_cancel = False
+                    cancel_reason = ""
+                    should_reverse = False
+
+                    # Calculate position age
+                    position_age_seconds = (
+                        now - datetime.fromisoformat(timestamp)
+                    ).total_seconds()
+
+                    # Reason 1: Price moved away (losing side)
+                    if price_change_pct <= -UNFILLED_CANCEL_THRESHOLD:
+                        should_cancel = True
+                        cancel_reason = f"Price moved away ({price_change_pct:.1f}% < -{UNFILLED_CANCEL_THRESHOLD}%)"
+
+                    # Reason 2: Timeout - order unfilled for too long
+                    elif position_age_seconds > UNFILLED_TIMEOUT_SECONDS:
+                        should_cancel = True
+                        cancel_reason = f"Order unfilled for {position_age_seconds:.0f}s (timeout: {UNFILLED_TIMEOUT_SECONDS}s)"
+
+                        if verbose:
+                            log(
+                                f"⏰ [{symbol}] Trade #{trade_id} timeout: {position_age_seconds:.0f}s old, P&L: {pnl_pct:+.1f}%"
+                            )
+
+                        # Check if we're on the winning side with good P&L
+                        if UNFILLED_RETRY_ON_WINNING_SIDE and pnl_pct > 10.0:
+                            current_spot = get_current_spot_price(symbol)
+                            is_on_winning_side = False
+
+                            if current_spot > 0 and target_price is not None:
+                                if side == "UP" and current_spot >= target_price:
+                                    is_on_winning_side = True
+                                elif side == "DOWN" and current_spot <= target_price:
+                                    is_on_winning_side = True
+
+                            if is_on_winning_side:
+                                should_reverse = True
+                                cancel_reason += (
+                                    f" - On winning side with {pnl_pct:+.1f}% P&L"
+                                )
+
+                    if should_cancel:
+                        # Only log once per trade (check if we already tried)
+                        c.execute(
+                            "SELECT order_status FROM trades WHERE id = ?", (trade_id,)
+                        )
+                        status_row = c.fetchone()
+                        current_status = status_row[0] if status_row else None
+
+                        # Skip if we already attempted cancellation (status will be different from 'live')
+                        if current_status and current_status.upper() not in [
+                            "LIVE",
+                            "DELAYED",
+                            "UNMATCHED",
+                        ]:
+                            continue
+
+                        log(
+                            f"🛑 CANCELLING unfilled order for trade #{trade_id}: {cancel_reason}"
+                        )
+                        cancel_result = cancel_order(buy_order_id)
+
+                        if cancel_result:
+                            log(f"✅ Buy order cancelled successfully")
+
+                            if should_reverse:
+                                # Try to enter at current market price
+                                log(
+                                    f"🔄 Retrying [{symbol}] {side} at current market price"
+                                )
+
+                                # Get current market price
+                                retry_price = current_price
+                                retry_price = round(
+                                    max(0.01, min(0.99, retry_price)), 2
+                                )
+
+                                retry_result = place_order(token_id, retry_price, size)
+
+                                if retry_result["success"]:
+                                    log(
+                                        f"✅ Retry order placed at ${retry_price:.2f} (was ${entry_price:.2f})"
+                                    )
+                                    # Update the trade with new order info
+                                    c.execute(
+                                        """UPDATE trades 
+                                           SET order_id = ?, order_status = ?, entry_price = ?
+                                           WHERE id = ?""",
+                                        (
+                                            retry_result["order_id"],
+                                            retry_result["status"],
+                                            retry_price,
+                                            trade_id,
+                                        ),
+                                    )
+                                    send_discord(
+                                        f"🔄 **RETRY** [{symbol}] {side} @ ${retry_price:.2f} (was ${entry_price:.2f}, waited {position_age_seconds:.0f}s)"
+                                    )
+                                    continue
+                                else:
+                                    error_msg = retry_result.get(
+                                        "error", "Unknown error"
+                                    )
+                                    log(f"⚠️ Retry order failed: {error_msg}")
+
+                            # Mark as cancelled if not retrying or retry failed
+                            c.execute(
+                                "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_UNFILLED', order_status = 'CANCELED' WHERE id = ?",
+                                (trade_id,),
+                            )
+                        else:
+                            # Cancel failed - likely order already filled or cancelled
+                            # Update status so we don't keep trying
+                            log(
+                                f"ℹ️ Cancel returned False - order may already be filled/cancelled, checking status..."
+                            )
+
+                            # Re-check order status
+                            actual_status = get_order_status(buy_order_id)
+                            log(f"   Order status: {actual_status}")
+
+                            if actual_status.upper() in ["FILLED", "MATCHED"]:
+                                # Order was filled! Update status and continue monitoring
+                                log(f"✅ Order was actually FILLED, updating database")
+                                c.execute(
+                                    "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
+                                    (trade_id,),
+                                )
+                                continue
+                            elif actual_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
+                                # Order already cancelled/expired, settle it
+                                log(f"ℹ️ Order already {actual_status}, settling trade")
+                                c.execute(
+                                    "UPDATE trades SET settled = 1, final_outcome = ?, order_status = ? WHERE id = ?",
+                                    (
+                                        f"CANCELLED_UNFILLED_{actual_status}",
+                                        actual_status,
+                                        trade_id,
+                                    ),
+                                )
+                                continue
+                            elif actual_status == "ERROR":
+                                # Can't determine status (API error) - mark to prevent infinite retry
+                                log(
+                                    f"⚠️ Can't determine order status, marking as CANCEL_ATTEMPTED to prevent spam"
+                                )
+                                c.execute(
+                                    "UPDATE trades SET order_status = 'CANCEL_ATTEMPTED' WHERE id = ?",
+                                    (trade_id,),
                                 )
                                 continue
                             else:
-                                error_msg = retry_result.get("error", "Unknown error")
-                                log(f"⚠️ Retry order failed: {error_msg}")
+                                # Unknown state (LIVE, DELAYED, etc.), mark to prevent spam
+                                c.execute(
+                                    "UPDATE trades SET order_status = 'CANCEL_ATTEMPTED' WHERE id = ?",
+                                    (trade_id,),
+                                )
+                                continue
 
-                        # Mark as cancelled if not retrying or retry failed
-                        c.execute(
-                            "UPDATE trades SET settled = 1, final_outcome = 'CANCELLED_UNFILLED', order_status = 'CANCELED' WHERE id = ?",
-                            (trade_id,),
-                        )
-                    else:
-                        # Cancel failed - likely order already filled or cancelled
-                        # Update status so we don't keep trying
-                        log(
-                            f"ℹ️ Cancel returned False - order may already be filled/cancelled, checking status..."
-                        )
+                        continue
 
-                        # Re-check order status
-                        actual_status = get_order_status(buy_order_id)
-                        log(f"   Order status: {actual_status}")
-
-                        if actual_status.upper() in ["FILLED", "MATCHED"]:
-                            # Order was filled! Update status and continue monitoring
-                            log(f"✅ Order was actually FILLED, updating database")
-                            c.execute(
-                                "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
-                                (trade_id,),
-                            )
-                            continue
-                        elif actual_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
-                            # Order already cancelled/expired, settle it
-                            log(f"ℹ️ Order already {actual_status}, settling trade")
-                            c.execute(
-                                "UPDATE trades SET settled = 1, final_outcome = ?, order_status = ? WHERE id = ?",
-                                (
-                                    f"CANCELLED_UNFILLED_{actual_status}",
-                                    actual_status,
-                                    trade_id,
-                                ),
-                            )
-                            continue
-                        elif actual_status == "ERROR":
-                            # Can't determine status (API error) - mark to prevent infinite retry
-                            log(
-                                f"⚠️ Can't determine order status, marking as CANCEL_ATTEMPTED to prevent spam"
-                            )
-                            c.execute(
-                                "UPDATE trades SET order_status = 'CANCEL_ATTEMPTED' WHERE id = ?",
-                                (trade_id,),
-                            )
-                            continue
-                        else:
-                            # Unknown state (LIVE, DELAYED, etc.), mark to prevent spam
-                            c.execute(
-                                "UPDATE trades SET order_status = 'CANCEL_ATTEMPTED' WHERE id = ?",
-                                (trade_id,),
-                            )
-                            continue
-
+                # ============================================================
+                # TAKE PROFIT: Check if profit target is hit
+                # ============================================================
+                closed = _check_take_profit(
+                    symbol=symbol,
+                    trade_id=trade_id,
+                    token_id=token_id,
+                    side=side,
+                    size=size,
+                    pnl_pct=pnl_pct,
+                    pnl_usd=pnl_usd,
+                    current_price=current_price,
+                    limit_sell_order_id=limit_sell_order_id,
+                    c=c,
+                    conn=conn,
+                    now=now,
+                    buy_order_status=current_buy_status,
+                )
+                if closed:
                     continue
 
-            # ============================================================
-            # TAKE PROFIT: Check if profit target is hit
-            # ============================================================
-            closed = _check_take_profit(
-                symbol=symbol,
-                trade_id=trade_id,
-                token_id=token_id,
-                side=side,
-                size=size,
-                pnl_pct=pnl_pct,
-                pnl_usd=pnl_usd,
-                current_price=current_price,
-                limit_sell_order_id=limit_sell_order_id,
-                c=c,
-                conn=conn,
-                now=now,
-                buy_order_status=current_buy_status,
-            )
-            if closed:
-                continue
-
-        except Exception as e:
-            log(f"⚠️ Error checking position #{trade_id}: {e}")
+            except Exception as e:
+                log(f"⚠️ Error checking position #{trade_id}: {e}")
