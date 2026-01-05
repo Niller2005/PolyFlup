@@ -12,6 +12,12 @@ This folder contains internal documentation and instructions for PolyAstra devel
 - **MIGRATIONS.md** - Database migration system guide
 - **DATABASE_BEST_PRACTICES.md** - Database patterns and performance tips
 
+### External APIs & Integration
+- **POLYMARKET.md** - Polymarket API documentation and reference
+
+### Frontend & UI
+- **SHADCN_SVELTE.md** - Shadcn-svelte component documentation and registry
+
 ## Root-Level Documentation
 
 The following files are kept in the project root:

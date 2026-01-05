@@ -297,4 +297,6 @@ For additional information about the codebase and recent improvements:
 - **instructions/QUICK_REFERENCE.md** - Code examples and quick lookup for new features (batch orders, market orders, notifications, etc.)
 - **instructions/MIGRATIONS.md** - How to add database migrations (step-by-step guide with examples)
 - **instructions/DATABASE_BEST_PRACTICES.md** - Database connection patterns and best practices
+- **instructions/POLYMARKET.md** - Polymarket API documentation and reference
+- **instructions/SHADCN_SVELTE.md** - Shadcn-svelte component documentation and registry
 - **AGENTS.md** - This file - General coding standards and project overview
