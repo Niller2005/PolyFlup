@@ -236,7 +236,7 @@ def _get_position_pnl(token_id: str, entry_price: float, size: float) -> Optiona
         current_price = get_midpoint(token_id)
     if current_price is None:
         client = get_clob_client()
-        book = client.get_order_book(token_id)
+        book: Any = client.get_order_book(token_id)
         if isinstance(book, dict):
             bids, asks = book.get("bids", []), book.get("asks", [])
         else:
@@ -278,7 +278,7 @@ def _check_stop_loss(
     now,
     buy_order_status,
 ):
-    """Check and execute stop loss"""
+    """Check and execute stop loss with REVERSAL support"""
     c.execute("SELECT settled FROM trades WHERE id = ?", (trade_id,))
     if (row := c.fetchone()) and row[0] == 1:
         return True
@@ -332,6 +332,43 @@ def _check_stop_loss(
         (current_price, pnl_usd, pnl_pct, now.isoformat(), trade_id),
     )
     send_discord(f"🛑 STOP LOSS [{symbol}] {side} closed at {pnl_pct:+.1f}%")
+
+    # REVERSAL LOGIC
+    if not is_reversal and ENABLE_REVERSAL:
+        opposite_side = "DOWN" if side == "UP" else "UP"
+        log(f"🔄 Reversing [{symbol}] {side} → {opposite_side}")
+        up_id, down_id = get_token_ids(symbol.split("-")[0])
+        if up_id and down_id:
+            opposite_token = down_id if side == "UP" else up_id
+            opp_price = round(max(0.01, min(0.99, 1.0 - current_price)), 2)
+            rev_res = place_order(opposite_token, opp_price, size)
+            if rev_res["success"]:
+                send_discord(f"🔄 **REVERSED** [{symbol}] {side} → {opposite_side}")
+                try:
+                    w_start, w_end = get_window_times(symbol.split("-")[0])
+                    save_trade(
+                        cursor=c,
+                        symbol=symbol,
+                        window_start=w_start.isoformat(),
+                        window_end=w_end.isoformat(),
+                        slug=get_current_slug(symbol.split("-")[0]),
+                        token_id=opposite_token,
+                        side=opposite_side,
+                        edge=0.0,
+                        price=opp_price,
+                        size=size,
+                        bet_usd=size * opp_price,
+                        p_yes=opp_price if opposite_side == "UP" else 1.0 - opp_price,
+                        order_status=rev_res["status"],
+                        order_id=rev_res["order_id"],
+                        is_reversal=True,
+                        target_price=target_price,
+                    )
+                except Exception as e:
+                    log(f"⚠️ DB Error (reversal): {e}")
+            else:
+                log(f"⚠️ Reversal failed: {rev_res.get('error')}")
+
     return True
 
 
