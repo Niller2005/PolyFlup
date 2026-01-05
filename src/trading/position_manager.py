@@ -991,6 +991,14 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             # ============================================================
             # EXIT PLAN: Check and manage limit sell orders
             # ============================================================
+            # Re-fetch limit_sell_order_id in case it was updated by a previous position in this cycle
+            c.execute(
+                "SELECT limit_sell_order_id FROM trades WHERE id = ?", (trade_id,)
+            )
+            row = c.fetchone()
+            if row:
+                limit_sell_order_id = row[0]
+
             _check_exit_plan(
                 symbol=symbol,
                 trade_id=trade_id,
@@ -1004,6 +1012,8 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                 now=now,
                 verbose=verbose,
             )
+
+            # Re-fetch again after _check_exit_plan in case it was updated
             c.execute(
                 "SELECT limit_sell_order_id FROM trades WHERE id = ?", (trade_id,)
             )
