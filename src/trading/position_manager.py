@@ -461,6 +461,7 @@ def _check_exit_plan(
     pnl_pct: float = 0.0,
     price_change_pct: float = 0.0,
     scaled_in: bool = False,
+    scale_in_order_id: Optional[str] = None,
 ) -> None:
     """Check and manage exit plan limit orders"""
     # CRITICAL FIX: MATCHED orders are filled and ready to sell
@@ -502,8 +503,9 @@ def _check_exit_plan(
                         o_id = (
                             o.get("id") if isinstance(o, dict) else getattr(o, "id", "")
                         )
+                        emoji = "📈" if pnl_pct >= 0 else "📉"
                         log(
-                            f"[{symbol}] 🔍 Found existing open SELL order {(o_id or '')[:10]}... on exchange. Updating database."
+                            f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | 🔍 Found existing open SELL order {(o_id or '')[:10]}... on exchange"
                         )
                         c.execute(
                             "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
@@ -520,13 +522,15 @@ def _check_exit_plan(
             actual_balance = balance_info.get("balance", 0)
             if actual_balance < size:
                 if verbose:
+                    emoji = "📈" if pnl_pct >= 0 else "📉"
                     log(
-                        f"[{symbol}] ⏳ Tokens not yet in wallet (Balance: {actual_balance:.2f} < Size: {size:.2f}) - waiting..."
+                        f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | ⏳ Tokens not yet in wallet (Balance: {actual_balance:.2f} < Size: {size:.2f})"
                     )
                 return  # Don't try to place order if we don't have the tokens
 
+        emoji = "📈" if pnl_pct >= 0 else "📉"
         log(
-            f"[{symbol}] 📉 EXIT PLAN: Placing limit sell order at {EXIT_PRICE_TARGET} for {size} units (position age: {position_age_seconds:.0f}s, min age: {EXIT_MIN_POSITION_AGE}s)"
+            f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | 📉 EXIT PLAN: Placing limit sell order at {EXIT_PRICE_TARGET} for {size} units"
         )
         sell_limit_result = place_limit_order(
             token_id=token_id,
@@ -545,14 +549,16 @@ def _check_exit_plan(
             if order_id_to_save:
                 limit_sell_order_id = order_id_to_save
                 log(
-                    f"[{symbol}] ✅ EXIT PLAN: Limit sell order placed at {EXIT_PRICE_TARGET}: {limit_sell_order_id}"
+                    f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | ✅ EXIT PLAN: Limit sell order placed: {limit_sell_order_id}"
                 )
                 c.execute(
                     "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
                     (limit_sell_order_id, trade_id),
                 )
             else:
-                log(f"[{symbol}] ⚠️ EXIT PLAN: Order succeeded but no order_id returned")
+                log(
+                    f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | ⚠️ EXIT PLAN: Order succeeded but no order_id returned"
+                )
         else:
             error_msg = sell_limit_result.get("error", "Unknown error")
 
@@ -562,7 +568,7 @@ def _check_exit_plan(
                 and "allowance" not in error_msg.lower()
             ):
                 log(
-                    f"[{symbol}] ⚠️ EXIT PLAN: Failed to place limit sell at {EXIT_PRICE_TARGET}: {error_msg} (will retry next cycle)"
+                    f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | ⚠️ EXIT PLAN: Failed to place limit sell: {error_msg}"
                 )
     elif limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60:
         # Exit plan status will be shown in combined position log (verbose cycle)
@@ -578,6 +584,8 @@ def _check_exit_plan(
         # Add scale-in indicator if position was scaled
         if scaled_in:
             status_parts.append("📊 Scaled in")
+        elif scale_in_order_id:
+            status_parts.append("📋 Scale-in pending")
 
         # Add exit plan status if active
         if limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60:
@@ -600,10 +608,17 @@ def _check_scale_in(
     check_orders: bool,
     c: Any,
     conn: Any,
+    side: str = "",
+    price_change_pct: float = 0.0,
 ) -> None:
     """Check and execute scale in if conditions are met, or monitor pending scale-in orders"""
     if not ENABLE_SCALE_IN:
         return
+
+    emoji = "📈" if price_change_pct >= 0 else "📉"
+    summary_prefix = (
+        f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}%"
+    )
 
     # First, check if there's a pending scale-in order to monitor
     if scale_in_order_id and check_orders:
@@ -620,7 +635,7 @@ def _check_scale_in(
 
                     if size_matched > 0:
                         log(
-                            f"✅ SCALE IN FILLED for trade #{trade_id}: {size_matched} shares @ ${scale_price:.4f}"
+                            f"{summary_prefix} | ✅ SCALE IN FILLED: {size_matched} shares @ ${scale_price:.4f}"
                         )
 
                         new_total_size = size + size_matched
@@ -665,9 +680,7 @@ def _check_scale_in(
                         return
 
                 elif status in ["CANCELED", "EXPIRED"]:
-                    log(
-                        f"⚠️ [{symbol}] SCALE IN: Order for trade #{trade_id} was {status}"
-                    )
+                    log(f"{summary_prefix} | ⚠️ SCALE IN: Order was {status}")
                     # Clear the order ID so it can potentially be re-placed
                     c.execute(
                         "UPDATE trades SET scale_in_order_id = NULL WHERE id = ?",
@@ -676,13 +689,11 @@ def _check_scale_in(
                 elif status == "LIVE":
                     # Order is live, waiting for fill
                     log(
-                        f"📋 [{symbol}] SCALE IN: Order for trade #{trade_id} is LIVE, waiting for fill..."
+                        f"{summary_prefix} | 📋 SCALE IN: Order is LIVE, waiting for fill..."
                     )
                     return  # Don't try to place another one
                 elif status in ["DELAYED", "UNMATCHED"]:
-                    log(
-                        f"ℹ️ [{symbol}] SCALE IN: Order for trade #{trade_id} status: {status}"
-                    )
+                    log(f"{summary_prefix} | ℹ️ SCALE IN: Order status: {status}")
                     return  # Still pending
         except Exception as e:
             log(f"⚠️ Error checking scale-in order {scale_in_order_id}: {e}")
@@ -700,7 +711,7 @@ def _check_scale_in(
         return
 
     log(
-        f"📈 SCALE IN triggered for trade #{trade_id}: price=${current_price:.2f}, {time_left_seconds:.0f}s left"
+        f"{summary_prefix} | 📈 SCALE IN triggered: price=${current_price:.2f}, {time_left_seconds:.0f}s left"
     )
 
     additional_size = size * SCALE_IN_MULTIPLIER
@@ -718,7 +729,7 @@ def _check_scale_in(
         order_status = scale_result["status"]
 
         log(
-            f"✅ SCALE IN order placed for trade #{trade_id}: {additional_size:.2f} shares @ ${scale_price:.2f} (status: {order_status})"
+            f"{summary_prefix} | ✅ SCALE IN order placed: {additional_size:.2f} shares @ ${scale_price:.2f} (status: {order_status})"
         )
 
         # If order filled immediately, update position now
@@ -769,9 +780,7 @@ def _check_scale_in(
     else:
         # Enhanced error reporting
         error_msg = scale_result.get("error", "Unknown error")
-        log(f"⚠️ [{symbol}] #{trade_id} Scale in failed: {error_msg}")
-
-        # Don't send Discord for scale-in failures (too noisy), just log it
+        log(f"  📈 [{symbol}] #{trade_id} {side} Scale in failed: {error_msg}")
 
 
 def _check_take_profit(
@@ -1144,6 +1153,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         pnl_pct=pnl_pct,
                         price_change_pct=price_change_pct,
                         scaled_in=scaled_in,
+                        scale_in_order_id=scale_in_order_id,
                     )
 
                     # Re-fetch again after _check_exit_plan in case it was updated
@@ -1180,6 +1190,8 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         check_orders=check_orders,
                         c=c,
                         conn=conn,
+                        side=side,
+                        price_change_pct=price_change_pct,
                     )
 
                     # ============================================================
