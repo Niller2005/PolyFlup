@@ -3,7 +3,7 @@
 import time
 import json
 import requests
-from typing import Any, Tuple, Optional, Dict
+from typing import Any, Tuple, Optional, Dict, cast
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from src.config.settings import (
@@ -26,7 +26,7 @@ def _create_klines_dataframe(klines: Any) -> Any:
 
         if klines is None:
             return None
-        cols = [
+        cols: Any = [
             "open_time",
             "open",
             "high",
@@ -40,7 +40,7 @@ def _create_klines_dataframe(klines: Any) -> Any:
             "taker_buy_quote",
             "ignore",
         ]
-        return pd.DataFrame(klines, columns=cast(Any, cols))
+        return pd.DataFrame(klines, columns=cols)
     except:
         return None
 
@@ -250,7 +250,7 @@ def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
                 "direction": "NEUTRAL",
                 "strength": 0.0,
             }
-        close = pd.to_numeric(df["close"])
+        close: Any = pd.to_numeric(df["close"])
         vel = (
             (close.iloc[-1] - close.iloc[-lookback_minutes])
             / close.iloc[-lookback_minutes]
@@ -347,10 +347,8 @@ def get_cross_exchange_divergence(symbol: str, polymarket_p_up: float) -> dict:
                 "divergence": 0.0,
                 "opportunity": "NEUTRAL",
             }
-        p_chg = (
-            (pd.to_numeric(df["close"]).iloc[-1] - pd.to_numeric(df["open"]).iloc[0])
-            / pd.to_numeric(df["open"]).iloc[0]
-        ) * 100.0
+        close, open_p = pd.to_numeric(df["close"]), pd.to_numeric(df["open"])
+        p_chg = ((close.iloc[-1] - open_p.iloc[0]) / open_p.iloc[0]) * 100.0
         b_p_up = 0.5 + (0.05 if p_chg > 0.5 else -0.05 if p_chg < -0.5 else 0)
         div = polymarket_p_up - b_p_up
         return {

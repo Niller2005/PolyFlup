@@ -4,10 +4,11 @@ import json
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from src.config.settings import GAMMA_API_BASE
+from src.config.settings import GAMMA_API_BASE, PROXY_PK
 from src.utils.logger import log, send_discord
-from src.trading.orders import cancel_order
+from src.trading.orders import cancel_order, get_closed_positions
 from src.data.db_connection import db_connection
+from eth_account import Account
 
 
 def get_market_resolution(slug: str):
@@ -44,6 +45,36 @@ def get_market_resolution(slug: str):
         log(f"Error fetching resolution for {slug}: {e}")
 
     return False, None
+
+
+def _audit_settlements():
+    """Audit settled trades against actual closed positions on Polymarket"""
+    try:
+        addr = Account.from_key(PROXY_PK).address
+        closed_positions = get_closed_positions(addr, limit=20)
+        
+        if not closed_positions:
+            return
+
+        with db_connection() as conn:
+            c = conn.cursor()
+            for pos in closed_positions:
+                token_id = pos.get("assetId")
+                pnl = float(pos.get("pnl", 0))
+                
+                # Look for matching trade in DB that was recently settled
+                c.execute(
+                    "SELECT id, symbol, pnl_usd FROM trades WHERE token_id = ? AND settled = 1 ORDER BY settled_at DESC LIMIT 1",
+                    (token_id,)
+                )
+                row = c.fetchone()
+                if row:
+                    trade_id, symbol, db_pnl = row
+                    diff = abs(db_pnl - pnl)
+                    if diff > 0.1: # More than 10 cents difference
+                        log(f"🔍 Audit [{symbol}] #{trade_id}: DB PnL ${db_pnl:.2f} vs API PnL ${pnl:.2f} (Diff: ${diff:.2f})")
+    except Exception as e:
+        log(f"⚠️ Settlement audit error: {e}")
 
 
 def check_and_settle_trades():
@@ -85,7 +116,6 @@ def check_and_settle_trades():
                     # Market not resolved yet, skip and check next cycle
                     continue
 
-                # ... (rest of resolution logic)
                 # 2. Identify which token we hold (UP or DOWN)
                 # Fetch specific market data to match IDs safely
                 r = requests.get(f"{GAMMA_API_BASE}/markets/slug/{slug}", timeout=5)
@@ -150,3 +180,9 @@ def check_and_settle_trades():
             send_discord(
                 f"📊 Settled {settled_count} trades | Total PnL: ${total_pnl:+.2f}"
             )
+    
+    # Audit after settlement
+    try:
+        _audit_settlements()
+    except:
+        pass

@@ -72,7 +72,7 @@ from src.trading.position_manager import (
 from src.utils.notifications import process_notifications, init_ws_callbacks
 from src.trading.settlement import check_and_settle_trades
 from src.utils.websocket_manager import ws_manager
-from src.trading.orders import get_bulk_spreads, check_liquidity, BUY, SELL, SELL
+from src.trading.orders import get_bulk_spreads, get_spread, check_liquidity, BUY, SELL
 
 
 def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
@@ -359,8 +359,19 @@ def trade_symbols_batch(symbols: list, balance: float):
             continue
 
         up_id, down_id = market_tokens[symbol]
-        up_spread = spreads.get(up_id, 1.0)
-        down_spread = spreads.get(down_id, 1.0)
+
+        # Check liquidity from bulk spreads - default to single check if bulk missing
+        up_spread = spreads.get(str(up_id))
+        if up_spread is None:
+            up_spread = get_spread(up_id)
+
+        down_spread = spreads.get(str(down_id))
+        if down_spread is None:
+            down_spread = get_spread(down_id)
+
+        # Fallback to 0 if still None (assume liquid rather than skip)
+        up_spread = float(up_spread) if up_spread is not None else 0.0
+        down_spread = float(down_spread) if down_spread is not None else 0.0
 
         if up_spread > MAX_SPREAD or down_spread > MAX_SPREAD:
             log(

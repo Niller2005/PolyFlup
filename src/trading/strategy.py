@@ -119,6 +119,16 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         pm_mom_score = pm_momentum["strength"]
         pm_mom_dir = pm_momentum["direction"]
 
+    # 5.1 Lead/Lag Indicator (Experimental)
+    lead_lag_bonus = 1.0
+    if momentum_dir != "NEUTRAL" and pm_mom_dir != "NEUTRAL":
+        if momentum_dir == pm_mom_dir:
+            # Both agree - strong signal
+            lead_lag_bonus = 1.2
+        else:
+            # Divergence in momentum - cautionary
+            lead_lag_bonus = 0.8
+
     # 6. ADX (Trend Strength) - Weight: 0.15
     adx_score = 0.0
     adx_dir = "NEUTRAL"
@@ -169,12 +179,12 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         # Confirmation bonus: if Binance and PM both agree on direction
         if momentum_dir == pm_mom_dir and momentum_dir == "UP":
             up_total *= 1.1
-        confidence = up_total - (down_total * 0.5)
+        confidence = (up_total - (down_total * 0.5)) * lead_lag_bonus
     elif down_total > up_total:
         bias = "DOWN"
         if momentum_dir == pm_mom_dir and momentum_dir == "DOWN":
             down_total *= 1.1
-        confidence = down_total - (up_total * 0.5)
+        confidence = (down_total - (up_total * 0.5)) * lead_lag_bonus
     else:
         bias = "NEUTRAL"
         confidence = 0.0

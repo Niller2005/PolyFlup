@@ -2,7 +2,7 @@
 
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import Optional, Any, List, Dict
 from src.data.db_connection import db_connection
@@ -38,6 +38,7 @@ from src.trading.orders import (
     get_order_status,
     get_order,
     get_midpoint,
+    get_multiple_market_prices,
     get_balance_allowance,
     get_notifications,
     drop_notifications,
@@ -142,9 +143,45 @@ def sync_positions_with_exchange(user_address: str):
             # 3. Check for untracked positions
             for t_id, p_data in pos_map.items():
                 if t_id and t_id not in db_token_ids:
-                    log(
-                        f"   ⚠️ Found UNTRACKED position: {p_data.get('size')} shares of {str(t_id)[:10]}..."
-                    )
+                    size = float(p_data.get("size", 0))
+                    if size < 1.0:
+                        continue
+                        
+                    log(f"   ⚠️ Found UNTRACKED position: {size} shares of {str(t_id)[:10]}...")
+                    
+                    try:
+                        avg_price = float(p_data.get("avgPrice", 0.5))
+                        symbol = p_data.get("symbol", "ADOPTED")
+                        title = p_data.get("title", "")
+                        
+                        # Try to find a window matching this position if possible
+                        # For now, we'll just create a placeholder entry
+                        log(f"   📥 Adopting untracked position: {symbol} ({title}) {size} shares @ ${avg_price}")
+                        
+                        c.execute(
+                            """INSERT INTO trades (
+                                symbol, slug, token_id, side, entry_price, size, bet_usd, 
+                                timestamp, window_start, window_end, settled, order_status, final_outcome
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (
+                                symbol, 
+                                "adopted-market", 
+                                t_id, 
+                                "UNKNOWN", 
+                                avg_price, 
+                                size, 
+                                size * avg_price,
+                                now.isoformat(),
+                                now.isoformat(),
+                                (now + timedelta(minutes=15)).isoformat(),
+                                0,
+                                "FILLED",
+                                "ADOPTED"
+                            )
+                        )
+                        log(f"   ✅ Position adopted into database")
+                    except Exception as e:
+                        log(f"   ❌ Failed to adopt position: {e}")
 
         log("✓ Position sync complete")
     except Exception as e:
@@ -229,9 +266,15 @@ def recover_open_positions():
     log("=" * 90)
 
 
-def _get_position_pnl(token_id: str, entry_price: float, size: float) -> Optional[dict]:
+def _get_position_pnl(token_id: str, entry_price: float, size: float, cached_prices: Optional[Dict[str, float]] = None) -> Optional[dict]:
     """Get current market price and calculate P&L"""
-    current_price = ws_manager.get_price(token_id)
+    current_price = None
+    if cached_prices and str(token_id) in cached_prices:
+        current_price = cached_prices[str(token_id)]
+    
+    if current_price is None:
+        current_price = ws_manager.get_price(token_id)
+    
     if current_price is None:
         current_price = get_midpoint(token_id)
     if current_price is None:
@@ -591,6 +634,25 @@ def check_open_positions(verbose=True, check_orders=False):
             open_positions = c.fetchall()
             if not open_positions:
                 return
+
+            # PRIORITY 1: Batch price fetching
+            token_ids = list(set([str(p[3]) for p in open_positions if p[3]]))
+            
+            # Try to get prices from WS cache first
+            cached_prices = {}
+            missing_tokens = []
+            for tid in token_ids:
+                price = ws_manager.get_price(tid)
+                if price:
+                    cached_prices[tid] = price
+                else:
+                    missing_tokens.append(tid)
+            
+            # Fetch missing prices in batch
+            if missing_tokens:
+                batch_prices = get_multiple_market_prices(missing_tokens)
+                cached_prices.update(batch_prices)
+
             if verbose:
                 log(f"👀 Monitoring {len(open_positions)} positions...")
             for (
@@ -650,12 +712,12 @@ def check_open_positions(verbose=True, check_orders=False):
                             roi = (pnl / bet) * 100 if bet > 0 else 0
                             log(f"💰 [{sym}] #{tid} {side}: {pnl:+.2f}$ ({roi:+.1f}%)")
                             c.execute(
-                                "UPDATE trades SET settled=1, exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, final_outcome='EXIT_PLAN_FILLED', settled_at=? WHERE id=?",
+                                "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, settled_at=? WHERE id=?",
                                 (ex_p, pnl, roi, now.isoformat(), tid),
                             )
                             continue
 
-                    pnl_i = _get_position_pnl(tok, entry, size)
+                    pnl_i = _get_position_pnl(tok, entry, size, cached_prices)
                     if not pnl_i:
                         continue
                     cur_p, p_pct, p_usd, p_chg = (

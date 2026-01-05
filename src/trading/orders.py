@@ -58,12 +58,43 @@ client = ClobClient(
     key=PROXY_PK or "",
     chain_id=CHAIN_ID,
     signature_type=SIGNATURE_TYPE,
-    funder=FUNDER_PROXY or None,
+    funder=FUNDER_PROXY or "",
 )
 
 # Hotfix: ensure client has builder_config attribute
 if not hasattr(client, "builder_config"):
     setattr(client, "builder_config", None)
+
+
+def get_multiple_market_prices(token_ids: List[str]) -> Dict[str, float]:
+    """Get market prices for multiple tokens in a single call"""
+    if not token_ids:
+        return {}
+    try:
+        # We use midpoint for all tokens as it's the fairest price
+        # The API supports get_midpoints for bulk fetch
+        resp: Any = client.get_midpoints(token_ids)
+        result = {}
+        if isinstance(resp, dict):
+            for tid, val in resp.items():
+                if val is not None:
+                    result[str(tid)] = float(val)
+        elif isinstance(resp, list):
+            for item in resp:
+                tid = item.get("asset_id") if isinstance(item, dict) else getattr(item, "asset_id", None)
+                mid = item.get("mid") if isinstance(item, dict) else getattr(item, "mid", None)
+                if tid and mid is not None:
+                    result[str(tid)] = float(mid)
+        return result
+    except Exception as e:
+        log(f"⚠️ Error getting bulk midpoints: {e}")
+        # Fallback to individual midpoints if bulk fails
+        result = {}
+        for tid in token_ids:
+            price = get_midpoint(tid)
+            if price is not None:
+                result[tid] = price
+        return result
 
 
 def get_clob_client() -> ClobClient:
@@ -124,10 +155,14 @@ def get_bulk_spreads(token_ids: List[str]) -> Dict[str, float]:
     if not token_ids:
         return {}
     try:
-        params = [BookParams(token_id=tid) for tid in token_ids]
+        params = [BookParams(token_id=str(tid)) for tid in token_ids]
         resp: Any = client.get_spreads(params)
         result = {}
-        if isinstance(resp, list):
+        if isinstance(resp, dict):
+            for tid, val in resp.items():
+                if val is not None:
+                    result[str(tid)] = float(val)
+        elif isinstance(resp, list):
             for item in resp:
                 tid = (
                     item.get("asset_id")
@@ -140,7 +175,7 @@ def get_bulk_spreads(token_ids: List[str]) -> Dict[str, float]:
                     else getattr(item, "spread", None)
                 )
                 if tid and spread is not None:
-                    result[tid] = float(spread)
+                    result[str(tid)] = float(spread)
         return result
     except Exception as e:
         log(f"⚠️ Error getting bulk spreads: {e}")
@@ -164,7 +199,7 @@ def get_trades(
 ) -> List[dict]:
     """Get trade history (filled orders)"""
     try:
-        params = cast(Any, TradeParams(market=market or "", asset_id=asset_id or ""))
+        params = TradeParams(market=market or "", asset_id=asset_id or "")
         trades = client.get_trades(params)
         if not isinstance(trades, list):
             trades = [trades] if trades else []
@@ -174,16 +209,36 @@ def get_trades(
         return []
 
 
+def get_trades_for_user(user: str, market: Optional[str] = None, asset_id: Optional[str] = None, limit: int = 100) -> List[dict]:
+    """Get trade history for a specific user from Data API"""
+    try:
+        from src.config.settings import DATA_API_BASE
+        import requests
+        
+        url = f"{DATA_API_BASE}/trades?user={user}"
+        if market:
+            url += f"&market={market}"
+        if asset_id:
+            url += f"&asset_id={asset_id}"
+        if limit:
+            url += f"&limit={limit}"
+            
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            return data
+        return data.get("trades", []) if isinstance(data, dict) else []
+    except Exception as e:
+        log(f"⚠️ Error getting user trades: {e}")
+        return []
+
+
 def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
     """Get balance and allowance"""
     try:
-        atype = AssetType.CONDITIONAL if token_id else AssetType.COLLATERAL
-        params = cast(
-            Any,
-            BalanceAllowanceParams(
-                asset_type=cast(Any, atype), token_id=token_id or ""
-            ),
-        )
+        atype: Any = AssetType.CONDITIONAL if token_id else AssetType.COLLATERAL
+        params: Any = BalanceAllowanceParams(asset_type=atype, token_id=token_id or "")
         result: Any = client.get_balance_allowance(params)
         if isinstance(result, dict):
             return {
@@ -233,7 +288,7 @@ def get_notifications() -> List[dict]:
 def drop_notifications(notification_ids: List[str]) -> bool:
     """Mark notifications as read"""
     try:
-        params = cast(Any, DropNotificationParams(ids=notification_ids))
+        params: Any = DropNotificationParams(ids=notification_ids)
         client.drop_notifications(params)
         return True
     except Exception as e:
@@ -262,7 +317,7 @@ def get_current_positions(user_address: str) -> List[dict]:
 def check_order_scoring(order_id: str) -> bool:
     """Check if order is scoring for rewards"""
     try:
-        params = cast(Any, OrderScoringParams(orderId=order_id))
+        params: Any = OrderScoringParams(orderId=order_id)
         resp: Any = client.is_order_scoring(params)
         if isinstance(resp, dict):
             return resp.get("isScoring", False)
@@ -280,7 +335,7 @@ def check_orders_scoring(order_ids: List[str]) -> Dict[str, bool]:
     if not order_ids:
         return {}
     try:
-        params = cast(Any, OrdersScoringParams(orderIds=order_ids))
+        params: Any = OrdersScoringParams(orderIds=order_ids)
         resp: Any = client.are_orders_scoring(params)
         result = {}
         if isinstance(resp, list):
@@ -303,6 +358,27 @@ def check_orders_scoring(order_ids: List[str]) -> Dict[str, bool]:
     except Exception as e:
         log(f"⚠️ Error checking scoring: {e}")
         return {o_id: False for o_id in order_ids}
+
+
+def get_closed_positions(user: str, limit: int = 100) -> List[dict]:
+    """Get closed positions for a user from Data API"""
+    try:
+        from src.config.settings import DATA_API_BASE
+        import requests
+        
+        url = f"{DATA_API_BASE}/closed-positions?user={user}"
+        if limit:
+            url += f"&limit={limit}"
+            
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            return data
+        return data.get("positions", []) if isinstance(data, dict) else []
+    except Exception as e:
+        log(f"⚠️ Error getting closed positions: {e}")
+        return []
 
 
 def setup_api_creds() -> None:
@@ -437,15 +513,13 @@ def place_limit_order(
     if not valid:
         return {"success": False, "status": "VALIDATION_ERROR", "error": err}
 
-    otype_str = order_type.upper()
-    if otype_str == "FOK":
+    otype: Any = OrderType.GTC
+    if order_type.upper() == "FOK":
         otype = OrderType.FOK
-    elif otype_str == "FAK":
+    elif order_type.upper() == "FAK":
         otype = OrderType.FAK
-    elif otype_str == "GTD":
+    elif order_type.upper() == "GTD":
         otype = OrderType.GTD
-    else:
-        otype = OrderType.GTC
 
     def _place():
         _ensure_api_creds(client)
@@ -453,7 +527,7 @@ def place_limit_order(
         if otype == OrderType.GTD and expiration:
             oa.expiration = expiration
         signed = client.create_order(oa)
-        return client.post_order(signed, cast(Any, otype))
+        return client.post_order(signed, otype)
 
     try:
         resp: Any = _execute_with_retry(_place)
@@ -472,7 +546,7 @@ def place_limit_order(
         emsg = _parse_api_error(str(e))
         oid = None
         try:
-            r = getattr(e, "response", None)
+            r: Any = getattr(e, "response", None)
             if r and hasattr(r, "json"):
                 oid = r.json().get("orderID")
         except:
@@ -500,14 +574,12 @@ def place_market_order(
 ) -> dict:
     try:
         _ensure_api_creds(client)
-        otype_str = order_type.upper()
-        otype = OrderType.FAK if otype_str == "FAK" else OrderType.FOK
-
+        otype: Any = OrderType.FAK if order_type.upper() == "FAK" else OrderType.FOK
         if not silent_on_error:
             log(f"   📊 Placing {side} Market Order: {amount} units")
         moa = MarketOrderArgs(token_id=token_id, amount=amount, side=side)
         signed = client.create_market_order(moa)
-        resp: Any = client.post_order(signed, cast(Any, otype))
+        resp: Any = client.post_order(signed, otype)
         status = resp.get("status", "UNKNOWN") if isinstance(resp, dict) else "UNKNOWN"
         oid = resp.get("orderID") if isinstance(resp, dict) else None
         emsg = resp.get("errorMsg", "") if isinstance(resp, dict) else ""
@@ -643,9 +715,7 @@ def get_orders(
     market: Optional[str] = None, asset_id: Optional[str] = None
 ) -> List[dict]:
     try:
-        params = cast(
-            Any, OpenOrderParams(market=market or "", asset_id=asset_id or "")
-        )
+        params = OpenOrderParams(market=market or "", asset_id=asset_id or "")
         orders = client.get_orders(params)
         return orders if isinstance(orders, list) else ([orders] if orders else [])
     except Exception as e:
