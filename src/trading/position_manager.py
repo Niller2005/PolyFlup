@@ -869,13 +869,6 @@ def check_open_positions(verbose=True, check_orders=False):
                     )
                 except Exception as e:
                     log(f"⚠️ [{sym}] #{tid} Error: {e}")
-            
-            # Silent background monitoring (non-verbose)
-            elif not open_positions and verbose:
-                pass # Already logged "Monitoring X positions"
-            elif not verbose:
-                # Add a subtle "waiting" or heartbeat log every minute if no positions are open
-                # This ensures the user knows the bot is alive but doesn't spam
-                pass
     finally:
         _position_check_lock.release()
+
