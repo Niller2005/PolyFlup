@@ -1,6 +1,66 @@
-# Session Improvements - 2026-01-04
+# Session Improvements - 2026-01-05
 
 This document summarizes all improvements made during the development session.
+
+---
+
+## Critical Bug Fixes (3 items)
+
+### 1. Exit Plan Timer/Cooldown Stuck
+**Issue:** Trades were stuck in "Exit plan cooldown" because of a silent mismatch between the wallet balance and the database size. The bot would skip placing the exit plan to avoid "Insufficient Balance" errors but wouldn't tell the user why.
+
+**Fix:** 
+- Added **Self-Healing Size Logic**: Automatically updates database size to match actual wallet balance if a mismatch is detected.
+- Added **Descriptive Cooldown Logs**: Shows seconds left in cooldown and trade age.
+- Fixed **Silent Failures**: Balance-related errors during placement are now logged clearly.
+
+**Impact:** Exit plans now place reliably even with minor rounding discrepancies from the API.
+
+---
+
+### 2. Zero-Balance Trade Loop
+**Issue:** Trades marked as `FILLED` but with `0.0` actual balance (e.g., manually sold) would stay open forever, with the bot trying to place exit plans repeatedly.
+
+**Fix:** Added a 5-minute timeout for trades with 0 balance. They are now automatically marked as `UNFILLED_TIMEOUT` and settled.
+
+**Impact:** Cleans up stale database entries and prevents log spam.
+
+---
+
+### 3. Exit Plan Already Filled Protection
+**Issue:** In some cases, the bot might try to replace or update an exit plan order that was already filled by the exchange, leading to redundant orders or errors.
+
+**Fix:** Added a status check for the existing `limit_sell_order_id`. If the status is `FILLED` or `MATCHED`, the bot skips any further updates.
+
+**Impact:** Prevents duplicate sell orders and unnecessary API calls.
+
+---
+
+## Technical Enhancements
+
+### 4. Robust Order Verification
+**Description:** Enhanced how the bot verifies if an order exists on the exchange.
+
+**Features:**
+- Checks for existing `SELL` orders on the CLOB before attempting to place a new exit plan.
+- If an existing order is found, it automatically links it to the trade in the database.
+- Prevents "Duplicate Order" errors from the Polymarket API.
+
+---
+
+## Complete Session Statistics (2026-01-05)
+
+### Lines of Code
+- **Modified:** ~150 lines in `position_manager.py`
+
+### Features
+- **Critical Bugs Fixed:** 3
+- **Reliability Improvements:** 2
+- **Log Clarity Updates:** 1
+
+---
+
+# Session Improvements - 2026-01-04 (Legacy)
 
 ---
 
