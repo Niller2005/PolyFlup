@@ -690,6 +690,7 @@ def place_market_order(
     amount: float,
     side: str,
     order_type: str = "FOK",
+    silent_on_error: bool = False,
 ) -> dict:
     """
     Place a market order for immediate execution
@@ -748,7 +749,9 @@ def place_market_order(
         error_str = str(e)
         parsed_error = _parse_api_error(error_str)
 
-        log(f"❌ {side} Market Order error: {parsed_error}")
+        # Only log if not silenced (retry logic will handle logging)
+        if not silent_on_error:
+            log(f"❌ {side} Market Order error: {parsed_error}")
 
         return {
             "success": False,
@@ -1232,6 +1235,9 @@ def sell_position(
                     amount=size,  # Shares to sell
                     side=SELL,
                     order_type="FAK",  # Fill-And-Kill: fills partial, cancels rest
+                    silent_on_error=(
+                        attempt < max_retries - 1
+                    ),  # Silent on retry attempts
                 )
             else:
                 # Fallback to limit order
@@ -1252,6 +1258,11 @@ def sell_position(
             if result["success"]:
                 # Get actual sell price from response if available
                 actual_price = result.get("price", current_price)
+
+                # Log success on retry
+                if attempt > 0:
+                    log(f"✅ Sell succeeded on retry {attempt + 1}/{max_retries}")
+
                 return {
                     "success": True,
                     "sold": size,
@@ -1264,13 +1275,16 @@ def sell_position(
             error_str = result.get("error", "")
 
             if "balance" in error_str.lower() and attempt < max_retries - 1:
-                log(f"⏳ Balance for sell not yet available, will retry...")
+                # Silently retry for balance errors (will succeed once tokens settle)
                 continue
 
             # Market order failed - try limit order on next attempt
-            if use_market_order and "FOK" in error_str and attempt < max_retries - 1:
-                log(f"⏳ Market order failed, will retry with limit order...")
-                use_market_order = False  # Switch to limit order
+            if (
+                use_market_order
+                and ("FOK" in error_str or "no match" in error_str.lower())
+                and attempt < max_retries - 1
+            ):
+                # Silently retry - FAK will handle partial fills
                 continue
 
             # Non-retryable error
@@ -1283,7 +1297,7 @@ def sell_position(
             parsed_error = _parse_api_error(error_str)
 
             if "balance" in error_str.lower() and attempt < max_retries - 1:
-                log(f"⏳ Balance for sell not yet available, will retry...")
+                # Silently retry for balance errors (will succeed once tokens settle)
                 continue
 
             if attempt == max_retries - 1:

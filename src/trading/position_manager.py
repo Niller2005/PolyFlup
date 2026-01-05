@@ -506,9 +506,15 @@ def _check_exit_plan(
                 log(f"[{symbol}] ⚠️ EXIT PLAN: Order succeeded but no order_id returned")
         else:
             error_msg = sell_limit_result.get("error", "Unknown error")
-            log(
-                f"[{symbol}] ⚠️ EXIT PLAN: Failed to place limit sell at {EXIT_PRICE_TARGET}: {error_msg} (will retry next cycle)"
-            )
+
+            # Only log if it's NOT a balance/allowance error (those are expected and retry automatically)
+            if (
+                "balance" not in error_msg.lower()
+                and "allowance" not in error_msg.lower()
+            ):
+                log(
+                    f"[{symbol}] ⚠️ EXIT PLAN: Failed to place limit sell at {EXIT_PRICE_TARGET}: {error_msg} (will retry next cycle)"
+                )
     elif limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60:
         # Only log monitoring message on verbose cycles (every 60s)
         if verbose:
