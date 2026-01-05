@@ -56,6 +56,9 @@ from src.data.database import save_trade
 # Threading lock to prevent concurrent position checks (prevents database locks)
 _position_check_lock = threading.Lock()
 
+# Module-level tracking for exit plan attempts to prevent spamming on errors (e.g. balance errors)
+_last_exit_attempt = {}
+
 
 def get_exit_plan_stats():
     """Get statistics on exit plan performance"""
@@ -280,7 +283,7 @@ def _check_stop_loss(
         return False
 
     log(
-        f"🛑 [{symbol}] #{trade_id} {sl_label}: {pnl_pct:.1%}% PnL | Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}"
+        f"🛑 [{symbol}] #{trade_id} {sl_label}: {pnl_pct:.1f}% PnL | Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}"
     )
 
     if limit_sell_order_id:
@@ -425,7 +428,7 @@ def _update_exit_plan_after_scale_in(
         if new_exit_order["success"]:
             new_order_id = new_exit_order["order_id"]
             log(
-                f"   ✅ Updated exit plan: {new_total_size:.2f} shares @ {EXIT_PRICE_TARGET} | ID: {new_order_id[:10]}..."
+                f"   ✅ Updated exit plan: {new_total_size:.2f} shares @ {EXIT_PRICE_TARGET} | ID: {(new_order_id or '')[:10]}..."
             )
             c.execute(
                 "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
@@ -470,18 +473,56 @@ def _check_exit_plan(
 
     position_age_seconds = (now - datetime.fromisoformat(timestamp)).total_seconds()
 
+    # Check cooldown for this trade
+    last_attempt = _last_exit_attempt.get(trade_id, 0)
+    if now.timestamp() - last_attempt < 30:
+        return
+
     if (
         not limit_sell_order_id
         and position_age_seconds >= EXIT_MIN_POSITION_AGE
         and position_age_seconds > 60
     ):
+        # Update last attempt time
+        _last_exit_attempt[trade_id] = now.timestamp()
+
+        # CRITICAL FIX: Check if there's already an open order on the CLOB for this token
+        # This handles cases where the database might have lost the order_id after a restart
+        try:
+            from src.trading.orders import get_orders
+
+            open_orders = get_orders(asset_id=token_id)
+            if open_orders:
+                # We found open orders! Try to find a SELL order
+                for o in open_orders:
+                    o_side = (
+                        o.get("side") if isinstance(o, dict) else getattr(o, "side", "")
+                    )
+                    if o_side == "SELL":
+                        o_id = (
+                            o.get("id") if isinstance(o, dict) else getattr(o, "id", "")
+                        )
+                        log(
+                            f"[{symbol}] 🔍 Found existing open SELL order {(o_id or '')[:10]}... on exchange. Updating database."
+                        )
+                        c.execute(
+                            "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                            (o_id, trade_id),
+                        )
+                        return  # Found and updated, no need to place new one
+        except Exception as e:
+            log(f"⚠️ Error checking for existing orders: {e}")
+
         # CRITICAL FIX: Check if we actually have the tokens before placing exit plan
         # Prevents trying to place orders when tokens aren't settled yet
         balance_info = get_balance_allowance(token_id)
         if balance_info:
             actual_balance = balance_info.get("balance", 0)
             if actual_balance < size:
-                # Silently skip if tokens not available yet - will retry next cycle
+                if verbose:
+                    log(
+                        f"[{symbol}] ⏳ Tokens not yet in wallet (Balance: {actual_balance:.2f} < Size: {size:.2f}) - waiting..."
+                    )
                 return  # Don't try to place order if we don't have the tokens
 
         log(
@@ -722,7 +763,9 @@ def _check_scale_in(
                 "UPDATE trades SET scale_in_order_id = ? WHERE id = ?",
                 (new_scale_in_order_id, trade_id),
             )
-            log(f"   Monitoring scale-in order: {new_scale_in_order_id[:10]}...")
+            log(
+                f"   Monitoring scale-in order: {(new_scale_in_order_id or '')[:10]}..."
+            )
     else:
         # Enhanced error reporting
         error_msg = scale_result.get("error", "Unknown error")
@@ -908,12 +951,15 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     if buy_order_status != "FILLED" and buy_order_id:
                         current_buy_status = get_order_status(buy_order_id)
 
-                        if current_buy_status == "FILLED":
-                            log(f"✅ [{symbol}] #{trade_id} BUY order has been FILLED")
+                        if current_buy_status in ["FILLED", "MATCHED"]:
+                            log(
+                                f"✅ [{symbol}] #{trade_id} BUY order has been {current_buy_status}"
+                            )
                             c.execute(
                                 "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
                                 (trade_id,),
                             )
+                            current_buy_status = "FILLED"
                         elif current_buy_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
                             log(
                                 f"⚠️ [{symbol}] #{trade_id} BUY order was {current_buy_status}. Settling trade."
@@ -1012,7 +1058,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                     # Order not found, might be too old
                                     if verbose:
                                         log(
-                                            f"⚠️ [{symbol}] #{trade_id} EXIT PLAN: Could not find limit sell order {limit_sell_order_id[:10]}..."
+                                            f"⚠️ [{symbol}] #{trade_id} EXIT PLAN: Could not find limit sell order {(limit_sell_order_id or '')[:10]}..."
                                         )
 
                         except Exception as e:
