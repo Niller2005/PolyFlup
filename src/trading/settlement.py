@@ -64,6 +64,7 @@ def check_and_settle_trades():
 
         total_pnl = 0
         settled_count = 0
+        logged_spacing = False
 
         for (
             trade_id,
@@ -84,6 +85,7 @@ def check_and_settle_trades():
                     # Market not resolved yet, skip and check next cycle
                     continue
 
+                # ... (rest of resolution logic)
                 # 2. Identify which token we hold (UP or DOWN)
                 # Fetch specific market data to match IDs safely
                 r = requests.get(f"{GAMMA_API_BASE}/markets/slug/{slug}", timeout=5)
@@ -129,6 +131,10 @@ def check_and_settle_trades():
                         trade_id,
                     ),
                 )
+
+                if not logged_spacing:
+                    log("")
+                    logged_spacing = True
 
                 emoji = "💰" if pnl_usd > 0 else "💀"
                 log(

@@ -303,6 +303,7 @@ def trade_symbol(symbol: str, balance: float):
             limit_sell_order_id=None,
             target_price=trade_params["target_price"],
         )
+        log("")
         log(
             f"[{trade_params['symbol']}] 🚀 #{trade_id} {trade_params['side']} ${trade_params['bet_usd']:.2f} @ {trade_params['price']:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
         )
@@ -342,6 +343,7 @@ def trade_symbols_batch(symbols: list, balance: float):
     results = place_batch_orders(batch_orders)
 
     # Process results and save trades
+    log("")
     for i, (params, result) in enumerate(zip(trade_params_list, results)):
         if not result["success"]:
             log(

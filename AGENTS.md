@@ -272,6 +272,7 @@ When modifying code:
 4. Test with actual API if possible
 5. Consider Discord notifications for user-facing events
 6. Document complex trading logic in comments
+7. Provide "Before and After" Examples: When making visual changes (e.g., logging formatting, UI layouts) or significant logic refactors, provide a brief "before and after" comparison in your response to help the user visualize the impact.
 
 ## Documentation Reference
 
