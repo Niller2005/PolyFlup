@@ -321,7 +321,8 @@ def _check_stop_loss(
                             f"⚠️ [{symbol}] Trade #{trade_id}: Sell failed with balance error, but found {actual_balance:.2f} shares. Updating size and retrying next cycle."
                         )
                         # Update size and bet_usd in DB so next attempt uses correct amount
-                        new_bet_usd = entry_price * actual_balance
+                        actual_balance = round(actual_balance, 6)
+                        new_bet_usd = round(entry_price * actual_balance, 4)
                         c.execute(
                             "UPDATE trades SET size = ?, bet_usd = ? WHERE id = ?",
                             (actual_balance, new_bet_usd, trade_id),
@@ -808,6 +809,7 @@ def _check_take_profit(
     trade_id: int,
     token_id: str,
     side: str,
+    entry_price: float,
     size: float,
     pnl_pct: float,
     pnl_usd: float,
@@ -882,7 +884,8 @@ def _check_take_profit(
                             f"⚠️ [{symbol}] Trade #{trade_id}: Sell failed with balance error, but found {actual_balance:.2f} shares. Updating size and retrying next cycle."
                         )
                         # Update size and bet_usd in DB so next attempt uses correct amount
-                        new_bet_usd = entry_price * actual_balance
+                        actual_balance = round(actual_balance, 6)
+                        new_bet_usd = round(entry_price * actual_balance, 4)
                         c.execute(
                             "UPDATE trades SET size = ?, bet_usd = ? WHERE id = ?",
                             (actual_balance, new_bet_usd, trade_id),
@@ -1459,6 +1462,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         trade_id=trade_id,
                         token_id=token_id,
                         side=side,
+                        entry_price=entry_price,
                         size=size,
                         pnl_pct=pnl_pct,
                         pnl_usd=pnl_usd,

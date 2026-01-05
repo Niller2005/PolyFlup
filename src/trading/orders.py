@@ -212,13 +212,13 @@ def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
 
         if isinstance(result, dict):
             return {
-                "balance": float(result.get("balance", 0)),
-                "allowance": float(result.get("allowance", 0)),
+                "balance": float(result.get("balance", 0)) / 1_000_000.0,
+                "allowance": float(result.get("allowance", 0)) / 1_000_000.0,
             }
         elif hasattr(result, "balance") and hasattr(result, "allowance"):
             return {
-                "balance": float(result.balance),
-                "allowance": float(result.allowance),
+                "balance": float(result.balance) / 1_000_000.0,
+                "allowance": float(result.allowance) / 1_000_000.0,
             }
 
         return None
@@ -717,6 +717,9 @@ def place_market_order(
 
         # Create market order (simplified - no price needed)
         from py_clob_client.clob_types import MarketOrderArgs
+
+        if not silent_on_error:
+            log(f"   📊 Placing {side} Market Order: {amount} units")
 
         market_order_args = MarketOrderArgs(
             token_id=token_id,
