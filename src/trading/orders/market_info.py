@@ -8,6 +8,7 @@ from .client import client
 
 _last_midpoint_error_time = 0
 
+
 def get_multiple_market_prices(token_ids: List[str]) -> Dict[str, float]:
     """Get market prices for multiple tokens in a single call"""
     global _last_midpoint_error_time
@@ -39,12 +40,16 @@ def get_multiple_market_prices(token_ids: List[str]) -> Dict[str, float]:
         return result
     except Exception as e:
         now = time.time()
-        # Don't log 404s (market closed/no orderbook) to avoid spam
-        if "404" not in str(e):
-            if now - _last_midpoint_error_time > 60: # Log once per minute
-                log(f"⚠️ Error getting bulk midpoints (falling back to single calls): {e}")
-                _last_midpoint_error_time = now
+        # Suppress 404 (No orderbook) spam
+        err_str = str(e).lower()
+        if "404" in err_str or "no orderbook" in err_str:
+            return {}
+
+        if now - _last_midpoint_error_time > 60:  # Log other errors once per minute
+            log(f"⚠️ Error getting bulk midpoints (falling back to single calls): {e}")
+            _last_midpoint_error_time = now
         return {}
+
 
 def get_midpoint(token_id: str) -> Optional[float]:
     """Get midpoint price for a token"""
@@ -60,10 +65,12 @@ def get_midpoint(token_id: str) -> Optional[float]:
                 return float(val)
         return None
     except Exception as e:
-        # Don't log 404s (market closed/no orderbook) to avoid spam
-        if "404" not in str(e):
+        # Suppress 404 (No orderbook) spam
+        err_str = str(e).lower()
+        if "404" not in err_str and "no orderbook" not in err_str:
             log(f"⚠️ Error getting midpoint for {token_id[:10]}...: {e}")
         return None
+
 
 def get_tick_size(token_id: str) -> float:
     """Get the minimum tick size for a token"""
@@ -72,11 +79,14 @@ def get_tick_size(token_id: str) -> float:
         if tick_size:
             return float(tick_size)
         from .constants import MIN_TICK_SIZE
+
         return MIN_TICK_SIZE
     except Exception as e:
         from .constants import MIN_TICK_SIZE
+
         log(f"⚠️ Error getting tick size for {token_id[:10]}...: {e}")
         return MIN_TICK_SIZE
+
 
 def get_spread(token_id: str) -> Optional[float]:
     """Get the spread for a token"""
@@ -94,6 +104,7 @@ def get_spread(token_id: str) -> Optional[float]:
     except Exception as e:
         log(f"⚠️ Error getting spread for {token_id[:10]}...: {e}")
         return None
+
 
 def get_bulk_spreads(token_ids: List[str]) -> Dict[str, float]:
     """Get spreads for multiple tokens in a single call"""
@@ -126,6 +137,7 @@ def get_bulk_spreads(token_ids: List[str]) -> Dict[str, float]:
         log(f"⚠️ Error getting bulk spreads: {e}")
         return {}
 
+
 def get_server_time() -> Optional[int]:
     """Get current server timestamp"""
     try:
@@ -136,6 +148,7 @@ def get_server_time() -> Optional[int]:
     except Exception as e:
         log(f"⚠️ Error getting server time: {e}")
         return None
+
 
 def get_trades(
     market: Optional[str] = None, asset_id: Optional[str] = None, limit: int = 100
@@ -151,12 +164,18 @@ def get_trades(
         log(f"⚠️ Error getting trades: {e}")
         return []
 
-def get_trades_for_user(user: str, market: Optional[str] = None, asset_id: Optional[str] = None, limit: int = 100) -> List[dict]:
+
+def get_trades_for_user(
+    user: str,
+    market: Optional[str] = None,
+    asset_id: Optional[str] = None,
+    limit: int = 100,
+) -> List[dict]:
     """Get trade history for a specific user from Data API"""
     try:
         from src.config.settings import DATA_API_BASE
         import requests
-        
+
         url = f"{DATA_API_BASE}/trades?user={user}"
         if market:
             url += f"&market={market}"
@@ -164,7 +183,7 @@ def get_trades_for_user(user: str, market: Optional[str] = None, asset_id: Optio
             url += f"&asset_id={asset_id}"
         if limit:
             url += f"&limit={limit}"
-            
+
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
@@ -174,6 +193,7 @@ def get_trades_for_user(user: str, market: Optional[str] = None, asset_id: Optio
     except Exception as e:
         log(f"⚠️ Error getting user trades: {e}")
         return []
+
 
 def check_liquidity(token_id: str, size: float, warn_threshold: float = 0.05) -> bool:
     spread = get_spread(token_id)

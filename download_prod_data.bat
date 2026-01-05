@@ -4,7 +4,7 @@ REM Usage: download_prod_db.bat
 
 echo Downloading production database...
 scp root@95.217.40.183:/root/polyastra/trades.db "%~dp0trades.db"
-scp -r root@95.217.40.183:/root/polyastra/logs "%~dp0logs" 
+scp -r root@95.217.40.183:/root/polyastra/logs "%~dp0/" 
 
 
 if %ERRORLEVEL% EQU 0 (

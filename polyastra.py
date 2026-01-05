@@ -11,14 +11,15 @@ import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from src.bot import main
+from src.utils.logger import log
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n⛔ Bot stopped by user")
+        log("⛔ Bot stopped by user")
     except Exception as e:
-        print(f"\n❌ Critical error: {e}")
+        log(f"❌ FATAL CRASH: {e}")
         import traceback
 
-        traceback.print_exc()
+        log(traceback.format_exc())

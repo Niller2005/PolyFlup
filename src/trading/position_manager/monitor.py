@@ -22,6 +22,7 @@ from .exit_plan import _check_exit_plan
 
 _failed_pnl_checks = {}
 
+
 def check_open_positions(verbose=True, check_orders=False):
     if not _position_check_lock.acquire(blocking=False):
         return
@@ -42,7 +43,7 @@ def check_open_positions(verbose=True, check_orders=False):
 
             # PRIORITY 1: Batch price fetching
             token_ids = list(set([str(p[3]) for p in open_positions if p[3]]))
-            
+
             # Try to get prices from WS cache first
             cached_prices = {}
             missing_tokens = []
@@ -52,7 +53,7 @@ def check_open_positions(verbose=True, check_orders=False):
                     cached_prices[tid] = price
                 else:
                     missing_tokens.append(tid)
-            
+
             # Fetch missing prices in batch
             if missing_tokens:
                 batch_prices = get_multiple_market_prices(missing_tokens)
@@ -114,9 +115,11 @@ def check_open_positions(verbose=True, check_orders=False):
                                 (tid,),
                             )
                             curr_b_status = "FILLED"
-                    
+
                     if verbose and curr_b_status not in ["FILLED", "MATCHED"]:
-                        log(f"  ⏳ [{sym}] #{tid} {side}: Waiting for fill (Status: {curr_b_status})")
+                        log(
+                            f"  ⏳ [{sym}] #{tid} {side}: Waiting for fill (Status: {curr_b_status})"
+                        )
                         continue
 
                     if check_orders and l_sell:
@@ -128,7 +131,9 @@ def check_open_positions(verbose=True, check_orders=False):
                                 sz_m = float(o_data.get("size_matched", size))
                                 pnl_val_f = (ex_p * sz_m) - bet
                                 roi_val_f = (pnl_val_f / bet) * 100 if bet > 0 else 0
-                                log(f"💰 [{sym}] #{tid} {side}: {pnl_val_f:+.2f}$ ({roi_val_f:+.1f}%)")
+                                log(
+                                    f"💰 [{sym}] #{tid} {side}: {pnl_val_f:+.2f}$ ({roi_val_f:+.1f}%)"
+                                )
                                 c.execute(
                                     "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, settled_at=? WHERE id=?",
                                     (ex_p, pnl_val_f, roi_val_f, now.isoformat(), tid),
@@ -142,11 +147,13 @@ def check_open_positions(verbose=True, check_orders=False):
                         # Increment failure counter
                         _failed_pnl_checks[tid] = _failed_pnl_checks.get(tid, 0) + 1
                         if _failed_pnl_checks[tid] >= 3:
-                            log(f"🧟 [{sym}] #{tid} price unavailable for 3 cycles - attempting force settlement...")
+                            log(
+                                f"🧟 [{sym}] #{tid} price unavailable for 3 cycles - attempting force settlement..."
+                            )
                             force_settle_trade(tid)
-                            _failed_pnl_checks[tid] = 0 # Reset
+                            _failed_pnl_checks[tid] = 0  # Reset
                         continue
-                    
+
                     # Reset failure counter on success
                     _failed_pnl_checks[tid] = 0
                     cur_p, p_pct_val, p_usd_val, p_chg_val = (
