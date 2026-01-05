@@ -24,7 +24,8 @@ def sync_positions_with_exchange(user_address: str):
         # We normalize to decimal string for the primary key
         pos_map = {}
         for p in exchange_positions:
-            aid = p.get("asset_id") or p.get("assetId") or p.get("token_id")
+            # Data API uses 'asset', Gamma might use 'asset_id' or 'token_id'
+            aid = p.get("asset") or p.get("asset_id") or p.get("assetId") or p.get("token_id")
             if aid:
                 aid_str = str(aid).strip().lower()
                 norm_aid = aid_str
@@ -119,9 +120,11 @@ def sync_positions_with_exchange(user_address: str):
                     
                     try:
                         avg_price = float(p_data.get("avg_price") or p_data.get("avgPrice") or 0.5)
-                        symbol = p_data.get("symbol") or p_data.get("market") or "ADOPTED"
+                        symbol = p_data.get("symbol") or p_data.get("market") or p_data.get("title") or "ADOPTED"
+                        slug = p_data.get("slug") or p_data.get("market_slug") or "adopted-market"
+                        side = p_data.get("outcome", "UNKNOWN").upper()
                         
-                        log(f"   📥 Adopting untracked position: {symbol} {size} shares @ ${avg_price}")
+                        log(f"   📥 Adopting untracked position: {symbol} ({side}) {size} shares @ ${avg_price}")
                         
                         c.execute(
                             """INSERT INTO trades (
@@ -130,9 +133,9 @@ def sync_positions_with_exchange(user_address: str):
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (
                                 symbol, 
-                                "adopted-market", 
+                                slug, 
                                 t_id_str, 
-                                "UNKNOWN", 
+                                side, 
                                 avg_price, 
                                 size, 
                                 size * avg_price,
