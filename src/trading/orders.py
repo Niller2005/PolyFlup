@@ -528,6 +528,13 @@ def _validate_size(size: float) -> tuple[bool, Optional[str]]:
     return True, None
 
 
+def truncate_float(val: float, decimals: int) -> float:
+    """Truncate float to N decimal places without rounding up"""
+    import math
+    factor = 10 ** decimals
+    return math.floor(val * factor) / factor
+
+
 def _validate_order(price: float, size: float) -> tuple[bool, Optional[str]]:
     valid, err = _validate_price(price)
     if not valid:
@@ -601,9 +608,9 @@ def place_limit_order(
 
     def _place():
         _ensure_api_creds(client)
-        # Use round(size, 2) to ensure compatibility with Polymarket rounding/truncation
-        rounded_size = round(size, 2)
-        oa = OrderArgs(token_id=token_id, price=price, size=rounded_size, side=side)
+        # Use truncate_float to ensure we don't round up and exceed balance
+        truncated_size = truncate_float(size, 2)
+        oa = OrderArgs(token_id=token_id, price=price, size=truncated_size, side=side)
         if otype == OrderType.GTD and expiration:
             oa.expiration = expiration
         signed = client.create_order(oa)
@@ -806,11 +813,13 @@ def get_orders(
 def cancel_order(order_id: str) -> bool:
     try:
         status = get_order_status(order_id)
-        if status in ["FILLED", "CANCELED", "EXPIRED"]:
+        if status in ["FILLED", "CANCELED", "EXPIRED", "NOT_FOUND"]:
             return True
         resp = client.cancel(order_id)
         return resp == "OK" or (isinstance(resp, dict) and resp.get("status") == "OK")
     except Exception as e:
+        if "404" in str(e) or "not found" in str(e).lower():
+            return True
         log(f"⚠️ Error cancelling order {order_id}: {e}")
         return False
 

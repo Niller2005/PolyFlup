@@ -8,19 +8,26 @@ from src.config.settings import LOG_FILE, DISCORD_WEBHOOK
 
 def log(text: str) -> None:
     """Log message to console and file"""
-    line = (
-        f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC')}] {text}"
-    )
     try:
-        print(line, flush=True)
-    except UnicodeEncodeError:
-        # Fallback for consoles that don't support emojis/unicode
-        print(line.encode("ascii", "replace").decode("ascii"), flush=True)
+        line = (
+            f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC')}] {text}"
+        )
+        try:
+            print(line, flush=True)
+        except Exception:
+            try:
+                # Fallback for consoles that don't support emojis/unicode or other print errors
+                print(line.encode("ascii", "replace").decode("ascii"), flush=True)
+            except Exception:
+                pass
 
-    try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        try:
+            with open(LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
     except Exception:
+        # Final safety net to prevent recursive logging failures from crashing the bot
         pass
 
 

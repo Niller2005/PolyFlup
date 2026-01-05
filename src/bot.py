@@ -148,7 +148,7 @@ def _calculate_bet_size(
     confidence_multiplier = 0.5 + (sizing_confidence * 3.5)
     target_bet = base_bet * confidence_multiplier
 
-    size = round(target_bet / price, 6)
+    size = round(target_bet / price, 4)
 
     MIN_SIZE = 5.0
     bet_usd_effective = target_bet

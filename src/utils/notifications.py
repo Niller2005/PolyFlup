@@ -3,7 +3,7 @@
 import time
 from typing import List, Dict
 from src.utils.logger import log, send_discord
-from src.trading.orders import get_notifications, drop_notifications
+from src.trading.orders import get_notifications, drop_notifications, SELL
 from src.data.db_connection import db_connection
 
 
