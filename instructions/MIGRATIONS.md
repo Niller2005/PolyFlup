@@ -36,7 +36,6 @@ def migration_003_add_my_new_column(conn: sqlite3.Connection) -> None:
     if "my_new_column" not in columns:
         log("  - Adding my_new_column...")
         c.execute("ALTER TABLE trades ADD COLUMN my_new_column TEXT")
-        conn.commit()
         log("    ✓ Column added")
     else:
         log("    ✓ my_new_column already exists")
@@ -96,36 +95,34 @@ The migration will run automatically and be tracked.
 - Don't skip version numbers
 - Don't make destructive changes (DROP TABLE, DROP COLUMN)
 - Don't assume data state - check before migrating
-- Don't forget to commit after ALTER TABLE
+- Don't call `conn.commit()` manually - it will cause panics with Turso/libsql
 
 ## Common Migration Patterns
 
 ### Add Column
 ```python
-def migration_00X_add_column(conn: sqlite3.Connection) -> None:
+def migration_00X_add_column(conn: Any) -> None:
     c = conn.cursor()
     c.execute("PRAGMA table_info(trades)")
     columns = [row[1] for row in c.fetchall()]
     
     if "new_column" not in columns:
         c.execute("ALTER TABLE trades ADD COLUMN new_column TEXT DEFAULT NULL")
-        conn.commit()
+        # Automatic commit by context manager
 ```
 
 ### Add Index
 ```python
-def migration_00X_add_index(conn: sqlite3.Connection) -> None:
+def migration_00X_add_index(conn: Any) -> None:
     c = conn.cursor()
     c.execute("CREATE INDEX IF NOT EXISTS idx_new_column ON trades(new_column)")
-    conn.commit()
 ```
 
 ### Data Migration
 ```python
-def migration_00X_update_data(conn: sqlite3.Connection) -> None:
+def migration_00X_update_data(conn: Any) -> None:
     c = conn.cursor()
     c.execute("UPDATE trades SET new_column = 'default_value' WHERE new_column IS NULL")
-    conn.commit()
 ```
 
 ### Rename Column (Complex)
@@ -168,9 +165,9 @@ c = conn.cursor()
 
 # Remove the column (requires table rebuild in SQLite)
 # OR set version back
-c.execute("DELETE FROM schema_version WHERE version = 3")
-conn.commit()
-conn.close()
+with db_connection() as conn:
+    c = conn.cursor()
+    c.execute("DELETE FROM schema_version WHERE version = 3")
 ```
 
 ## Testing Migrations

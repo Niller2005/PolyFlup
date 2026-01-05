@@ -207,10 +207,10 @@ python check_migration_status.py
 #### Add New Migration
 1. Create function in `src/data/migrations.py`:
 ```python
-def migration_003_add_my_column(conn: sqlite3.Connection) -> None:
+def migration_003_add_my_column(conn: Any) -> None:
     c = conn.cursor()
     c.execute("ALTER TABLE trades ADD COLUMN my_column TEXT")
-    conn.commit()
+    # Automatic commit by context manager
 ```
 
 2. Add to `MIGRATIONS` list:

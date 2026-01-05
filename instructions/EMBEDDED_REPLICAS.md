@@ -94,7 +94,7 @@ with db_connection() as conn:
     cursor.execute("SELECT * FROM trades")  # Read from local
     
     cursor.execute("INSERT INTO trades ...")  # Write to remote
-    conn.commit()  # Syncs changes back to local
+    # commit happens automatically on exit, which syncs changes back to local
 ```
 
 ### Sync Behavior

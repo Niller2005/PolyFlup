@@ -121,7 +121,6 @@ def add_migration(description: str, migration_func: Callable) -> None:
         def migration_003_add_my_column(conn):
             c = conn.cursor()
             c.execute("ALTER TABLE trades ADD COLUMN my_column TEXT")
-            conn.commit()
 
         # Add to MIGRATIONS list manually
     """

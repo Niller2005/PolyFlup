@@ -170,7 +170,7 @@ finally:
 with db_connection() as conn:
     c = conn.cursor()
     c.execute("...")
-    conn.commit()  # Auto-handled by context manager
+    # commit/rollback/close auto-handled by context manager
 ```
 
 ## Breaking Changes
