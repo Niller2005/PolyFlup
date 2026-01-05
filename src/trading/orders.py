@@ -57,7 +57,7 @@ client = ClobClient(
     key=PROXY_PK or "",
     chain_id=CHAIN_ID,
     signature_type=SIGNATURE_TYPE,
-    funder=FUNDER_PROXY or None,
+    funder=FUNDER_PROXY or "",
 )
 
 # Hotfix: ensure client has builder_config attribute
@@ -71,31 +71,25 @@ def get_clob_client() -> ClobClient:
 
 
 def get_midpoint(token_id: str) -> Optional[float]:
-    """
-    Get midpoint price (average of best bid and ask) for a token
-    """
+    """Get midpoint price for a token"""
     try:
-        result = client.get_midpoint(token_id)
-
+        result: Any = client.get_midpoint(token_id)
         if isinstance(result, dict):
             mid = result.get("mid")
             if mid:
                 return float(mid)
         elif result is not None and hasattr(result, "mid"):
             val = getattr(result, "mid")
-            return float(val) if val is not None else None
-
+            if val is not None:
+                return float(val)
         return None
-
     except Exception as e:
         log(f"⚠️ Error getting midpoint for {token_id[:10]}...: {e}")
         return None
 
 
 def get_tick_size(token_id: str) -> float:
-    """
-    Get the minimum tick size (price increment) for a token
-    """
+    """Get the minimum tick size for a token"""
     try:
         tick_size = client.get_tick_size(token_id)
         if tick_size:
@@ -107,31 +101,25 @@ def get_tick_size(token_id: str) -> float:
 
 
 def get_spread(token_id: str) -> Optional[float]:
-    """
-    Get the spread (difference between best ask and bid) for a token
-    """
+    """Get the spread for a token"""
     try:
-        result = client.get_spread(token_id)
-
+        result: Any = client.get_spread(token_id)
         if isinstance(result, dict):
             spread = result.get("spread")
             if spread:
                 return float(spread)
         elif result is not None and hasattr(result, "spread"):
             val = getattr(result, "spread")
-            return float(val) if val is not None else None
-
+            if val is not None:
+                return float(val)
         return None
-
     except Exception as e:
         log(f"⚠️ Error getting spread for {token_id[:10]}...: {e}")
         return None
 
 
 def get_server_time() -> Optional[int]:
-    """
-    Get current server timestamp
-    """
+    """Get current server timestamp"""
     try:
         timestamp = client.get_server_time()
         if isinstance(timestamp, (int, float)):
@@ -145,16 +133,12 @@ def get_server_time() -> Optional[int]:
 def get_trades(
     market: Optional[str] = None, asset_id: Optional[str] = None, limit: int = 100
 ) -> List[dict]:
-    """
-    Get trade history (filled orders)
-    """
+    """Get trade history (filled orders)"""
     try:
-        params = TradeParams(market=market or "", asset_id=asset_id or "")
+        params = cast(Any, TradeParams(market=market or "", asset_id=asset_id or ""))
         trades = client.get_trades(params)
-
         if not isinstance(trades, list):
             trades = [trades] if trades else []
-
         return trades[:limit]
     except Exception as e:
         log(f"⚠️ Error getting trades: {e}")
@@ -162,17 +146,16 @@ def get_trades(
 
 
 def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
-    """
-    Get balance and allowance for USDC collateral or specific conditional token
-    """
+    """Get balance and allowance"""
     try:
-        params = BalanceAllowanceParams(
-            asset_type=AssetType.CONDITIONAL if token_id else AssetType.COLLATERAL,
-            token_id=token_id or "",
+        params = cast(
+            Any,
+            BalanceAllowanceParams(
+                asset_type=AssetType.CONDITIONAL if token_id else AssetType.COLLATERAL,
+                token_id=token_id or "",
+            ),
         )
-
-        result = client.get_balance_allowance(params)
-
+        result: Any = client.get_balance_allowance(params)
         if isinstance(result, dict):
             return {
                 "balance": float(result.get("balance", 0)) / 1_000_000.0,
@@ -187,7 +170,6 @@ def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
                 "balance": float(getattr(result, "balance")) / 1_000_000.0,
                 "allowance": float(getattr(result, "allowance")) / 1_000_000.0,
             }
-
         return None
     except Exception as e:
         log(f"⚠️ Error getting balance/allowance: {e}")
@@ -195,14 +177,11 @@ def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
 
 
 def get_notifications() -> List[dict]:
-    """
-    Get all notifications
-    """
+    """Get all notifications"""
     try:
         notifications = client.get_notifications()
         if not isinstance(notifications, list):
             notifications = [notifications] if notifications else []
-
         result = []
         for notif in notifications:
             if isinstance(notif, dict):
@@ -223,11 +202,9 @@ def get_notifications() -> List[dict]:
 
 
 def drop_notifications(notification_ids: List[str]) -> bool:
-    """
-    Mark notifications as read
-    """
+    """Mark notifications as read"""
     try:
-        params = DropNotificationParams(ids=notification_ids)
+        params = cast(Any, DropNotificationParams(ids=notification_ids))
         client.drop_notifications(params)
         return True
     except Exception as e:
@@ -236,17 +213,14 @@ def drop_notifications(notification_ids: List[str]) -> bool:
 
 
 def get_current_positions(user_address: str) -> List[dict]:
-    """
-    Get current open positions for a user from Data API
-    """
+    """Get current positions for a user from Data API"""
     try:
         from src.config.settings import DATA_API_BASE
         import requests
 
-        url = f"{DATA_API_BASE}/positions?userAddress={user_address}"
+        url = f"{DATA_API_BASE}/positions?user={user_address}"
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
-
         data = resp.json()
         if isinstance(data, list):
             return data
@@ -257,13 +231,10 @@ def get_current_positions(user_address: str) -> List[dict]:
 
 
 def check_order_scoring(order_id: str) -> bool:
-    """
-    Check if a specific order is currently scoring for rewards
-    """
+    """Check if order is scoring for rewards"""
     try:
-        params = OrderScoringParams(orderId=order_id)
-        resp = client.is_order_scoring(params)
-
+        params = cast(Any, OrderScoringParams(orderId=order_id))
+        resp: Any = client.is_order_scoring(params)
         if isinstance(resp, dict):
             return resp.get("isScoring", False)
         elif resp is not None and hasattr(resp, "is_scoring"):
@@ -271,20 +242,17 @@ def check_order_scoring(order_id: str) -> bool:
         return False
     except Exception as e:
         if "404" not in str(e):
-            log(f"⚠️ Error checking order scoring {order_id}: {e}")
+            log(f"⚠️ Error checking scoring {order_id}: {e}")
         return False
 
 
 def check_orders_scoring(order_ids: List[str]) -> Dict[str, bool]:
-    """
-    Check scoring status for multiple orders
-    """
+    """Check scoring for multiple orders"""
     if not order_ids:
         return {}
     try:
-        params = OrdersScoringParams(orderIds=order_ids)
-        resp = client.are_orders_scoring(params)
-
+        params = cast(Any, OrdersScoringParams(orderIds=order_ids))
+        resp: Any = client.are_orders_scoring(params)
         result = {}
         if isinstance(resp, list):
             for item in resp:
@@ -304,7 +272,7 @@ def check_orders_scoring(order_ids: List[str]) -> Dict[str, bool]:
             return resp
         return result
     except Exception as e:
-        log(f"⚠️ Error checking bulk order scoring: {e}")
+        log(f"⚠️ Error checking scoring: {e}")
         return {o_id: False for o_id in order_ids}
 
 
@@ -313,7 +281,6 @@ def setup_api_creds() -> None:
     api_key = os.getenv("API_KEY")
     api_secret = os.getenv("API_SECRET")
     api_passphrase = os.getenv("API_PASSPHRASE")
-
     if api_key and api_secret and api_passphrase:
         try:
             creds = ApiCreds(
@@ -324,7 +291,6 @@ def setup_api_creds() -> None:
             return
         except Exception as e:
             log(f"⚠ Error loading API creds from .env: {e}")
-
     try:
         creds = client.create_or_derive_api_creds()
         client.set_api_creds(creds)
@@ -356,10 +322,9 @@ def _validate_price(
     price: float, tick_size: float = MIN_TICK_SIZE
 ) -> tuple[bool, Optional[str]]:
     if price <= 0:
-        return False, "Price must be greater than 0"
+        return False, "Price must be > 0"
     if price < 0.01 or price > 0.99:
-        return False, "Price must be between 0.01 and 0.99"
-
+        return False, "Price must be 0.01-0.99"
     decimal_places = 2
     if tick_size == 0.1:
         decimal_places = 1
@@ -369,68 +334,55 @@ def _validate_price(
         decimal_places = 3
     elif tick_size == 0.0001:
         decimal_places = 4
-
     if round(price, decimal_places) != price:
-        return False, f"Price must be rounded to tick size {tick_size}"
+        return False, f"Price must be rounded to {tick_size}"
     return True, None
 
 
 def _validate_size(size: float) -> tuple[bool, Optional[str]]:
     if size < MIN_ORDER_SIZE:
-        return False, f"Order size must be at least {MIN_ORDER_SIZE} shares"
+        return False, f"Order size must be at least {MIN_ORDER_SIZE}"
     return True, None
 
 
 def _validate_order(price: float, size: float) -> tuple[bool, Optional[str]]:
-    is_valid, error = _validate_price(price)
-    if not is_valid:
-        return False, error
-    is_valid, error = _validate_size(size)
-    if not is_valid:
-        return False, error
+    valid, err = _validate_price(price)
+    if not valid:
+        return False, err
+    valid, err = _validate_size(size)
+    if not valid:
+        return False, err
     return True, None
 
 
 def _parse_api_error(error_str: str) -> str:
     error_upper = error_str.upper()
-    for error_code, description in API_ERRORS.items():
-        if error_code in error_upper:
-            return f"{error_code}: {description}"
+    for code, desc in API_ERRORS.items():
+        if code in error_upper:
+            return f"{code}: {desc}"
     if "BALANCE" in error_upper or "ALLOWANCE" in error_upper:
-        return "Insufficient balance or allowance"
+        return "Insufficient funds"
     if "RATE" in error_upper and "LIMIT" in error_upper:
-        return "API rate limit exceeded"
-    if "TIMEOUT" in error_upper:
-        return "Request timeout"
-    if "404" in error_str:
-        return "Resource not found"
+        return "Rate limit"
     return error_str
 
 
 def _should_retry(error_str: str) -> bool:
     error_upper = error_str.upper()
-    retryable_keywords = [
-        "TIMEOUT",
-        "RATE LIMIT",
-        "RATE_LIMIT",
-        "TOO MANY REQUESTS",
-        "503",
-        "502",
-        "CONNECTION",
-        "NETWORK",
-    ]
-    return any(keyword in error_upper for keyword in retryable_keywords)
+    return any(
+        k in error_upper for k in ["TIMEOUT", "RATE LIMIT", "503", "502", "CONNECTION"]
+    )
 
 
 def _execute_with_retry(func, *args, **kwargs):
     import time
 
-    last_error = None
+    last_err = None
     for attempt in range(MAX_RETRIES):
         try:
             return func(*args, **kwargs)
         except Exception as e:
-            last_error = e
+            last_err = e
             if not _should_retry(str(e)):
                 raise
             if attempt < MAX_RETRIES - 1:
@@ -439,8 +391,8 @@ def _execute_with_retry(func, *args, **kwargs):
                     f"⏳ Retry {attempt + 2}/{MAX_RETRIES} after {delay}s: {_parse_api_error(str(e))}"
                 )
                 time.sleep(delay)
-    if last_error:
-        raise last_error
+    if last_err:
+        raise last_err
 
 
 def place_limit_order(
@@ -452,88 +404,57 @@ def place_limit_order(
     order_type: str = "GTC",
     expiration: Optional[int] = None,
 ) -> dict:
-    is_valid, error_msg = _validate_order(price, size)
-    if not is_valid:
-        log(f"❌ Order validation failed: {error_msg}")
-        return {
-            "success": False,
-            "status": "VALIDATION_ERROR",
-            "order_id": None,
-            "error": error_msg,
-        }
+    valid, err = _validate_order(price, size)
+    if not valid:
+        return {"success": False, "status": "VALIDATION_ERROR", "error": err}
 
-    if order_type.upper() == "GTD":
-        if not expiration:
-            return {
-                "success": False,
-                "status": "VALIDATION_ERROR",
-                "order_id": None,
-                "error": "GTD requires expiration",
-            }
-        import time
-
-        now = int(time.time())
-        if expiration < now + 61:
-            return {
-                "success": False,
-                "status": "VALIDATION_ERROR",
-                "order_id": None,
-                "error": "GTD expiration too soon",
-            }
-
-    order_type_map = {
-        "GTC": OrderType.GTC,
-        "FOK": OrderType.FOK,
-        "FAK": OrderType.FAK,
-        "GTD": OrderType.GTD,
-    }
-    order_type_enum = order_type_map.get(order_type.upper(), OrderType.GTC)
+    otype_str = order_type.upper()
+    if otype_str == "FOK":
+        otype = OrderType.FOK
+    elif otype_str == "FAK":
+        otype = OrderType.FAK
+    elif otype_str == "GTD":
+        otype = OrderType.GTD
+    else:
+        otype = OrderType.GTC
 
     def _place():
         _ensure_api_creds(client)
-        order_args_dict = {
-            "token_id": token_id,
-            "price": price,
-            "size": size,
-            "side": side,
-        }
-        if order_type.upper() == "GTD" and expiration:
-            order_args_dict["expiration"] = expiration
-        order_args = OrderArgs(**order_args_dict)
-        signed_order = client.create_order(order_args)
-        return client.post_order(signed_order, order_type_enum)
+        oa = OrderArgs(token_id=token_id, price=price, size=size, side=side)
+        if otype == OrderType.GTD and expiration:
+            oa.expiration = expiration
+        signed = client.create_order(oa)
+        return client.post_order(signed, otype)
 
     try:
-        resp = _execute_with_retry(_place)
+        resp: Any = _execute_with_retry(_place)
         status = resp.get("status", "UNKNOWN") if isinstance(resp, dict) else "UNKNOWN"
-        order_id = resp.get("orderID") if isinstance(resp, dict) else None
-        error_msg = resp.get("errorMsg", "") if isinstance(resp, dict) else ""
+        oid = resp.get("orderID") if isinstance(resp, dict) else None
+        emsg = resp.get("errorMsg", "") if isinstance(resp, dict) else ""
         success = resp.get("success", True) if isinstance(resp, dict) else True
-        has_error = bool(error_msg) and not bool(order_id)
+        has_err = bool(emsg) and not bool(oid)
         return {
-            "success": (success and not has_error) or bool(order_id),
+            "success": (success and not has_err) or bool(oid),
             "status": status,
-            "order_id": order_id,
-            "error": error_msg if has_error else None,
+            "order_id": oid,
+            "error": emsg if has_err else None,
         }
     except Exception as e:
-        error_str = str(e)
-        parsed_error = _parse_api_error(error_str)
-        order_id_from_error = None
-        if hasattr(e, "response"):
-            resp_attr = getattr(e, "response")
-            if hasattr(resp_attr, "json"):
-                try:
-                    order_id_from_error = resp_attr.json().get("orderID")
-                except:
-                    pass
-        if not (silent_on_balance_error and "balance" in error_str.lower()):
-            log(f"❌ {side} Order error: {parsed_error}")
+        emsg = _parse_api_error(str(e))
+        oid = None
+        try:
+            r = getattr(e, "response", None)
+            if r and hasattr(r, "json"):
+                oid = r.json().get("orderID")
+        except:
+            pass
+        if not (silent_on_balance_error and "balance" in str(e).lower()):
+            log(f"❌ {side} Order error: {emsg}")
         return {
-            "success": bool(order_id_from_error),
-            "status": "ERROR" if not order_id_from_error else "UNKNOWN",
-            "order_id": order_id_from_error,
-            "error": parsed_error,
+            "success": bool(oid),
+            "status": "ERROR" if not oid else "UNKNOWN",
+            "order_id": oid,
+            "error": emsg,
         }
 
 
@@ -550,34 +471,32 @@ def place_market_order(
 ) -> dict:
     try:
         _ensure_api_creds(client)
-        order_type_map = {"FOK": OrderType.FOK, "FAK": OrderType.FAK}
-        order_type_enum = order_type_map.get(order_type.upper(), OrderType.FOK)
+        otype_str = order_type.upper()
+        if otype_str == "FAK":
+            otype = OrderType.FAK
+        else:
+            otype = OrderType.FOK
+
         if not silent_on_error:
             log(f"   📊 Placing {side} Market Order: {amount} units")
-        market_order_args = MarketOrderArgs(token_id=token_id, amount=amount, side=side)
-        signed_order = client.create_market_order(market_order_args)
-        resp = client.post_order(signed_order, order_type_enum)
+        moa = MarketOrderArgs(token_id=token_id, amount=amount, side=side)
+        signed = client.create_market_order(moa)
+        resp: Any = client.post_order(signed, otype)
         status = resp.get("status", "UNKNOWN") if isinstance(resp, dict) else "UNKNOWN"
-        order_id = resp.get("orderID") if isinstance(resp, dict) else None
-        error_msg = resp.get("errorMsg", "") if isinstance(resp, dict) else ""
+        oid = resp.get("orderID") if isinstance(resp, dict) else None
+        emsg = resp.get("errorMsg", "") if isinstance(resp, dict) else ""
         success = resp.get("success", True) if isinstance(resp, dict) else True
-        has_error = bool(error_msg)
         return {
-            "success": success and not has_error,
+            "success": success and not bool(emsg),
             "status": status,
-            "order_id": order_id,
-            "error": error_msg if has_error else None,
+            "order_id": oid,
+            "error": emsg if emsg else None,
         }
     except Exception as e:
-        parsed_error = _parse_api_error(str(e))
+        emsg = _parse_api_error(str(e))
         if not silent_on_error:
-            log(f"❌ {side} Market Order error: {parsed_error}")
-        return {
-            "success": False,
-            "status": "ERROR",
-            "order_id": None,
-            "error": parsed_error,
-        }
+            log(f"❌ {side} Market Order error: {emsg}")
+        return {"success": False, "status": "ERROR", "order_id": None, "error": emsg}
 
 
 def check_liquidity(token_id: str, size: float, warn_threshold: float = 0.05) -> bool:
@@ -585,9 +504,7 @@ def check_liquidity(token_id: str, size: float, warn_threshold: float = 0.05) ->
     if spread is None:
         return True
     if spread > warn_threshold:
-        log(
-            f"⚠️ Wide spread detected: {spread:.3f} ({spread * 100:.1f}%) - Low liquidity!"
-        )
+        log(f"⚠️ Wide spread detected: {spread:.3f} - Low liquidity!")
         return False
     return True
 
@@ -595,12 +512,9 @@ def check_liquidity(token_id: str, size: float, warn_threshold: float = 0.05) ->
 def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
     if not orders:
         return []
-    if len(orders) > 15:
-        log(f"⚠️ Truncating batch to 15 orders")
-        orders = orders[:15]
     validated = []
     results = []
-    for i, op in enumerate(orders):
+    for op in orders[:15]:
         p, s = op.get("price"), op.get("size")
         if p is None or s is None:
             results.append(
@@ -613,18 +527,17 @@ def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
             continue
         valid, err = _validate_order(p, s)
         if not valid:
-            log(f"❌ Batch order {i + 1} failed validation: {err}")
             results.append(
                 {"success": False, "status": "VALIDATION_ERROR", "error": err}
             )
             continue
-        validated.append((i, op))
+        validated.append(op)
     if not validated:
         return results
     try:
         _ensure_api_creds(client)
         batch = []
-        for _, op in validated:
+        for op in validated:
             oa = OrderArgs(
                 token_id=op["token_id"],
                 price=op["price"],
@@ -633,10 +546,9 @@ def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
             )
             signed = client.create_order(oa)
             batch.append(PostOrdersArgs(order=signed, orderType=OrderType.GTC))
-        responses = client.post_orders(batch)
-        for idx, (orig_idx, _) in enumerate(validated):
-            if idx < len(responses):
-                r = responses[idx]
+        responses: Any = client.post_orders(batch)
+        for r in responses:
+            if isinstance(r, dict):
                 results.append(
                     {
                         "success": r.get("success", True) and not r.get("errorMsg"),
@@ -647,7 +559,11 @@ def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
                 )
             else:
                 results.append(
-                    {"success": False, "status": "ERROR", "error": "No response"}
+                    {
+                        "success": False,
+                        "status": "ERROR",
+                        "error": "Invalid response format",
+                    }
                 )
         return results
     except Exception as e:
@@ -657,24 +573,13 @@ def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
 
 def get_order_status(order_id: str) -> str:
     try:
-        order_data = client.get_order(order_id)
+        order_data: Any = client.get_order(order_id)
         status = (
             order_data.get("status", "UNKNOWN")
             if isinstance(order_data, dict)
             else getattr(order_data, "status", "UNKNOWN")
         )
-        status_upper = status.upper() if status else "UNKNOWN"
-        if status_upper in [
-            "MATCHED",
-            "LIVE",
-            "DELAYED",
-            "UNMATCHED",
-            "FILLED",
-            "CANCELED",
-            "EXPIRED",
-        ]:
-            return status_upper
-        return status_upper
+        return status.upper() if status else "UNKNOWN"
     except Exception as e:
         if "404" in str(e):
             return "NOT_FOUND"
@@ -684,30 +589,24 @@ def get_order_status(order_id: str) -> str:
 
 def get_order(order_id: str) -> Optional[dict]:
     try:
-        order_data = client.get_order(order_id)
+        order_data: Any = client.get_order(order_id)
         if isinstance(order_data, dict):
             return order_data
-        result = {}
-        for field in [
+        res = {}
+        for f in [
             "id",
             "status",
             "market",
             "original_size",
             "size_matched",
             "outcome",
-            "maker_address",
-            "owner",
             "price",
             "side",
             "asset_id",
-            "expiration",
-            "type",
-            "created_at",
-            "associate_trades",
         ]:
-            if hasattr(order_data, field):
-                result[field] = getattr(order_data, field)
-        return result if result else None
+            if hasattr(order_data, f):
+                res[f] = getattr(order_data, f)
+        return res if res else None
     except Exception as e:
         if "404" not in str(e):
             log(f"⚠️ Error fetching order {order_id}: {e}")
@@ -718,7 +617,9 @@ def get_orders(
     market: Optional[str] = None, asset_id: Optional[str] = None
 ) -> List[dict]:
     try:
-        params = OpenOrderParams(market=market or "", asset_id=asset_id or "")
+        params = cast(
+            Any, OpenOrderParams(market=market or "", asset_id=asset_id or "")
+        )
         orders = client.get_orders(params)
         return orders if isinstance(orders, list) else ([orders] if orders else [])
     except Exception as e:
@@ -742,19 +643,16 @@ def cancel_orders(order_ids: List[str]) -> dict:
     if not order_ids:
         return {"canceled": [], "not_canceled": {}}
     try:
-        resp = client.cancel_orders(order_ids)
+        resp: Any = client.cancel_orders(order_ids)
         if isinstance(resp, dict):
-            canceled = resp.get("canceled", [])
-            not_canceled = resp.get("not_canceled", {})
-            if canceled:
-                log(f"✅ Cancelled {len(canceled)} orders")
-            if not_canceled:
-                log(f"⚠️ Failed to cancel {len(not_canceled)} orders")
-            return {"canceled": canceled, "not_canceled": not_canceled}
+            return {
+                "canceled": resp.get("canceled", []),
+                "not_canceled": resp.get("not_canceled", {}),
+            }
         return {"canceled": [], "not_canceled": {}}
     except Exception as e:
         log(f"⚠️ Error bulk cancelling: {e}")
-        return {"canceled": [], "not_canceled": {o_id: str(e) for o_id in order_ids}}
+        return {"canceled": [], "not_canceled": {o: str(e) for o in order_ids}}
 
 
 def cancel_market_orders(
@@ -763,12 +661,14 @@ def cancel_market_orders(
     if not market and not asset_id:
         return {"canceled": [], "not_canceled": {}}
     try:
-        resp = client.cancel_market_orders(market=market or "", asset_id=asset_id or "")
+        resp: Any = client.cancel_market_orders(
+            market=market or "", asset_id=asset_id or ""
+        )
         if isinstance(resp, dict):
-            canceled = resp.get("canceled", [])
-            if canceled:
-                log(f"✅ Cancelled {len(canceled)} orders")
-            return {"canceled": canceled, "not_canceled": resp.get("not_canceled", {})}
+            return {
+                "canceled": resp.get("canceled", []),
+                "not_canceled": resp.get("not_canceled", {}),
+            }
         return {"canceled": [], "not_canceled": {}}
     except Exception as e:
         log(f"⚠️ Error cancelling market orders: {e}")
@@ -778,15 +678,12 @@ def cancel_market_orders(
 def cancel_all() -> dict:
     try:
         log("⚠️ CANCELLING ALL OPEN ORDERS...")
-        resp = client.cancel_all()
+        resp: Any = client.cancel_all()
         if isinstance(resp, dict):
-            canceled = resp.get("canceled", [])
-            if canceled:
-                log(f"✅ Cancelled {len(canceled)} orders")
-                send_discord(
-                    f"🛑 **EMERGENCY CANCEL**: Cancelled {len(canceled)} orders"
-                )
-            return {"canceled": canceled, "not_canceled": resp.get("not_canceled", {})}
+            return {
+                "canceled": resp.get("canceled", []),
+                "not_canceled": resp.get("not_canceled", {}),
+            }
         return {"canceled": [], "not_canceled": {}}
     except Exception as e:
         log(f"⚠️ Error cancelling all orders: {e}")
@@ -805,7 +702,7 @@ def sell_position(
         try:
             if attempt > 0:
                 log(
-                    f"🔄 Retry {attempt}/{max_retries - 1} selling... waiting {retry_delays[attempt - 1]}s"
+                    f"🔄 Retry {attempt} selling... waiting {retry_delays[attempt - 1]}s"
                 )
                 import time
 
@@ -829,8 +726,6 @@ def sell_position(
                     order_type="FAK" if attempt == 0 else "GTC",
                 )
             if result["success"]:
-                if attempt > 0:
-                    log(f"✅ Sell succeeded on retry {attempt + 1}")
                 return {
                     "success": True,
                     "sold": size,
@@ -838,23 +733,20 @@ def sell_position(
                     "status": result["status"],
                     "order_id": result["order_id"],
                 }
-            err = result.get("error", "")
-            if "balance" in err.lower() and attempt < max_retries - 1:
+            err = result.get("error", "").lower()
+            if "balance" in err and attempt < max_retries - 1:
                 continue
             if (
                 use_market_order
-                and ("FOK" in err or "no match" in err.lower())
+                and ("fok" in err or "no match" in err)
                 and attempt < max_retries - 1
             ):
                 continue
             if attempt == max_retries - 1:
-                log(f"❌ Sell error after {max_retries} attempts: {err}")
                 return {"success": False, "error": err}
         except Exception as e:
-            parsed_error = _parse_api_error(str(e))
             if "balance" in str(e).lower() and attempt < max_retries - 1:
                 continue
             if attempt == max_retries - 1:
-                log(f"❌ Sell error: {parsed_error}")
-                return {"success": False, "error": parsed_error}
+                return {"success": False, "error": str(e)}
     return {"success": False, "error": "Max retries exceeded"}

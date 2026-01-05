@@ -9,7 +9,6 @@ from typing import Dict, List, Optional, Callable, Any, Union
 import websockets
 from src.config.settings import CLOB_WSS_HOST, MARKETS
 from src.utils.logger import log
-from py_clob_client.signing.hmac import build_hmac_signature
 
 
 class WebSocketManager:
@@ -19,7 +18,8 @@ class WebSocketManager:
     """
 
     def __init__(self):
-        self.wss_url = CLOB_WSS_HOST
+        # Base URL from settings: wss://ws-subscriptions-clob.polymarket.com
+        self.wss_base_url = CLOB_WSS_HOST.rstrip("/")
         self.prices: Dict[str, float] = {}  # token_id -> midpoint_price
         self.token_to_symbol: Dict[str, str] = {}
         self.callbacks: Dict[str, List[Callable]] = {
@@ -29,13 +29,11 @@ class WebSocketManager:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._thread: Optional[threading.Thread] = None
         self._running = False
-        self._connected = False
         self.subscribed_tokens: List[str] = []
         self.subscription_queue: asyncio.Queue = asyncio.Queue()
-        self._auth_done = False
 
     def start(self):
-        """Start the WebSocket manager in a background thread"""
+        """Start the WebSocket manager in background threads"""
         if self._running:
             return
 
@@ -54,116 +52,128 @@ class WebSocketManager:
         """Internal method to run the asyncio event loop"""
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        # Re-initialize the queue in the correct loop
         self.subscription_queue = asyncio.Queue()
         try:
-            self._loop.run_until_complete(self._main_loop())
+            # We run both market and user connections in parallel tasks
+            self._loop.run_until_complete(
+                asyncio.gather(self._market_loop(), self._user_loop())
+            )
         except Exception as e:
-            log(f"❌ WebSocket event loop crashed: {e}")
+            if self._running:
+                log(f"❌ WebSocket event loop crashed: {e}")
 
-    async def _main_loop(self):
-        """Main connection and message loop"""
+    async def _market_loop(self):
+        """Handles connection to the public market data channel"""
+        # Exact URL format from Quickstart: wss://ws-subscriptions-clob.polymarket.com/ws/market
+        url = f"{self.wss_base_url}/ws/market"
         while self._running:
             try:
-                # Use longer timeout for connection
                 async with websockets.connect(
-                    self.wss_url, ping_interval=20, ping_timeout=20
-                ) as websocket:
-                    self._connected = True
-                    self._auth_done = False
-                    log(f"✅ WebSocket connected to {self.wss_url}")
+                    url, ping_interval=10, ping_timeout=10
+                ) as ws:
+                    log(f"✅ WebSocket connected to Market Channel")
 
-                    # 1. Authenticate (required for user channel)
-                    await self._authenticate(websocket)
-
-                    # 2. Subscribe to user updates
-                    await self._subscribe_user(websocket)
-
-                    # 3. Re-subscribe to existing prices using the "market" channel
+                    # Initial subscription
                     if self.subscribed_tokens:
-                        await self._subscribe_market(websocket, self.subscribed_tokens)
+                        await self._subscribe_market(ws, self.subscribed_tokens)
 
-                    # 4. Handle incoming messages and subscription queue
-                    recv_task = asyncio.create_task(self._receive_messages(websocket))
+                    # Receive task
+                    recv_task = asyncio.create_task(self._receive_messages(ws))
+                    # Subscription queue task
                     sub_task = asyncio.create_task(
-                        self._process_subscription_queue(websocket)
+                        self._process_market_subscription_queue(ws)
                     )
 
                     done, pending = await asyncio.wait(
                         [recv_task, sub_task], return_when=asyncio.FIRST_COMPLETED
                     )
-
                     for task in pending:
                         task.cancel()
-
                     for task in done:
                         exc = task.exception()
-                        if exc:
+                        if exc is not None:
                             raise exc
-
             except Exception as e:
-                self._connected = False
-                self._auth_done = False
                 if self._running:
-                    log(f"⚠️ WebSocket connection lost: {e}. Reconnecting in 5s...")
+                    log(f"⚠️ Market WebSocket lost: {e}. Reconnecting in 5s...")
                     await asyncio.sleep(5)
 
-    async def _authenticate(self, websocket):
-        """Authenticate the WebSocket connection"""
-        api_key = os.getenv("API_KEY")
-        api_secret = os.getenv("API_SECRET")
-        api_passphrase = os.getenv("API_PASSPHRASE")
+    async def _user_loop(self):
+        """Handles connection to the private authenticated user channel"""
+        # Exact URL format from Quickstart: wss://ws-subscriptions-clob.polymarket.com/ws/user
+        url = f"{self.wss_base_url}/ws/user"
+        while self._running:
+            try:
+                api_key = os.getenv("API_KEY")
+                api_secret = os.getenv("API_SECRET")
+                api_passphrase = os.getenv("API_PASSPHRASE")
 
-        if not (api_key and api_secret and api_passphrase):
-            log("⚠️ API Credentials missing, skipping WebSocket authentication")
-            return
+                if not (api_key and api_secret and api_passphrase):
+                    await asyncio.sleep(60)
+                    continue
 
-        timestamp = str(int(time.time()))
-        nonce = 0
+                async with websockets.connect(
+                    url, ping_interval=10, ping_timeout=10
+                ) as ws:
+                    log(f"✅ WebSocket connected to User Channel")
 
-        # Build HMAC signature for WSS auth
-        # Request path for WSS auth is usually "/ws"
-        signature = build_hmac_signature(api_secret, timestamp, "GET", "/ws")
+                    # Auth format from Quickstart
+                    auth_data = {
+                        "apiKey": api_key,
+                        "secret": api_secret,
+                        "passphrase": api_passphrase,
+                    }
 
-        auth_msg = {
-            "type": "auth",
-            "apiKey": api_key,
-            "signature": signature,
-            "nonce": nonce,
-            "timestamp": timestamp,
-            "passphrase": api_passphrase,
-        }
+                    # Subscription message from Quickstart
+                    msg = {"type": "user", "auth": auth_data, "markets": []}
+                    await ws.send(json.dumps(msg))
 
-        await websocket.send(json.dumps(auth_msg))
+                    # Heartbeat thread/task
+                    ping_task = asyncio.create_task(self._ping_loop(ws))
+                    recv_task = asyncio.create_task(self._receive_messages(ws))
 
-    async def _subscribe_user(self, websocket):
-        """Subscribe to user specific updates (orders, fills)"""
-        msg = {"type": "subscribe", "channel": "user"}
-        await websocket.send(json.dumps(msg))
-        log("📡 Subscribed to User Channel")
+                    done, pending = await asyncio.wait(
+                        [ping_task, recv_task], return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for task in pending:
+                        task.cancel()
+                    for task in done:
+                        exc = task.exception()
+                        if exc is not None:
+                            raise exc
+            except Exception as e:
+                if self._running:
+                    log(f"⚠️ User WebSocket lost: {e}. Reconnecting in 5s...")
+                    await asyncio.sleep(5)
 
-    async def _subscribe_market(self, websocket, token_ids: List[str]):
-        """Subscribe to market channel for price updates"""
+    async def _ping_loop(self, ws):
+        """Send PING every 10 seconds as per Quickstart"""
+        while self._running:
+            await asyncio.sleep(10)
+            await ws.send("PING")
+
+    async def _subscribe_market(self, ws, token_ids: List[str]):
+        """Subscribe to market channel as per Quickstart"""
         if not token_ids:
             return
+        msg = {"type": "market", "assets_ids": token_ids}
+        await ws.send(json.dumps(msg))
+        log(f"📡 Subscribed to {len(token_ids)} tokens on Market Channel")
 
-        msg = {"type": "subscribe", "channel": "market", "assets_ids": token_ids}
-        await websocket.send(json.dumps(msg))
-        log(f"📡 Subscribed to Market Channel for {len(token_ids)} tokens")
-
-    async def _process_subscription_queue(self, websocket):
-        """Handle new subscriptions while connection is active"""
+    async def _process_market_subscription_queue(self, ws):
+        """Handle new market subscriptions"""
         while self._running:
             token_ids = await self.subscription_queue.get()
-            if self._connected:
-                await self._subscribe_market(websocket, token_ids)
+            await self._subscribe_market(ws, token_ids)
             self.subscription_queue.task_done()
 
-    async def _receive_messages(self, websocket):
+    async def _receive_messages(self, ws):
         """Continuous message reception loop"""
-        async for message in websocket:
+        async for message in ws:
             if not self._running:
                 break
+            if message == "PONG":
+                continue
             await self._handle_message(message)
 
     async def _handle_message(self, message: Union[str, bytes]):
@@ -171,65 +181,57 @@ class WebSocketManager:
         try:
             if isinstance(message, bytes):
                 message = message.decode("utf-8")
-
             data = json.loads(message)
-            msg_type = data.get("event_type") or data.get("type")
 
-            # Handle multiple message formats from Polymarket
-            if msg_type in ["book", "price_change", "best_bid_ask", "last_trade_price"]:
-                # Handle price update from market channel
+            # Handle Market Channel messages
+            event_type = data.get("event_type")
+            if event_type in [
+                "book",
+                "price_change",
+                "best_bid_ask",
+                "last_trade_price",
+            ]:
                 asset_id = data.get("asset_id")
-
-                if msg_type == "best_bid_ask":
-                    bid = data.get("best_bid")
-                    ask = data.get("best_ask")
+                if event_type == "best_bid_ask":
+                    bid, ask = data.get("best_bid"), data.get("best_ask")
                     if bid and ask:
-                        mid = (float(bid) + float(ask)) / 2.0
-                        self.prices[asset_id] = mid
-                elif msg_type == "price_change":
-                    changes = data.get("price_changes", [])
-                    for c in changes:
-                        a_id = c.get("asset_id")
-                        bid = c.get("best_bid")
-                        ask = c.get("best_ask")
-                        if bid and ask and float(bid) > 0 and float(ask) > 0:
-                            self.prices[a_id] = (float(bid) + float(ask)) / 2.0
-                elif msg_type == "last_trade_price":
-                    price = data.get("price")
-                    if asset_id and price:
-                        self.prices[asset_id] = float(price)
+                        self.prices[asset_id] = (float(bid) + float(ask)) / 2.0
+                elif event_type == "price_change":
+                    for c in data.get("price_changes", []):
+                        a_id, b, a = (
+                            c.get("asset_id"),
+                            c.get("best_bid"),
+                            c.get("best_ask"),
+                        )
+                        if b and a and float(b) > 0:
+                            self.prices[a_id] = (float(b) + float(a)) / 2.0
+                elif event_type == "last_trade_price":
+                    if asset_id and data.get("price"):
+                        self.prices[asset_id] = float(data.get("price"))
 
-                # Execute callbacks if price updated
                 new_price = self.prices.get(asset_id)
                 if new_price:
                     for cb in self.callbacks["price"]:
                         try:
                             cb(asset_id, new_price)
-                        except Exception as e:
-                            log(f"❌ Error in price callback: {e}")
+                        except:
+                            pass
 
-            elif msg_type == "order":
-                # Handle user order updates
-                event = data.get("event")
-                order = data.get("order", {})
+            # Handle User Channel messages
+            elif data.get("type") == "order":
+                event, order = data.get("event"), data.get("order", {})
                 for cb in self.callbacks["order"]:
                     try:
                         cb(event, order)
-                    except Exception as e:
-                        log(f"❌ Error in order callback: {e}")
+                    except:
+                        pass
 
-            elif msg_type == "auth":
-                if data.get("success"):
-                    self._auth_done = True
-                    log("✅ WebSocket authenticated successfully")
-                else:
-                    log(f"❌ WebSocket authentication FAILED: {data.get('message')}")
-
-            elif msg_type == "error":
+            elif data.get("type") == "error":
                 log(f"❌ WebSocket API Error: {data.get('message')}")
 
         except Exception as e:
-            log(f"⚠️ Error handling WSS message: {e}")
+            if message != "PONG":
+                log(f"⚠️ Error handling WSS message: {e}")
 
     def subscribe_to_prices(
         self, token_ids: List[str], symbol_map: Optional[Dict[str, str]] = None
@@ -243,7 +245,7 @@ class WebSocketManager:
         if symbol_map:
             self.token_to_symbol.update(symbol_map)
 
-        if self._connected and self._loop:
+        if self._loop and self._running:
             self._loop.call_soon_threadsafe(
                 self.subscription_queue.put_nowait, new_tokens
             )

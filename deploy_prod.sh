@@ -1,26 +1,36 @@
 #!/bin/bash
 # Deploy PolyAstra to production
-# Usage: ./deploy_prod.sh [--logs]
+# Usage: ./deploy_prod.sh [--pull] [--logs]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PULL_CODE=false
 FOLLOW_LOGS=false
 
 # Parse arguments
-if [ "$1" == "--logs" ] || [ "$1" == "-l" ]; then
-    FOLLOW_LOGS=true
-fi
+for arg in "$@"; do
+    case $arg in
+        --logs|-l)
+            FOLLOW_LOGS=true
+            ;;
+        --pull|-p)
+            PULL_CODE=true
+            ;;
+    esac
+done
 
 echo "🔄 Starting production deployment..."
 echo ""
 
-# Pull latest code
-echo "📥 Pulling latest code from git..."
-git pull
-if [ $? -ne 0 ]; then
-    echo "❌ Git pull failed"
-    exit 1
+# Pull latest code if requested
+if [ "$PULL_CODE" = true ]; then
+    echo "📥 Pulling latest code from git..."
+    git pull
+    if [ $? -ne 0 ]; then
+        echo "❌ Git pull failed"
+        exit 1
+    fi
+    echo ""
 fi
-echo ""
 
 # Build and deploy with docker-compose
 echo "🐳 Building and starting containers..."
@@ -40,6 +50,8 @@ if [ "$FOLLOW_LOGS" = true ]; then
     echo ""
     docker logs -f polyastra-bot
 else
-    echo "💡 Tip: Run with --logs flag to follow bot logs after deployment"
-    echo "   ./deploy_prod.sh --logs"
+    echo "💡 Tips:"
+    echo "   ./deploy_prod.sh --pull         (pull latest code before deploying)"
+    echo "   ./deploy_prod.sh --logs         (follow logs after deployment)"
+    echo "   ./deploy_prod.sh --pull --logs  (pull, deploy, and follow logs)"
 fi

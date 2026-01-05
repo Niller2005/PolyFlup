@@ -124,7 +124,7 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 
 # API Endpoints
 CLOB_HOST = "https://clob.polymarket.com"
-CLOB_WSS_HOST = "wss://ws-subscriptions-clob.polymarket.com/ws/"
+CLOB_WSS_HOST = "wss://ws-subscriptions-clob.polymarket.com"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 DATA_API_BASE = "https://data-api.polymarket.com"
 CHAIN_ID = 137

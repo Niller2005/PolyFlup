@@ -43,6 +43,7 @@ from src.trading.orders import (
     drop_notifications,
     get_current_positions,
     check_order_scoring,
+    get_orders,
     BUY,
     SELL,
 )
