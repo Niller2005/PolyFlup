@@ -538,16 +538,19 @@ def _check_exit_plan(
                             "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
                             (o_id, trade_id),
                         )
-                        return  # Found and updated
+                        limit_sell_order_id = o_id  # Update local variable
+                        should_attempt = False  # Don't try to place another one
         except Exception as e:
             log(f"⚠️ Error checking for existing orders: {e}")
 
+    if should_attempt:
         # CRITICAL FIX: Check if we actually have the tokens before placing exit plan
         balance_info = get_balance_allowance(token_id)
         if balance_info:
             actual_balance = balance_info.get("balance", 0)
             if actual_balance < size:
-                if verbose:
+                # If balance is 0 and trade is old (>2m), log even if not verbose
+                if verbose or (actual_balance == 0 and position_age_seconds > 120):
                     emoji = "📈" if pnl_pct >= 0 else "📉"
                     log(
                         f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | ⏳ Tokens not yet in wallet (Balance: {actual_balance:.2f} < Size: {size:.2f})"
@@ -561,8 +564,22 @@ def _check_exit_plan(
                         "UPDATE trades SET size = ? WHERE id = ?",
                         (actual_balance, trade_id),
                     )
-                return
+                    size = actual_balance  # Update local variable
 
+                # If balance is 0 and trade is very old (>5m), it likely failed to fill correctly
+                if actual_balance == 0 and position_age_seconds > 300:
+                    log(
+                        f"   ⚠️ Trade #{trade_id} has 0 balance after 5m. Marking as UNFILLED."
+                    )
+                    c.execute(
+                        "UPDATE trades SET settled=1, final_outcome='UNFILLED_TIMEOUT', order_status='UNFILLED' WHERE id=?",
+                        (trade_id,),
+                    )
+                    return  # Stop processing this trade
+
+                should_attempt = False  # Skip placement attempt this cycle
+
+    if should_attempt:
         emoji = "📈" if pnl_pct >= 0 else "📉"
         log(
             f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | 📉 EXIT PLAN: Placing limit sell order at {EXIT_PRICE_TARGET} for {size} units"
@@ -572,7 +589,7 @@ def _check_exit_plan(
             price=EXIT_PRICE_TARGET,
             size=size,
             side=SELL,
-            silent_on_balance_error=True,
+            silent_on_balance_error=False,  # Don't silence, we want to know why it fails
             order_type="GTC",
         )
 
@@ -607,10 +624,11 @@ def _check_exit_plan(
                         "UPDATE trades SET size = ? WHERE id = ?",
                         (actual_balance, trade_id),
                     )
-            elif (
-                "balance" not in error_msg.lower()
-                and "allowance" not in error_msg.lower()
-            ):
+                else:
+                    log(
+                        f"  {emoji} [{symbol}] Trade #{trade_id} {side} | ⚠️ EXIT PLAN: Failed due to balance (Wallet: {actual_balance:.2f}, DB: {size:.2f})"
+                    )
+            else:
                 log(
                     f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | ⚠️ EXIT PLAN: Failed to place limit sell: {error_msg}"
                 )
@@ -630,11 +648,14 @@ def _check_exit_plan(
         if limit_sell_order_id:
             status_parts.append(f"⏰ Exit plan active ({position_age_seconds:.0f}s)")
         else:
-            wait_text = f"{position_age_seconds:.0f}s/{EXIT_MIN_POSITION_AGE}s"
+            age_text = f"{position_age_seconds:.0f}s/{EXIT_MIN_POSITION_AGE}s"
             if on_cooldown:
-                status_parts.append(f"⏳ Exit plan cooldown ({wait_text})")
+                cooldown_left = max(0, 30 - (now.timestamp() - last_attempt))
+                status_parts.append(
+                    f"⏳ Exit plan cooldown ({cooldown_left:.0f}s left) | Age: {age_text}"
+                )
             else:
-                status_parts.append(f"⏳ Exit plan pending ({wait_text})")
+                status_parts.append(f"⏳ Exit plan pending ({age_text})")
 
         log("  " + " | ".join(status_parts))
 
