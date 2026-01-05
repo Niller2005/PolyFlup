@@ -483,6 +483,7 @@ def _check_exit_plan(
     price_change_pct: float = 0.0,
     scaled_in: bool = False,
     scale_in_order_id: Optional[str] = None,
+    entry_price: float = 0.0,
 ) -> None:
     """Check and manage exit plan limit orders"""
     # CRITICAL FIX: MATCHED orders are filled and ready to sell
@@ -497,15 +498,19 @@ def _check_exit_plan(
 
     # Check cooldown for this trade
     last_attempt = _last_exit_attempt.get(trade_id, 0)
-    if now.timestamp() - last_attempt < 30:
-        return
+    on_cooldown = now.timestamp() - last_attempt < 30
 
-    if not limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE:
+    should_attempt = (
+        not limit_sell_order_id
+        and position_age_seconds >= EXIT_MIN_POSITION_AGE
+        and not on_cooldown
+    )
+
+    if should_attempt:
         # Update last attempt time
         _last_exit_attempt[trade_id] = now.timestamp()
 
         # CRITICAL FIX: Check if there's already an open order on the CLOB for this token
-        # This handles cases where the database might have lost the order_id after a restart
         try:
             from src.trading.orders import get_orders
 
@@ -528,12 +533,11 @@ def _check_exit_plan(
                             "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
                             (o_id, trade_id),
                         )
-                        return  # Found and updated, no need to place new one
+                        return  # Found and updated
         except Exception as e:
             log(f"⚠️ Error checking for existing orders: {e}")
 
         # CRITICAL FIX: Check if we actually have the tokens before placing exit plan
-        # Prevents trying to place orders when tokens aren't settled yet
         balance_info = get_balance_allowance(token_id)
         if balance_info:
             actual_balance = balance_info.get("balance", 0)
@@ -543,7 +547,16 @@ def _check_exit_plan(
                     log(
                         f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | ⏳ Tokens not yet in wallet (Balance: {actual_balance:.2f} < Size: {size:.2f})"
                     )
-                return  # Don't try to place order if we don't have the tokens
+                # If balance is significantly different, update size to fix the "struggle"
+                if actual_balance > 0 and abs(actual_balance - size) > 0.001:
+                    log(
+                        f"   🔄 Fixing size mismatch for #{trade_id}: {size:.2f} -> {actual_balance:.2f}"
+                    )
+                    c.execute(
+                        "UPDATE trades SET size = ? WHERE id = ?",
+                        (actual_balance, trade_id),
+                    )
+                return
 
         emoji = "📈" if pnl_pct >= 0 else "📉"
         log(
@@ -555,11 +568,9 @@ def _check_exit_plan(
             size=size,
             side=SELL,
             silent_on_balance_error=True,
-            order_type="GTC",  # Good-til-cancelled for exit plan
+            order_type="GTC",
         )
 
-        # CRITICAL FIX: Always save the order_id if we got one, even if success=False
-        # Polymarket API sometimes returns errors but still creates the order
         order_id_to_save = sell_limit_result.get("order_id")
 
         if sell_limit_result["success"] or order_id_to_save:
@@ -579,38 +590,46 @@ def _check_exit_plan(
         else:
             error_msg = sell_limit_result.get("error", "Unknown error")
 
-            # Only log if it's NOT a balance/allowance error (those are expected and retry automatically)
-            if (
+            # Handle balance errors by syncing wallet balance
+            if "balance" in error_msg.lower() or "allowance" in error_msg.lower():
+                balance_info = get_balance_allowance(token_id)
+                actual_balance = balance_info.get("balance", 0) if balance_info else 0
+                if actual_balance > 0 and abs(actual_balance - size) > 0.001:
+                    log(
+                        f"   🔄 Fixing size mismatch for #{trade_id}: {size:.2f} -> {actual_balance:.2f} (after error)"
+                    )
+                    c.execute(
+                        "UPDATE trades SET size = ? WHERE id = ?",
+                        (actual_balance, trade_id),
+                    )
+            elif (
                 "balance" not in error_msg.lower()
                 and "allowance" not in error_msg.lower()
             ):
                 log(
                     f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | ⚠️ EXIT PLAN: Failed to place limit sell: {error_msg}"
                 )
-    elif limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE:
-        # Exit plan status will be shown in combined position log (verbose cycle)
-        pass
 
     # Log combined position status on verbose cycles
-    if verbose and side:  # Only if we have position data
+    if verbose and side:
         emoji = "📈" if pnl_pct > 0 else "📉"
         status_parts = [
             f"{emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}%"
         ]
 
-        # Add scale-in indicator if position was scaled
         if scaled_in:
             status_parts.append("📊 Scaled in")
         elif scale_in_order_id:
             status_parts.append("📋 Scale-in pending")
 
-        # Add exit plan status
         if limit_sell_order_id:
             status_parts.append(f"⏰ Exit plan active ({position_age_seconds:.0f}s)")
         else:
-            status_parts.append(
-                f"⏳ Exit plan pending ({position_age_seconds:.0f}s/{EXIT_MIN_POSITION_AGE}s)"
-            )
+            wait_text = f"{position_age_seconds:.0f}s/{EXIT_MIN_POSITION_AGE}s"
+            if on_cooldown:
+                status_parts.append(f"⏳ Exit plan cooldown ({wait_text})")
+            else:
+                status_parts.append(f"⏳ Exit plan pending ({wait_text})")
 
         log("  " + " | ".join(status_parts))
 
@@ -998,9 +1017,12 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     if row and row[0] == 1:
                         continue  # Already settled, skip
 
-                    # 0. Check buy order status if not filled
+                    # 0. Check buy order status if not filled, or sync details if recently filled
                     current_buy_status = buy_order_status
-                    if buy_order_status != "FILLED" and buy_order_id:
+                    # Sync if not filled, OR if it's filled but we might not have actual details yet
+                    if buy_order_id and (
+                        buy_order_status != "FILLED" or entry_price == 0
+                    ):
                         current_buy_status = get_order_status(buy_order_id)
 
                         if current_buy_status in ["FILLED", "MATCHED"]:
@@ -1155,6 +1177,10 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     # Get current market price and calculate P&L
                     pnl_info = _get_position_pnl(token_id, entry_price, size)
                     if not pnl_info:
+                        if verbose:
+                            log(
+                                f"  ⚠️ [{symbol}] Skipping check - could not get market price"
+                            )
                         continue
 
                     current_price = pnl_info["current_price"]
@@ -1229,6 +1255,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         price_change_pct=price_change_pct,
                         scaled_in=scaled_in,
                         scale_in_order_id=scale_in_order_id,
+                        entry_price=entry_price,
                     )
 
                     # Re-fetch again after _check_exit_plan in case it was updated
