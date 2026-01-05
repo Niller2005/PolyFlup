@@ -217,6 +217,12 @@ def _check_stop_loss(
     buy_order_status: str,
 ) -> bool:
     """Check and execute stop loss if triggered, returns True if position closed"""
+    # CRITICAL FIX: Check if already settled in this cycle to prevent duplicate processing
+    c.execute("SELECT settled FROM trades WHERE id = ?", (trade_id,))
+    row = c.fetchone()
+    if row and row[0] == 1:
+        return True  # Already settled, skip
+
     # CRITICAL FIX: Don't attempt stop loss if buy order not filled yet
     if not ENABLE_STOP_LOSS or pnl_pct > -STOP_LOSS_PERCENT or size == 0:
         return False
@@ -696,6 +702,12 @@ def _check_take_profit(
     buy_order_status: str,
 ) -> bool:
     """Check and execute take profit if triggered, returns True if position closed"""
+    # CRITICAL FIX: Check if already settled in this cycle to prevent duplicate processing
+    c.execute("SELECT settled FROM trades WHERE id = ?", (trade_id,))
+    row = c.fetchone()
+    if row and row[0] == 1:
+        return True  # Already settled, skip
+
     if not ENABLE_TAKE_PROFIT or pnl_pct < TAKE_PROFIT_PERCENT:
         return False
 
