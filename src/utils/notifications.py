@@ -100,10 +100,22 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     "UPDATE trades SET order_status = 'EXIT_PLAN_PENDING_SETTLEMENT' WHERE id = ?",
                     (trade_id,),
                 )
-                # Position manager will handle full settlement with P&L calculation
-                return  # Found and logged, done
+                return
 
-            # Don't log scale-in fills - position manager already logs them
+            # Check if this is a scale-in order
+            c.execute(
+                "SELECT id, symbol, side, size FROM trades WHERE scale_in_order_id = ? AND settled = 0",
+                (order_id,),
+            )
+            row = c.fetchone()
+
+            if row:
+                trade_id, symbol, trade_side, size = row
+                log(
+                    f"📈 [{symbol}] Scale-in filled: #{trade_id} - updating position on next check"
+                )
+                # Position manager will detect status=FILLED on next check and update everything
+                return
 
             # Order not tracked in our database - skip logging (likely old or other trader's order)
 

@@ -433,6 +433,11 @@ def _update_exit_plan_after_scale_in(
     log(f"   🔄 Updating exit plan order (size changed to {new_total_size:.2f})")
 
     # Cancel old exit plan order
+    status = get_order_status(limit_sell_order_id)
+    if status in ["FILLED", "MATCHED"]:
+        log(f"   🎯 Old exit plan already filled, skipping update")
+        return
+
     cancel_result = cancel_order(limit_sell_order_id)
 
     if cancel_result:
@@ -668,10 +673,10 @@ def _check_scale_in(
             if order_data:
                 status = order_data.get("status", "").upper()
 
-                if status == "FILLED":
+                if status in ["FILLED", "MATCHED"]:
                     # Scale-in order filled! Update position
-                    scale_price = order_data.get("price", current_price)
-                    size_matched = order_data.get("size_matched", 0)
+                    scale_price = float(order_data.get("price", current_price))
+                    size_matched = float(order_data.get("size_matched", 0))
 
                     if size_matched > 0:
                         log(
@@ -773,7 +778,7 @@ def _check_scale_in(
         )
 
         # If order filled immediately, update position now
-        if order_status == "matched":
+        if order_status.lower() in ["filled", "matched"]:
             new_total_size = size + additional_size
             new_total_bet = bet_usd + additional_bet
             new_avg_price = new_total_bet / new_total_size
@@ -1112,7 +1117,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
                                     # Only settle if significantly filled (or matched)
                                     if (
-                                        status == "FILLED"
+                                        status in ["FILLED", "MATCHED"]
                                         or size_matched >= size * 0.99
                                     ):
                                         exit_pnl_usd = (
@@ -1227,9 +1232,47 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     time_left_seconds = (window_end_dt - now).total_seconds()
 
                     # ============================================================
+                    # SCALE IN: Check if conditions are met or monitor pending orders
+                    # ============================================================
+                    # Re-fetch scale_in_order_id in case it was just placed or updated
+                    c.execute(
+                        "SELECT scale_in_order_id FROM trades WHERE id = ?", (trade_id,)
+                    )
+                    row = c.fetchone()
+                    if row:
+                        scale_in_order_id = row[0]
+
+                    _check_scale_in(
+                        symbol=symbol,
+                        trade_id=trade_id,
+                        token_id=token_id,
+                        entry_price=entry_price,
+                        size=size,
+                        bet_usd=bet_usd,
+                        scaled_in=scaled_in,
+                        scale_in_order_id=scale_in_order_id,
+                        time_left_seconds=time_left_seconds,
+                        current_price=current_price,
+                        check_orders=check_orders,
+                        c=c,
+                        conn=conn,
+                        side=side,
+                        price_change_pct=price_change_pct,
+                    )
+
+                    # Re-fetch size and entry_price in case they were updated by _check_scale_in
+                    c.execute(
+                        "SELECT size, entry_price, bet_usd, scaled_in FROM trades WHERE id = ?",
+                        (trade_id,),
+                    )
+                    row = c.fetchone()
+                    if row:
+                        size, entry_price, bet_usd, scaled_in = row
+
+                    # ============================================================
                     # EXIT PLAN: Check and manage limit sell orders
                     # ============================================================
-                    # Re-fetch limit_sell_order_id in case it was updated by a previous position in this cycle
+                    # Re-fetch limit_sell_order_id in case it was updated by _check_scale_in
                     c.execute(
                         "SELECT limit_sell_order_id FROM trades WHERE id = ?",
                         (trade_id,),
@@ -1256,44 +1299,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         scaled_in=scaled_in,
                         scale_in_order_id=scale_in_order_id,
                         entry_price=entry_price,
-                    )
-
-                    # Re-fetch again after _check_exit_plan in case it was updated
-                    c.execute(
-                        "SELECT limit_sell_order_id FROM trades WHERE id = ?",
-                        (trade_id,),
-                    )
-                    row = c.fetchone()
-                    if row:
-                        limit_sell_order_id = row[0]
-
-                    # ============================================================
-                    # SCALE IN: Check if conditions are met or monitor pending orders
-                    # ============================================================
-                    # Re-fetch scale_in_order_id in case it was just placed
-                    c.execute(
-                        "SELECT scale_in_order_id FROM trades WHERE id = ?", (trade_id,)
-                    )
-                    row = c.fetchone()
-                    if row:
-                        scale_in_order_id = row[0]
-
-                    _check_scale_in(
-                        symbol=symbol,
-                        trade_id=trade_id,
-                        token_id=token_id,
-                        entry_price=entry_price,
-                        size=size,
-                        bet_usd=bet_usd,
-                        scaled_in=scaled_in,
-                        scale_in_order_id=scale_in_order_id,
-                        time_left_seconds=time_left_seconds,
-                        current_price=current_price,
-                        check_orders=check_orders,
-                        c=c,
-                        conn=conn,
-                        side=side,
-                        price_change_pct=price_change_pct,
                     )
 
                     # ============================================================

@@ -513,48 +513,49 @@ When scale-in doubles position size (e.g., 5.62 → 11.24 shares), the exit plan
   2. Place new exit plan order (new total size)
   3. Update database with new order ID
 
-**Real Example (ETH):**
-```
-Initial: 5.62 shares @ $0.36
-Exit plan: 5.62 shares @ $0.99
-Scale-in: +5.62 shares @ $0.85
-Total: 11.24 shares
-
-OLD BEHAVIOR:
-Exit plan fills → Only 5.62 shares sold
-Result: 5.62 shares stranded ❌
-
-NEW BEHAVIOR:
-Scale-in fills → Update exit plan to 11.24 shares
-Exit plan fills → All 11.24 shares sold
-Result: Complete exit ✅
-```
+**Enhanced Fix (latest):**
+- Added support for `MATCHED` status in scale-in monitoring (previously only checked `FILLED`).
+- Refactored position check order to ensure scale-in is processed *before* exit plan management in every cycle.
+- Added scale-in fill tracking to `notifications.py` for immediate awareness.
+- Added "already filled" protection to prevent placing new exit plans if the old one just filled.
 
 **Impact:** Exit plan always covers entire position. No more partial exits.
 
 **Files Changed:**
-- `src/trading/position_manager.py` - Added `_update_exit_plan_after_scale_in()`, integrated into both scale-in fill paths
+- `src/trading/position_manager.py` - Enhanced `_check_scale_in()`, updated check order, added robust status checks.
+- `src/utils/notifications.py` - Added scale-in fill tracking.
+
+---
+
+### 28. Robust Position Detail Sync
+**Description:** Ensure database size and entry price always match actual exchange execution.
+
+**Fix:**
+- Forced a one-time detail sync for all `FILLED` trades to fetch exact size from API.
+- Added self-healing logic to `_check_exit_plan` to detect and fix size mismatches automatically if an order fails with "insufficient balance".
+
+**Impact:** Eliminated "struggling" exit plans caused by minor rounding or partial fill discrepancies.
 
 ---
 
 ## Complete Statistics
 
 ### Lines of Code
-- **Added:** ~1,000+ lines
-- **Modified:** ~500 lines
-- **Total:** ~1,500 lines changed
+- **Added:** ~1,100+ lines
+- **Modified:** ~600 lines
+- **Total:** ~1,700 lines changed
 
 ### Files
 - **Created:** 5 new files
-- **Modified:** 7 existing files
-- **Total:** 12 files changed
+- **Modified:** 8 existing files
+- **Total:** 13 files changed
 
 ### Features
 - **Critical Bugs Fixed:** 5
-- **Features Added:** 22
+- **Features Added:** 23
 - **API Methods Integrated:** 8
-- **UX Improvements:** 5
-- **Total Improvements:** 40+
+- **UX Improvements:** 6
+- **Total Improvements:** 42+
 
 ---
 
