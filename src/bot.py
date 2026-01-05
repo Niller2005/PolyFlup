@@ -72,6 +72,7 @@ from src.trading.position_manager import (
 from src.utils.notifications import process_notifications, init_ws_callbacks
 from src.trading.settlement import check_and_settle_trades
 from src.utils.websocket_manager import ws_manager
+from src.trading.orders import get_bulk_spreads, check_liquidity
 
 
 def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
@@ -338,31 +339,101 @@ def trade_symbol(symbol: str, balance: float):
 
 def trade_symbols_batch(symbols: list, balance: float):
     """Execute trading logic for multiple symbols using batch orders"""
-    # Prepare all trades
+    # 1. Bulk get tokens and check spreads to pre-filter
+    market_tokens = {}
+    all_token_ids = []
+
+    for symbol in symbols:
+        up_id, down_id = get_token_ids(symbol)
+        if up_id and down_id:
+            market_tokens[symbol] = (up_id, down_id)
+            all_token_ids.extend([up_id, down_id])
+
+    # Bulk check spreads
+    spreads = get_bulk_spreads(all_token_ids)
+
+    # Filter symbols where either side has wide spread
+    valid_symbols = []
+    for symbol in symbols:
+        if symbol not in market_tokens:
+            continue
+
+        up_id, down_id = market_tokens[symbol]
+        up_spread = spreads.get(up_id, 1.0)
+        down_spread = spreads.get(down_id, 1.0)
+
+        if up_spread > MAX_SPREAD or down_spread > MAX_SPREAD:
+            log(
+                f"[{symbol}] ⚠️ Spread too wide (UP: {up_spread:.3f}, DOWN: {down_spread:.3f}). SKIPPING."
+            )
+            continue
+        valid_symbols.append(symbol)
+
+    # 2. Prepare trades for remaining symbols
     trade_params_list = []
-    for i, symbol in enumerate(symbols):
+    for i, symbol in enumerate(valid_symbols):
         params = _prepare_trade_params(symbol, balance, add_spacing=False)
         if params:
             trade_params_list.append(params)
 
-        # Add spacing between symbols (but not after the last one)
-        if i < len(symbols) - 1:
+        # Add spacing between symbols
+        if i < len(valid_symbols) - 1:
             log("")
 
     if not trade_params_list:
         return
 
-    # Build batch order list
-    batch_orders = []
-    for params in trade_params_list:
-        batch_orders.append(
-            {
-                "token_id": params["token_id"],
-                "price": params["price"],
-                "size": params["size"],
-                "side": "BUY",  # All initial orders are BUYs
-            }
-        )
+    # 3. Execute batch placement
+    orders = [
+        {
+            "token_id": p["token_id"],
+            "price": p["price"],
+            "size": p["size"],
+            "side": BUY,
+        }
+        for p in trade_params_list
+    ]
+
+    results = place_batch_orders(orders)
+
+    # 4. Save successful trades
+    for i, result in enumerate(results):
+        if i < len(trade_params_list) and result["success"]:
+            p = trade_params_list[i]
+            send_discord(
+                f"**[{p['symbol']}] {p['side']} ${p['bet_usd']:.2f}** | Confidence {p['confidence']:.1%} | Price {p['price']:.4f}"
+            )
+            try:
+                trade_id = save_trade(
+                    symbol=p["symbol"],
+                    window_start=p["window_start"].isoformat(),
+                    window_end=p["window_end"].isoformat(),
+                    slug=p["slug"],
+                    token_id=p["token_id"],
+                    side=p["side"],
+                    edge=p["confidence"],
+                    price=p["price"],
+                    size=p["size"],
+                    bet_usd=p["bet_usd"],
+                    p_yes=p["p_up"],
+                    best_bid=p["best_bid"],
+                    best_ask=p["best_ask"],
+                    imbalance=p["imbalance"],
+                    funding_bias=p["funding_bias"],
+                    order_status=result["status"],
+                    order_id=result["order_id"],
+                    limit_sell_order_id=None,
+                    target_price=p["target_price"],
+                )
+                log(
+                    f"[{p['symbol']}] 🚀 #{trade_id} {p['side']} ${p['bet_usd']:.2f} @ {p['price']:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
+                )
+            except Exception as e:
+                log(f"[{p['symbol']}] Trade completion error: {e}")
+        elif i < len(trade_params_list):
+            log(
+                f"[{trade_params_list[i]['symbol']}] ❌ Batch order failed: {result.get('error')}"
+            )
 
     # Place batch orders
     results = place_batch_orders(batch_orders)

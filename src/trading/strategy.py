@@ -23,6 +23,7 @@ from src.data.market_data import (
     get_cross_exchange_divergence,
     get_volume_weighted_momentum,
     get_current_spot_price,
+    get_polymarket_momentum,
 )
 import requests
 
@@ -110,7 +111,15 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
     vwm_score = vwm["momentum_quality"]
     vwm_dir = "UP" if vwm["vwap_distance"] > 0 else "DOWN"
 
-    # 5. ADX (Trend Strength) - Weight: 0.15
+    # 5. Polymarket Native Momentum - Weight: 0.20 (New confirmed source)
+    pm_mom_score = 0.0
+    pm_mom_dir = "NEUTRAL"
+    pm_momentum = get_polymarket_momentum(up_token)
+    if pm_momentum["direction"] != "NEUTRAL":
+        pm_mom_score = pm_momentum["strength"]
+        pm_mom_dir = pm_momentum["direction"]
+
+    # 6. ADX (Trend Strength) - Weight: 0.15
     adx_score = 0.0
     adx_dir = "NEUTRAL"
     adx_val = 0.0
@@ -120,22 +129,30 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
             # Normalize ADX (25-50 range maps to 0.5-1.0 score)
             adx_score = min(adx_val / 50.0, 1.0)
             # ADX follows the strongest current directional signal
-            adx_dir = momentum_dir if momentum_dir != "NEUTRAL" else divergence_dir
+            adx_dir = (
+                momentum_dir
+                if momentum_dir != "NEUTRAL"
+                else pm_mom_dir
+                if pm_mom_dir != "NEUTRAL"
+                else divergence_dir
+            )
 
     # Aggregate Scores for each direction
     up_total = 0.0
     down_total = 0.0
 
-    # Adjust weights if ADX is disabled
+    # Adjust weights to include PM momentum
     adx_weight = 0.15 if ADX_ENABLED else 0.0
-    mom_weight = 0.30 if ADX_ENABLED else 0.35
-    flow_weight = 0.20 if ADX_ENABLED else 0.25
-    div_weight = 0.25 if ADX_ENABLED else 0.25
-    vwm_weight = 0.10 if ADX_ENABLED else 0.15
+    mom_weight = 0.25 if ADX_ENABLED else 0.30
+    pm_mom_weight = 0.15 if ADX_ENABLED else 0.20
+    flow_weight = 0.15 if ADX_ENABLED else 0.20
+    div_weight = 0.20 if ADX_ENABLED else 0.20
+    vwm_weight = 0.10 if ADX_ENABLED else 0.10
 
     # Apply weights and directions
     for score, direction, weight in [
         (momentum_score, momentum_dir, mom_weight),
+        (pm_mom_score, pm_mom_dir, pm_mom_weight),
         (flow_score, flow_dir, flow_weight),
         (divergence_score, divergence_dir, div_weight),
         (vwm_score, vwm_dir, vwm_weight),
@@ -149,9 +166,14 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
     # Final Decision
     if up_total > down_total:
         bias = "UP"
-        confidence = up_total - (down_total * 0.5)  # Penalty for conflicting signals
+        # Confirmation bonus: if Binance and PM both agree on direction
+        if momentum_dir == pm_mom_dir and momentum_dir == "UP":
+            up_total *= 1.1
+        confidence = up_total - (down_total * 0.5)
     elif down_total > up_total:
         bias = "DOWN"
+        if momentum_dir == pm_mom_dir and momentum_dir == "DOWN":
+            down_total *= 1.1
         confidence = down_total - (up_total * 0.5)
     else:
         bias = "NEUTRAL"
@@ -167,6 +189,7 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
 
     signals = {
         "momentum": momentum,
+        "pm_momentum": pm_momentum,
         "order_flow": order_flow,
         "divergence": divergence,
         "vwm": vwm,

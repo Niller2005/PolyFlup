@@ -322,6 +322,8 @@ Result: Full position covered ✅
 | `_update_exit_plan_after_scale_in()` | Update exit after scale | Cover full position |
 | `check_order_scoring()` | Reward verification | Earn liquidity rewards |
 | `sync_positions_with_exchange()` | Startup sync | Prevent ghost positions |
+| `get_polymarket_momentum()` | Native trend | Better entry accuracy |
+| `get_bulk_spreads()` | Bulk liquidity check | Efficient market filtering |
 
 ---
 

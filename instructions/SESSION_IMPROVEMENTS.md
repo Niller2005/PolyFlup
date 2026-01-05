@@ -25,6 +25,12 @@ This document summarizes all improvements made during the development session.
 - **Reward Optimization:** Added `ENABLE_REWARD_OPTIMIZATION` setting. If enabled, the bot automatically adjusts Exit Plan orders closer to the midpoint (while maintaining profit) to ensure they are "scoring" for rewards.
 - **Visibility:** Added scoring status (✅ SCORING / ❌ NOT SCORING) to monitoring logs.
 
+### 4. Polymarket-Native Momentum (Priority 3)
+**Description:** Enhanced entry strategy confirm directional bias using Polymarket's own price history.
+- **Internal Confirmation:** Added `get_polymarket_momentum` to fetch 1m price history from CLOB.
+- **Signal Correlation:** The strategy now requires both Binance and Polymarket trends to show strength before assigning high confidence.
+- **Reduced Noise:** Filters out Binance volatility that isn't reflected in the prediction market pricing.
+
 ---
 
 ## Critical Bug Fixes (3 items)

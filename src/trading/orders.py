@@ -16,6 +16,7 @@ from py_clob_client.clob_types import (
     OrderScoringParams,
     OrdersScoringParams,
     MarketOrderArgs,
+    BookParams,
 )
 from py_clob_client.order_builder.constants import BUY, SELL
 from dotenv import set_key
@@ -57,7 +58,7 @@ client = ClobClient(
     key=PROXY_PK or "",
     chain_id=CHAIN_ID,
     signature_type=SIGNATURE_TYPE,
-    funder=FUNDER_PROXY or "",
+    funder=FUNDER_PROXY or None,
 )
 
 # Hotfix: ensure client has builder_config attribute
@@ -118,6 +119,34 @@ def get_spread(token_id: str) -> Optional[float]:
         return None
 
 
+def get_bulk_spreads(token_ids: List[str]) -> Dict[str, float]:
+    """Get spreads for multiple tokens in a single call"""
+    if not token_ids:
+        return {}
+    try:
+        params = [BookParams(token_id=tid) for tid in token_ids]
+        resp: Any = client.get_spreads(params)
+        result = {}
+        if isinstance(resp, list):
+            for item in resp:
+                tid = (
+                    item.get("asset_id")
+                    if isinstance(item, dict)
+                    else getattr(item, "asset_id", None)
+                )
+                spread = (
+                    item.get("spread")
+                    if isinstance(item, dict)
+                    else getattr(item, "spread", None)
+                )
+                if tid and spread is not None:
+                    result[tid] = float(spread)
+        return result
+    except Exception as e:
+        log(f"⚠️ Error getting bulk spreads: {e}")
+        return {}
+
+
 def get_server_time() -> Optional[int]:
     """Get current server timestamp"""
     try:
@@ -148,11 +177,11 @@ def get_trades(
 def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
     """Get balance and allowance"""
     try:
+        atype = AssetType.CONDITIONAL if token_id else AssetType.COLLATERAL
         params = cast(
             Any,
             BalanceAllowanceParams(
-                asset_type=AssetType.CONDITIONAL if token_id else AssetType.COLLATERAL,
-                token_id=token_id or "",
+                asset_type=cast(Any, atype), token_id=token_id or ""
             ),
         )
         result: Any = client.get_balance_allowance(params)
@@ -290,7 +319,7 @@ def setup_api_creds() -> None:
             log("✓ API credentials loaded from .env")
             return
         except Exception as e:
-            log(f"⚠ Error loading API creds from .env: {e}")
+            log(f"⚠ Error loading API creds: {e}")
     try:
         creds = client.create_or_derive_api_creds()
         client.set_api_creds(creds)
@@ -424,7 +453,7 @@ def place_limit_order(
         if otype == OrderType.GTD and expiration:
             oa.expiration = expiration
         signed = client.create_order(oa)
-        return client.post_order(signed, otype)
+        return client.post_order(signed, cast(Any, otype))
 
     try:
         resp: Any = _execute_with_retry(_place)
@@ -472,16 +501,13 @@ def place_market_order(
     try:
         _ensure_api_creds(client)
         otype_str = order_type.upper()
-        if otype_str == "FAK":
-            otype = OrderType.FAK
-        else:
-            otype = OrderType.FOK
+        otype = OrderType.FAK if otype_str == "FAK" else OrderType.FOK
 
         if not silent_on_error:
             log(f"   📊 Placing {side} Market Order: {amount} units")
         moa = MarketOrderArgs(token_id=token_id, amount=amount, side=side)
         signed = client.create_market_order(moa)
-        resp: Any = client.post_order(signed, otype)
+        resp: Any = client.post_order(signed, cast(Any, otype))
         status = resp.get("status", "UNKNOWN") if isinstance(resp, dict) else "UNKNOWN"
         oid = resp.get("orderID") if isinstance(resp, dict) else None
         emsg = resp.get("errorMsg", "") if isinstance(resp, dict) else ""
@@ -545,7 +571,9 @@ def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
                 side=op.get("side", BUY),
             )
             signed = client.create_order(oa)
-            batch.append(PostOrdersArgs(order=signed, orderType=OrderType.GTC))
+            batch.append(
+                PostOrdersArgs(order=signed, orderType=cast(Any, OrderType.GTC))
+            )
         responses: Any = client.post_orders(batch)
         for r in responses:
             if isinstance(r, dict):

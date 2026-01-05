@@ -114,6 +114,65 @@ def get_fear_greed() -> int:
         return 50
 
 
+def get_polymarket_momentum(token_id: str, interval: str = "1m") -> dict:
+    """
+    Calculate momentum based on Polymarket's own price history.
+
+    Args:
+        token_id: Token ID to check
+        interval: Time interval (1m, 5m, 1h, 1d)
+
+    Returns:
+        dict with momentum metrics
+    """
+    try:
+        from src.config.settings import CLOB_HOST
+        import requests
+
+        # Hit the price history endpoint directly
+        url = f"{CLOB_HOST}/prices-history"
+        params = {"interval": interval, "token_id": token_id}
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+
+        history = resp.json()
+        if not history or not isinstance(history, list) or len(history) < 5:
+            return {"velocity": 0.0, "direction": "NEUTRAL", "strength": 0.0}
+
+        # Prices are usually in 'price' or 'p' field of history objects
+        prices = []
+        for h in history:
+            p = h.get("p") or h.get("price")
+            if p is not None:
+                prices.append(float(p))
+
+        if len(prices) < 5:
+            return {"velocity": 0.0, "direction": "NEUTRAL", "strength": 0.0}
+
+        current_price = prices[-1]
+        past_price = prices[0]
+
+        velocity = (
+            ((current_price - past_price) / past_price) * 100.0 if past_price > 0 else 0
+        )
+        # More sensitive than Binance because PM moves are smaller increments
+        direction = (
+            "UP" if velocity > 0.005 else "DOWN" if velocity < -0.005 else "NEUTRAL"
+        )
+        strength = min(abs(velocity) * 20, 1.0)  # 0.05% move = 1.0 strength
+
+        return {
+            "velocity": velocity,
+            "direction": direction,
+            "strength": strength,
+            "last_price": current_price,
+        }
+
+    except Exception as e:
+        log(f"⚠️ Error getting Polymarket momentum for {token_id[:10]}...: {e}")
+        return {"velocity": 0.0, "direction": "NEUTRAL", "strength": 0.0}
+
+
 def get_window_start_price(symbol: str) -> float:
     """
     Get the spot price at the ACTUAL START of the current 15-minute window.
