@@ -92,8 +92,15 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
             if row:
                 trade_id, symbol, trade_side, size = row
-                log(f"🎯 [{symbol}] Exit filled: #{trade_id}")
-                # Position manager will handle settlement
+                log(
+                    f"🎯 [{symbol}] Exit filled: #{trade_id} - will be settled on next position check"
+                )
+                # Mark order status so position manager knows to check it
+                c.execute(
+                    "UPDATE trades SET order_status = 'EXIT_PLAN_PENDING_SETTLEMENT' WHERE id = ?",
+                    (trade_id,),
+                )
+                # Position manager will handle full settlement with P&L calculation
                 return  # Found and logged, done
 
             # Don't log scale-in fills - position manager already logs them

@@ -1,6 +1,7 @@
 """Position monitoring and management"""
 
 import time
+import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Optional, Any
@@ -50,6 +51,10 @@ from src.data.market_data import (
     get_current_spot_price,
 )
 from src.data.database import save_trade
+
+
+# Threading lock to prevent concurrent position checks (prevents database locks)
+_position_check_lock = threading.Lock()
 
 
 def get_exit_plan_stats():
@@ -449,6 +454,10 @@ def _check_exit_plan(
     conn: Any,
     now: datetime,
     verbose: bool = False,
+    side: str = "",
+    pnl_pct: float = 0.0,
+    price_change_pct: float = 0.0,
+    scaled_in: bool = False,
 ) -> None:
     """Check and manage exit plan limit orders"""
     # CRITICAL FIX: MATCHED orders are filled and ready to sell
@@ -515,11 +524,25 @@ def _check_exit_plan(
                     f"[{symbol}] ⚠️ EXIT PLAN: Failed to place limit sell at {EXIT_PRICE_TARGET}: {error_msg} (will retry next cycle)"
                 )
     elif limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60:
-        # Only log monitoring message on verbose cycles (every 60s)
-        if verbose:
-            log(
-                f"[{symbol}] ⏰ EXIT PLAN: Position age {position_age_seconds:.0f}s - monitoring limit sell order {limit_sell_order_id}"
-            )
+        # Exit plan status will be shown in combined position log (verbose cycle)
+        pass
+
+    # Log combined position status on verbose cycles
+    if verbose and side:  # Only if we have position data
+        emoji = "📈" if pnl_pct > 0 else "📉"
+        status_parts = [
+            f"{emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}%"
+        ]
+
+        # Add scale-in indicator if position was scaled
+        if scaled_in:
+            status_parts.append("📊 Scaled in")
+
+        # Add exit plan status if active
+        if limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60:
+            status_parts.append(f"⏰ Exit plan active ({position_age_seconds:.0f}s)")
+
+        log("  " + " | ".join(status_parts))
 
 
 def _check_scale_in(
@@ -811,21 +834,26 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         verbose: If True, log position checks. If False, only log actions (stop loss, etc.)
         check_orders: If True, check status of limit sell orders
     """
-    if not any(
-        [
-            ENABLE_STOP_LOSS,
-            ENABLE_TAKE_PROFIT,
-            ENABLE_SCALE_IN,
-            ENABLE_REVERSAL,
-            ENABLE_EXIT_PLAN,
-            CANCEL_UNFILLED_ORDERS,
-        ]
-    ):
-        if not check_orders:
-            return
+    # Use lock to prevent concurrent checks (prevents "database is locked" errors)
+    if not _position_check_lock.acquire(blocking=False):
+        return  # Another check is already running, skip this one
 
-    with db_connection() as conn:
-        c = conn.cursor()
+    try:
+        if not any(
+            [
+                ENABLE_STOP_LOSS,
+                ENABLE_TAKE_PROFIT,
+                ENABLE_SCALE_IN,
+                ENABLE_REVERSAL,
+                ENABLE_EXIT_PLAN,
+                CANCEL_UNFILLED_ORDERS,
+            ]
+        ):
+            if not check_orders:
+                return
+
+        with db_connection() as conn:
+            c = conn.cursor()
         now = datetime.now(tz=ZoneInfo("UTC"))
 
         # Get unsettled trades that are still in their window
@@ -995,12 +1023,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                 pnl_usd = pnl_info["pnl_usd"]
                 price_change_pct = pnl_info["price_change_pct"]
 
-                if verbose:
-                    # Add emoji based on P&L direction
-                    emoji = "📈" if pnl_pct > 0 else "📉"
-                    log(
-                        f"  {emoji} [{symbol}] Trade #{trade_id} {side}: Entry=${entry_price:.4f} Current=${current_price:.4f} PnL={price_change_pct:+.1f}%"
-                    )
+                # Will log combined status after exit plan check
 
                 # ============================================================
                 # PRIORITY #1: STOP LOSS (checked FIRST, before everything else)
@@ -1061,6 +1084,10 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     conn=conn,
                     now=now,
                     verbose=verbose,
+                    side=side,
+                    pnl_pct=pnl_pct,
+                    price_change_pct=price_change_pct,
+                    scaled_in=scaled_in,
                 )
 
                 # Re-fetch again after _check_exit_plan in case it was updated
@@ -1289,3 +1316,6 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
             except Exception as e:
                 log(f"⚠️ Error checking position #{trade_id}: {e}")
+
+    finally:
+        _position_check_lock.release()
