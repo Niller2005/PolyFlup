@@ -464,6 +464,18 @@ def _check_exit_plan(
         and position_age_seconds >= EXIT_MIN_POSITION_AGE
         and position_age_seconds > 60
     ):
+        # CRITICAL FIX: Check if we actually have the tokens before placing exit plan
+        # Prevents duplicate orders from repeated placement attempts
+        balance_info = get_balance_allowance(token_id)
+        if balance_info:
+            actual_balance = balance_info.get("balance", 0)
+            if actual_balance < size:
+                if verbose:
+                    log(
+                        f"[{symbol}] ⏳ EXIT PLAN: Tokens not yet available (have {actual_balance:.2f}, need {size:.2f}) - will retry next cycle"
+                    )
+                return  # Don't try to place order if we don't have the tokens
+
         log(
             f"[{symbol}] 📉 EXIT PLAN: Placing limit sell order at {EXIT_PRICE_TARGET} for {size} units (position age: {position_age_seconds:.0f}s, min age: {EXIT_MIN_POSITION_AGE}s)"
         )
