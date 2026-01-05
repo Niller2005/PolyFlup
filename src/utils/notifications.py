@@ -80,7 +80,7 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
                     (trade_id,),
                 )
-                conn.commit()
+                # Context manager handles commit automatically
                 return  # Found and logged, done
 
             # Check if this is a limit sell order (exit plan)
