@@ -78,12 +78,14 @@ def sync_positions_with_exchange(user_address: str):
         exchange_positions = get_current_positions(user_address)
 
         # Create a map of token_id -> position_data for easy lookup
-        # ENSURE token_id is handled as a string for consistent comparison
+        # ENSURE token_id is handled as a normalized string for consistent comparison
         pos_map = {}
         for p in exchange_positions:
-            aid = p.get("assetId")
+            aid = p.get("asset_id") or p.get("assetId") or p.get("token_id")
             if aid:
-                pos_map[str(aid)] = p
+                # Normalize ID: strip and lowercase
+                norm_aid = str(aid).strip().lower()
+                pos_map[norm_aid] = p
 
         with db_connection() as conn:
             c = conn.cursor()
@@ -95,16 +97,22 @@ def sync_positions_with_exchange(user_address: str):
             )
             db_trades = c.fetchall()
 
+            # Track which exchange positions were matched to DB trades
+            matched_exchange_ids = set()
             db_token_ids = []
 
             for trade_id, symbol, side, db_size, token_id, db_entry in db_trades:
-                tid_str = str(token_id)
+                # Normalize DB token_id
+                tid_str = str(token_id).strip().lower() if token_id else ""
                 db_token_ids.append(tid_str)
-
-                if tid_str in pos_map:
+                
+                if tid_str and tid_str in pos_map:
                     pos = pos_map[tid_str]
+                    matched_exchange_ids.add(tid_str)
+                    
+                    # Data API uses snake_case: avg_price
                     actual_size = float(pos.get("size", 0))
-                    actual_price = float(pos.get("avgPrice", db_entry))
+                    actual_price = float(pos.get("avg_price") or pos.get("avgPrice") or db_entry)
 
                     # Check for significant size mismatch
                     if abs(actual_size - db_size) > 0.001:
@@ -130,8 +138,11 @@ def sync_positions_with_exchange(user_address: str):
                     c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
                     ts_row = c.fetchone()
                     if ts_row:
-                        trade_ts = datetime.fromisoformat(ts_row[0])
-                        age_mins = (now - trade_ts).total_seconds() / 60.0
+                        try:
+                            trade_ts = datetime.fromisoformat(ts_row[0])
+                            age_mins = (now - trade_ts).total_seconds() / 60.0
+                        except:
+                            age_mins = 999
 
                         if age_mins > 2.0:
                             log(
@@ -143,8 +154,8 @@ def sync_positions_with_exchange(user_address: str):
                             )
 
             # 3. Check for untracked positions
-            for t_id, p_data in pos_map.items():
-                t_id_str = str(t_id)
+            for t_id_raw, p_data in pos_map.items():
+                t_id_str = str(t_id_raw).strip().lower()
                 if t_id_str and t_id_str not in db_token_ids:
                     size = float(p_data.get("size", 0))
                     if size < 0.001:
@@ -153,8 +164,8 @@ def sync_positions_with_exchange(user_address: str):
                     log(f"   ⚠️ Found UNTRACKED position: {size} shares of {t_id_str[:10]}...")
                     
                     try:
-                        avg_price = float(p_data.get("avgPrice", 0.5))
-                        symbol = p_data.get("symbol", "ADOPTED")
+                        avg_price = float(p_data.get("avg_price") or p_data.get("avgPrice") or 0.5)
+                        symbol = p_data.get("symbol") or p_data.get("market") or "ADOPTED"
                         
                         log(f"   📥 Adopting untracked position: {symbol} {size} shares @ ${avg_price}")
                         
@@ -253,13 +264,16 @@ def recover_open_positions():
     log("=" * 90)
     tokens_to_subscribe = []
     for t_id, sym, side, entry, size, bet, w_end, status, ts, tok in open_positions:
-        w_end_dt = datetime.fromisoformat(w_end)
-        t_left = (w_end_dt - now).total_seconds() / 60.0
-        log(
-            f"  [{sym}] Trade #{t_id} {side}: ${bet:.2f} @ ${entry:.4f} | Status: {status} | {t_left:.0f}m left"
-        )
-        if tok:
-            tokens_to_subscribe.append(tok)
+        try:
+            w_end_dt = datetime.fromisoformat(w_end)
+            t_left = (w_end_dt - now).total_seconds() / 60.0
+            log(
+                f"  [{sym}] Trade #{t_id} {side}: ${bet:.2f} @ ${entry:.4f} | Status: {status} | {t_left:.0f}m left"
+            )
+            if tok:
+                tokens_to_subscribe.append(tok)
+        except Exception as e:
+            log(f"  ❌ Error recovering trade #{t_id}: {e}")
     if tokens_to_subscribe:
         ws_manager.subscribe_to_prices(tokens_to_subscribe)
     log("=" * 90)
@@ -331,8 +345,11 @@ def _check_stop_loss(
         return False
     c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
     if row := c.fetchone():
-        if (now - datetime.fromisoformat(row[0])).total_seconds() < 30:
-            return False
+        try:
+            if (now - datetime.fromisoformat(row[0])).total_seconds() < 30:
+                return False
+        except:
+            pass
 
     current_spot = get_current_spot_price(symbol)
     is_on_losing_side = True
@@ -471,7 +488,10 @@ def _check_exit_plan(
 ):
     if not ENABLE_EXIT_PLAN or buy_status not in ["FILLED", "MATCHED"] or size == 0:
         return
-    age = (now - datetime.fromisoformat(ts)).total_seconds()
+    try:
+        age = (now - datetime.fromisoformat(ts)).total_seconds()
+    except:
+        age = 0
     last_att = _last_exit_attempt.get(trade_id, 0)
     on_cd = now.timestamp() - last_att < 30
 
@@ -490,12 +510,14 @@ def _check_exit_plan(
                 o_side = o.get("side") if isinstance(o, dict) else getattr(o, "side", "")
                 if o_side == "SELL":
                     oid = o.get("id") if isinstance(o, dict) else getattr(o, "id", "")
-                    log(f"   📥 [{symbol}] Found existing exit order on exchange: {oid[:10]}... Adopting.")
-                    c.execute(
-                        "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
-                        (oid, trade_id),
-                    )
-                    return
+                    if oid:
+                        oid_str = str(oid)
+                        log(f"   📥 [{symbol}] Found existing exit order on exchange: {oid_str[:10]}... Adopting.")
+                        c.execute(
+                            "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                            (oid_str, trade_id),
+                        )
+                        return
         except Exception as e:
             if verbose:
                 log(f"   ⚠️ [{symbol}] Error checking existing orders: {e}")
@@ -538,7 +560,24 @@ def _check_exit_plan(
 
     if verbose and side:
         scoring_text = ""
-        # ...
+        if limit_sell_id:
+            is_scoring = check_order_scoring(limit_sell_id)
+            scoring_text = " | ✅ SCORING" if is_scoring else " | ❌ NOT SCORING"
+            if not is_scoring and ENABLE_REWARD_OPTIMIZATION and current_price > 0.90:
+                opt_price = round(current_price + 0.01, 2)
+                if opt_price < EXIT_PRICE_TARGET and opt_price >= 0.95:
+                    _update_exit_plan_to_new_price(
+                        symbol,
+                        trade_id,
+                        token_id,
+                        size,
+                        limit_sell_id,
+                        opt_price,
+                        c,
+                        conn,
+                    )
+                    scoring_text = " | 🔄 OPTIMIZING"
+
         status = f"Trade #{trade_id} {side} PnL={price_change_pct:+.1f}%"
         if scaled_in:
             status += " | 📊 Scaled in"
@@ -550,7 +589,6 @@ def _check_exit_plan(
                 wait_text = f" (Waiting {EXIT_MIN_POSITION_AGE - age:.0f}s)"
             status += f" | ⏳ Exit pending ({age:.0f}s){wait_text}"
         log(f"  {'📈' if pnl_pct > 0 else '📉'} [{symbol}] {status}")
-
 
 
 def _check_scale_in(
@@ -584,7 +622,8 @@ def _check_scale_in(
                         "SELECT limit_sell_order_id FROM trades WHERE id = ?",
                         (trade_id,),
                     )
-                    l_sell_id = (c.fetchone() or [None])[0]
+                    ls_row = c.fetchone()
+                    l_sell_id = ls_row[0] if ls_row else None
                     c.execute(
                         "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
                         (new_size, new_bet, new_bet / new_size, trade_id),
@@ -683,7 +722,8 @@ def check_open_positions(verbose=True, check_orders=False):
             ) in open_positions:
                 try:
                     c.execute("SELECT settled FROM trades WHERE id = ?", (tid,))
-                    if (row := c.fetchone()) and row[0] == 1:
+                    chk_res = c.fetchone()
+                    if chk_res and chk_res[0] == 1:
                         continue
                     curr_b_status = b_status
                     if b_id and (b_status != "FILLED" or entry == 0):
@@ -719,19 +759,19 @@ def check_open_positions(verbose=True, check_orders=False):
                         ]:
                             ex_p = float(o_data.get("price", EXIT_PRICE_TARGET))
                             sz_m = float(o_data.get("size_matched", size))
-                            pnl = (ex_p * sz_m) - bet
-                            roi = (pnl / bet) * 100 if bet > 0 else 0
-                            log(f"💰 [{sym}] #{tid} {side}: {pnl:+.2f}$ ({roi:+.1f}%)")
+                            pnl_val_f = (ex_p * sz_m) - bet
+                            roi_val_f = (pnl_val_f / bet) * 100 if bet > 0 else 0
+                            log(f"💰 [{sym}] #{tid} {side}: {pnl_val_f:+.2f}$ ({roi_val_f:+.1f}%)")
                             c.execute(
                                 "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, settled_at=? WHERE id=?",
-                                (ex_p, pnl, roi, now.isoformat(), tid),
+                                (ex_p, pnl_val_f, roi_val_f, now.isoformat(), tid),
                             )
                             continue
 
                     pnl_i = _get_position_pnl(tok, entry, size, cached_prices)
                     if not pnl_i:
                         continue
-                    cur_p, p_pct, p_usd, p_chg = (
+                    cur_p, p_pct_val, p_usd_val, p_chg_val = (
                         pnl_i["current_price"],
                         pnl_i["pnl_pct"],
                         pnl_i["pnl_usd"],
@@ -744,8 +784,8 @@ def check_open_positions(verbose=True, check_orders=False):
                         side,
                         entry,
                         size,
-                        p_pct,
-                        p_usd,
+                        p_pct_val,
+                        p_usd_val,
                         cur_p,
                         target,
                         l_sell,
@@ -757,12 +797,16 @@ def check_open_positions(verbose=True, check_orders=False):
                     ):
                         continue
 
-                    w_dt = (
-                        datetime.fromisoformat(w_end)
-                        if isinstance(w_end, str)
-                        else w_end
-                    )
-                    t_left = (w_dt - now).total_seconds()
+                    try:
+                        w_dt = (
+                            datetime.fromisoformat(w_end)
+                            if isinstance(w_end, str)
+                            else w_end
+                        )
+                        t_left = (w_dt - now).total_seconds()
+                    except:
+                        t_left = 0
+
                     _check_scale_in(
                         sym,
                         tid,
@@ -778,7 +822,7 @@ def check_open_positions(verbose=True, check_orders=False):
                         c,
                         conn,
                         side,
-                        p_chg,
+                        p_chg_val,
                     )
 
                     # Refresh data after scale-in check
@@ -786,7 +830,9 @@ def check_open_positions(verbose=True, check_orders=False):
                         "SELECT size, entry_price, bet_usd, scaled_in, limit_sell_order_id, scale_in_order_id FROM trades WHERE id = ?",
                         (tid,),
                     )
-                    size, entry, bet, sc_in, l_sell, sc_id = c.fetchone()
+                    row_data_f = c.fetchone()
+                    if row_data_f:
+                        size, entry, bet, sc_in, l_sell, sc_id = row_data_f
 
                     _check_exit_plan(
                         sym,
@@ -801,8 +847,8 @@ def check_open_positions(verbose=True, check_orders=False):
                         now,
                         verbose,
                         side,
-                        p_pct,
-                        p_chg,
+                        p_pct_val,
+                        p_chg_val,
                         sc_in,
                         sc_id,
                         entry,
