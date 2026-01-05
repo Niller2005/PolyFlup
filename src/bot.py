@@ -10,6 +10,7 @@ from src.config.settings import (
     PROXY_PK,
     FUNDER_PROXY,
     MIN_EDGE,
+    CONTRARIAN_THRESHOLD,
     MAX_SPREAD,
     WINDOW_DELAY_SEC,
     MAX_ENTRY_LATENESS_SEC,
@@ -79,13 +80,27 @@ from src.utils.websocket_manager import ws_manager
 
 
 def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
-    """Determine actual trading side and confidence for sizing"""
-    if confidence >= 0.2:
+    """
+    Determine actual trading side and confidence for sizing.
+    Tiered logic: 
+    - High Confidence: Follow Trend
+    - Low Confidence: Contrarian (expect flip)
+    - Medium: Wait (Neutral)
+    """
+    from src.config.settings import MIN_EDGE, CONTRARIAN_THRESHOLD
+    
+    if confidence >= MIN_EDGE:
+        # Strong trend confirmed
         actual_side = bias
         sizing_confidence = confidence
-    else:
+    elif confidence <= CONTRARIAN_THRESHOLD:
+        # Very low confidence - high chance of side flipping (Contrarian)
         actual_side = "DOWN" if bias == "UP" else "UP"
-        sizing_confidence = 0.2
+        sizing_confidence = 0.25 # Fixed lower sizing for contrarian plays
+    else:
+        # "No man's land" - wait for higher confidence or clear flip
+        actual_side = "NEUTRAL"
+        sizing_confidence = 0.0
 
     return actual_side, sizing_confidence
 
@@ -173,11 +188,17 @@ def _prepare_trade_params(
 
     actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
 
-    if confidence >= 0.2:
+    if actual_side == "NEUTRAL":
+        log(f"[{symbol}] ⏳ Monitoring: Confidence {confidence:.1%} is in 'Wait Zone' ({CONTRARIAN_THRESHOLD} < x < {MIN_EDGE})")
+        if add_spacing:
+            log("")
+        return
+
+    if actual_side == bias:
         log(f"[{symbol}] ✅ Trend Following: {bias} (Confidence: {confidence:.1%})")
     else:
         log(
-            f"[{symbol}] 🔄 Contrarian Entry: {actual_side} (Original Bias: {bias} @ {confidence:.1%})"
+            f"[{symbol}] 🔄 Contrarian Entry: {actual_side} (Bias flipping from {bias} @ {confidence:.1%})"
         )
 
     if actual_side == "UP":
