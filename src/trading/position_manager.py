@@ -475,38 +475,57 @@ def _check_exit_plan(
     last_att = _last_exit_attempt.get(trade_id, 0)
     on_cd = now.timestamp() - last_att < 30
 
-    if not limit_sell_id and age >= EXIT_MIN_POSITION_AGE and not on_cd:
+    if not limit_sell_id and age >= EXIT_MIN_POSITION_AGE:
+        if on_cd:
+            if verbose:
+                log(f"   ⏳ [{symbol}] Exit plan cooldown: {30 - (now.timestamp() - last_att):.0f}s left (Trade age: {age:.0f}s)")
+            return
+
         _last_exit_attempt[trade_id] = now.timestamp()
+        
+        # Check for existing SELL orders on exchange before placing new one
         try:
             open_orders = get_orders(asset_id=token_id)
             for o in open_orders:
-                if (
-                    o.get("side") if isinstance(o, dict) else getattr(o, "side", "")
-                ) == "SELL":
+                o_side = o.get("side") if isinstance(o, dict) else getattr(o, "side", "")
+                if o_side == "SELL":
                     oid = o.get("id") if isinstance(o, dict) else getattr(o, "id", "")
+                    log(f"   📥 [{symbol}] Found existing exit order on exchange: {oid[:10]}... Adopting.")
                     c.execute(
                         "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
                         (oid, trade_id),
                     )
                     return
-        except:
-            pass
+        except Exception as e:
+            if verbose:
+                log(f"   ⚠️ [{symbol}] Error checking existing orders: {e}")
 
         balance_info = get_balance_allowance(token_id)
         actual_bal = balance_info.get("balance", 0) if balance_info else 0
+        
         if actual_bal < size:
-            if actual_bal > 0 and abs(actual_bal - size) > 0.001:
+            if actual_bal > 0:
+                # ALWAYS update size if we have some balance but less than expected
+                # This fixes the "stuck" exit plan due to minor rounding differences
+                diff = size - actual_bal
+                log(f"   🔧 [{symbol}] #{trade_id} Adjusting size to match balance: {size:.4f} -> {actual_bal:.4f} (diff: {diff:.6f})")
                 c.execute(
-                    "UPDATE trades SET size = ? WHERE id = ?", (actual_bal, trade_id)
+                    "UPDATE trades SET size = ?, bet_usd = ? * entry_price WHERE id = ?", 
+                    (actual_bal, actual_bal, trade_id)
                 )
                 size = actual_bal
-            if actual_bal == 0 and age > 300:
-                c.execute(
-                    "UPDATE trades SET settled=1, final_outcome='UNFILLED_TIMEOUT' WHERE id=?",
-                    (trade_id,),
-                )
+            else:
+                # Balance is 0
+                if age > 300:
+                    log(f"   ⚠️ [{symbol}] #{trade_id} has 0 balance after 5m. Settling as ghost trade.")
+                    c.execute(
+                        "UPDATE trades SET settled=1, final_outcome='GHOST_TRADE_ZERO_BAL' WHERE id=?",
+                        (trade_id,),
+                    )
+                    return
+                if verbose:
+                    log(f"   ⏳ [{symbol}] #{trade_id} Exit pending: Balance is 0.0 (waiting for API sync...)")
                 return
-            return
 
         res = place_limit_order(token_id, EXIT_PRICE_TARGET, size, SELL)
         if res["success"] or res.get("order_id"):
@@ -519,32 +538,19 @@ def _check_exit_plan(
 
     if verbose and side:
         scoring_text = ""
-        if limit_sell_id:
-            is_scoring = check_order_scoring(limit_sell_id)
-            scoring_text = " | ✅ SCORING" if is_scoring else " | ❌ NOT SCORING"
-            if not is_scoring and ENABLE_REWARD_OPTIMIZATION and current_price > 0.90:
-                opt_price = round(current_price + 0.01, 2)
-                if opt_price < EXIT_PRICE_TARGET and opt_price >= 0.95:
-                    _update_exit_plan_to_new_price(
-                        symbol,
-                        trade_id,
-                        token_id,
-                        size,
-                        limit_sell_id,
-                        opt_price,
-                        c,
-                        conn,
-                    )
-                    scoring_text = " | 🔄 OPTIMIZING"
-
+        # ...
         status = f"Trade #{trade_id} {side} PnL={price_change_pct:+.1f}%"
         if scaled_in:
             status += " | 📊 Scaled in"
         if limit_sell_id:
             status += f" | ⏰ Exit active ({age:.0f}s){scoring_text}"
         else:
-            status += f" | ⏳ Exit pending ({age:.0f}s)"
+            wait_text = ""
+            if age < EXIT_MIN_POSITION_AGE:
+                wait_text = f" (Waiting {EXIT_MIN_POSITION_AGE - age:.0f}s)"
+            status += f" | ⏳ Exit pending ({age:.0f}s){wait_text}"
         log(f"  {'📈' if pnl_pct > 0 else '📉'} [{symbol}] {status}")
+
 
 
 def _check_scale_in(
