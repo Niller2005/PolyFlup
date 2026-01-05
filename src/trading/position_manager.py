@@ -308,7 +308,27 @@ def _check_stop_loss(
                 position_age = (now - trade_timestamp).total_seconds()
 
                 if position_age > 60:
-                    # Position is old but still can't sell - likely order never truly filled
+                    # CRITICAL: Check actual balance before assuming it's zero
+                    # This handles cases where Polymarket reports insufficient balance
+                    # because the size is slightly off or tokens haven't settled.
+                    balance_info = get_balance_allowance(token_id)
+                    actual_balance = (
+                        balance_info.get("balance", 0) if balance_info else 0
+                    )
+
+                    if actual_balance >= 1.0:
+                        log(
+                            f"⚠️ [{symbol}] Trade #{trade_id}: Sell failed with balance error, but found {actual_balance:.2f} shares. Updating size and retrying next cycle."
+                        )
+                        # Update size and bet_usd in DB so next attempt uses correct amount
+                        new_bet_usd = entry_price * actual_balance
+                        c.execute(
+                            "UPDATE trades SET size = ?, bet_usd = ? WHERE id = ?",
+                            (actual_balance, new_bet_usd, trade_id),
+                        )
+                        return False  # Keep monitoring, don't settle
+
+                    # Position is old and balance is truly zero/minimal - mark as unfilled
                     log(
                         f"⚠️ [{symbol}] Trade #{trade_id}: Can't sell after {position_age:.0f}s - marking as unfilled/cancelled"
                     )
@@ -849,7 +869,27 @@ def _check_take_profit(
                 position_age = (now - trade_timestamp).total_seconds()
 
                 if position_age > 60:
-                    # Position is old but still can't sell - likely order never truly filled
+                    # CRITICAL: Check actual balance before assuming it's zero
+                    # This handles cases where Polymarket reports insufficient balance
+                    # because the size is slightly off or tokens haven't settled.
+                    balance_info = get_balance_allowance(token_id)
+                    actual_balance = (
+                        balance_info.get("balance", 0) if balance_info else 0
+                    )
+
+                    if actual_balance >= 1.0:
+                        log(
+                            f"⚠️ [{symbol}] Trade #{trade_id}: Sell failed with balance error, but found {actual_balance:.2f} shares. Updating size and retrying next cycle."
+                        )
+                        # Update size and bet_usd in DB so next attempt uses correct amount
+                        new_bet_usd = entry_price * actual_balance
+                        c.execute(
+                            "UPDATE trades SET size = ?, bet_usd = ? WHERE id = ?",
+                            (actual_balance, new_bet_usd, trade_id),
+                        )
+                        return False  # Keep monitoring, don't settle
+
+                    # Position is old and balance is truly zero/minimal - mark as unfilled
                     log(
                         f"⚠️ [{symbol}] Trade #{trade_id}: Can't sell after {position_age:.0f}s - marking as unfilled/cancelled"
                     )
@@ -961,6 +1001,38 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         current_buy_status = get_order_status(buy_order_id)
 
                         if current_buy_status in ["FILLED", "MATCHED"]:
+                            # Get actual filled size if possible
+                            actual_size = size
+                            try:
+                                order_data = get_order(buy_order_id)
+                                if order_data:
+                                    actual_size = float(
+                                        order_data.get("size_matched", size)
+                                    )
+                                    fill_price = float(
+                                        order_data.get("price", entry_price)
+                                    )
+
+                                    # Only update if significantly different to avoid rounding noise
+                                    if (
+                                        abs(actual_size - size) > 0.001
+                                        and actual_size > 0
+                                    ) or abs(fill_price - entry_price) > 0.0001:
+                                        size = actual_size
+                                        entry_price = fill_price
+                                        bet_usd = entry_price * size
+                                        log(
+                                            f"📊 [{symbol}] #{trade_id} Updated: size={size:.2f}, price={entry_price:.4f}"
+                                        )
+                                        c.execute(
+                                            "UPDATE trades SET size = ?, entry_price = ?, bet_usd = ? WHERE id = ?",
+                                            (size, entry_price, bet_usd, trade_id),
+                                        )
+                            except Exception as e:
+                                log(
+                                    f"⚠️ Error updating matched data for #{trade_id}: {e}"
+                                )
+
                             log(
                                 f"✅ [{symbol}] #{trade_id} BUY order has been {current_buy_status}"
                             )
@@ -1028,7 +1100,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                         )
 
                                         log(
-                                            f"💰 [{symbol}] #{trade_id} {side}: {exit_pnl_usd:+.2f}$ ({exit_roi_pct:+.1f}%) | Settled"
+                                            f"💰 [{symbol}] #{trade_id} {side}: {exit_pnl_usd:+.2f}$ ({exit_roi_pct:+.1f}%)"
                                         )
 
                                         c.execute(

@@ -146,16 +146,19 @@ docker compose down
 
 **Logging Best Practices:**
 - Always start log lines with relevant emojis and include the symbol and trade ID in brackets: `EMOJI [SYMBOL] #ID message`
-- For trade settlements and exit plans, place the symbol and trade ID at the beginning of the message for quick scanning
+- For trade actions (Scale-in, Exit Plan, etc.), prepend the current position summary: `  EMOJI [SYMBOL] Trade #ID SIDE PnL% | Action message`
+- Use dynamic emojis (📈/📉) based on current PnL in log prefixes
 - Only log position details on verbose cycles (60s) and only when P&L is significant (>20% or <-30%)
 - Don't log routine order status checks (LIVE, DELAYED, UNMATCHED) unless there's an issue
-- Consolidate related information into single log lines
+- Consolidate related information into single log lines (e.g., add `📋 Scale-in pending` or `📊 Scaled in` to status summary)
 - Use emojis consistently to make log scanning effortless
 
-**Exit & Settlement Log Examples:**
+**Action & Settlement Log Examples:**
 ```text
+  📈 [XRP] Trade #154 UP PnL=+71.1% | 📈 SCALE IN triggered: price=$0.78, 119s left
+  📈 [XRP] Trade #154 UP PnL=+71.1% | ✅ SCALE IN order placed: 28.92 shares @ $0.78 (status: live)
 🎯 [BTC] EXIT PLAN SUCCESS: Trade #143 MATCHED at 0.99! (matched 30.58 shares)
-💰 [BTC] #143 UP: +4.89$ (+19.2%) | Settled
+💰 [BTC] #143 UP: +4.89$ (+19.2%)
 ```
 
 

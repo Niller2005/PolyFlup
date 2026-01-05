@@ -138,7 +138,7 @@ def check_and_settle_trades():
 
                 emoji = "💰" if pnl_usd > 0 else "💀"
                 log(
-                    f"{emoji} [{symbol}] #{trade_id} {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%) | Settled"
+                    f"{emoji} [{symbol}] #{trade_id} {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%)"
                 )
                 total_pnl += pnl_usd
                 settled_count += 1
