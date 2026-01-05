@@ -73,7 +73,11 @@ def _check_stop_loss(
         log(f"ℹ️ [{symbol}] PnL is bad ({pnl_pct:.1f}%) but on WINNING side - HOLDING")
         return False
 
-    log(f"🛑 [{symbol}] #{trade_id} STOP LOSS: {pnl_pct:.1f}% PnL")
+    outcome = 'STOP_LOSS'
+    if is_reversal:
+        outcome = 'REVERSAL_STOP_LOSS'
+
+    log(f"🛑 [{symbol}] #{trade_id} {outcome}: {pnl_pct:.1f}% PnL")
     if limit_sell_order_id:
         if cancel_order(limit_sell_order_id):
             time.sleep(2)
@@ -98,10 +102,10 @@ def _check_stop_loss(
         return False
 
     c.execute(
-        "UPDATE trades SET exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, final_outcome='STOP_LOSS', settled=1, settled_at=? WHERE id=?",
-        (current_price, pnl_usd, pnl_pct, now.isoformat(), trade_id),
+        "UPDATE trades SET exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, final_outcome=?, settled=1, settled_at=? WHERE id=?",
+        (current_price, pnl_usd, pnl_pct, outcome, now.isoformat(), trade_id),
     )
-    send_discord(f"🛑 STOP LOSS [{symbol}] {side} closed at {pnl_pct:+.1f}%")
+    send_discord(f"🛑 {outcome} [{symbol}] {side} closed at {pnl_pct:+.1f}%")
 
     # REVERSAL LOGIC
     if not is_reversal and ENABLE_REVERSAL:
