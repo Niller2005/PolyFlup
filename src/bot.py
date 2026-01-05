@@ -1,7 +1,7 @@
 """Main bot loop"""
 
 import time
-from typing import Optional
+from typing import Optional, List, Tuple
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from eth_account import Account
@@ -32,7 +32,6 @@ from src.config.settings import (
     ENABLE_DIVERGENCE,
     ENABLE_VWM,
     ENABLE_BFXD,
-    BET_PERCENT,
 )
 
 from src.utils.logger import log, send_discord
@@ -62,6 +61,11 @@ from src.trading.orders import (
     place_order,
     place_batch_orders,
     get_clob_client,
+    get_bulk_spreads,
+    get_spread,
+    check_liquidity,
+    BUY,
+    SELL,
 )
 from src.trading.position_manager import (
     check_open_positions,
@@ -72,7 +76,6 @@ from src.trading.position_manager import (
 from src.utils.notifications import process_notifications, init_ws_callbacks
 from src.trading.settlement import check_and_settle_trades
 from src.utils.websocket_manager import ws_manager
-from src.trading.orders import get_bulk_spreads, get_spread, check_liquidity, BUY, SELL
 
 
 def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
@@ -286,12 +289,15 @@ def _prepare_trade_params(
     }
 
 
-def trade_symbol(symbol: str, balance: float):
-    """Execute trading logic for a symbol (single order)"""
+def trade_symbol(symbol: str, balance: float) -> int:
+    """
+    Execute trading logic for a symbol (single order)
+    Returns the number of successful trades placed (0 or 1).
+    """
     trade_params = _prepare_trade_params(symbol, balance, add_spacing=True)
 
     if not trade_params:
-        return
+        return 0
 
     # Place order
     result = place_order(
@@ -301,7 +307,7 @@ def trade_symbol(symbol: str, balance: float):
     # Only proceed if order was successful
     if not result["success"]:
         log(f"[{trade_params['symbol']}] ❌ Order failed, skipping trade tracking")
-        return
+        return 0
 
     send_discord(
         f"**[{trade_params['symbol']}] {trade_params['side']} ${trade_params['bet_usd']:.2f}** | Confidence {trade_params['confidence']:.1%} | Price {trade_params['price']:.4f}"
@@ -333,12 +339,18 @@ def trade_symbol(symbol: str, balance: float):
         log(
             f"[{trade_params['symbol']}] 🚀 #{trade_id} {trade_params['side']} ${trade_params['bet_usd']:.2f} @ {trade_params['price']:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
         )
+        return 1
     except Exception as e:
         log(f"[{trade_params['symbol']}] Trade completion error: {e}")
+        return 0
 
 
-def trade_symbols_batch(symbols: list, balance: float):
-    """Execute trading logic for multiple symbols using batch orders"""
+def trade_symbols_batch(symbols: list, balance: float) -> int:
+    """
+    Execute trading logic for multiple symbols using batch orders
+    Returns the number of successful trades placed. 
+    Returns -1 if all markets were skipped specifically due to spread == 1.0 (empty book).
+    """
     # 1. Bulk get tokens and check spreads to pre-filter
     market_tokens = {}
     all_token_ids = []
@@ -354,6 +366,7 @@ def trade_symbols_batch(symbols: list, balance: float):
 
     # Filter symbols where either side has wide spread
     valid_symbols = []
+    skipped_due_to_empty_book = 0
     for symbol in symbols:
         if symbol not in market_tokens:
             continue
@@ -373,12 +386,23 @@ def trade_symbols_batch(symbols: list, balance: float):
         up_spread = float(up_spread) if up_spread is not None else 0.0
         down_spread = float(down_spread) if down_spread is not None else 0.0
 
+        if up_spread >= 1.0 or down_spread >= 1.0:
+            # Spread of 1.0 means NO orders on one side - typical at window start
+            log(f"[{symbol}] ⏳ No liquidity yet (Spread: 1.0). Waiting for market makers...")
+            skipped_due_to_empty_book += 1
+            continue
+
         if up_spread > MAX_SPREAD or down_spread > MAX_SPREAD:
             log(
                 f"[{symbol}] ⚠️ Spread too wide (UP: {up_spread:.3f}, DOWN: {down_spread:.3f}). SKIPPING."
             )
             continue
         valid_symbols.append(symbol)
+
+    if not valid_symbols:
+        if skipped_due_to_empty_book > 0 and skipped_due_to_empty_book == len(market_tokens):
+            return -1
+        return 0
 
     # 2. Prepare trades for remaining symbols
     trade_params_list = []
@@ -392,7 +416,7 @@ def trade_symbols_batch(symbols: list, balance: float):
             log("")
 
     if not trade_params_list:
-        return
+        return 0
 
     # 3. Execute batch placement
     orders = [
@@ -408,8 +432,10 @@ def trade_symbols_batch(symbols: list, balance: float):
     results = place_batch_orders(orders)
 
     # 4. Save successful trades
+    placed_count = 0
     for i, result in enumerate(results):
         if i < len(trade_params_list) and result["success"]:
+            placed_count += 1
             p = trade_params_list[i]
             send_discord(
                 f"**[{p['symbol']}] {p['side']} ${p['bet_usd']:.2f}** | Confidence {p['confidence']:.1%} | Price {p['price']:.4f}"
@@ -444,7 +470,7 @@ def trade_symbols_batch(symbols: list, balance: float):
         elif i < len(trade_params_list):
             p = trade_params_list[i]
             log(f"[{p['symbol']}] ❌ Batch order failed: {result.get('error')}")
-    return
+    return placed_count
 
 
 def main():
@@ -566,10 +592,22 @@ def main():
             )
 
             # Use batch orders for multiple markets (more efficient)
-            if len(MARKETS) > 1:
-                trade_symbols_batch(MARKETS, current_balance)
-            elif len(MARKETS) == 1:
-                trade_symbol(MARKETS[0], current_balance)
+            # Try up to 3 times if we skip due to zero liquidity (Polymarket warm-up)
+            for attempt in range(3):
+                if len(MARKETS) > 1:
+                    placed = trade_symbols_batch(MARKETS, current_balance)
+                elif len(MARKETS) == 1:
+                    placed = trade_symbol(MARKETS[0], current_balance)
+                else:
+                    placed = 0
+                
+                # If we placed a trade, or if we evaluated without hitting the "empty book" state (-1), we're done
+                if placed != -1:
+                    break
+                
+                if attempt < 2:
+                    log(f"⏳ All markets skipped due to zero liquidity (warm-up). Retrying in 10s... (Attempt {attempt+2}/3)")
+                    time.sleep(10)
 
             check_and_settle_trades()
             cycle += 1
