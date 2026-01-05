@@ -1061,9 +1061,9 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
             # ============================================================
             # UNFILLED ORDER MANAGEMENT
             # ============================================================
-            if CANCEL_UNFILLED_ORDERS and current_buy_status not in [
+            if CANCEL_UNFILLED_ORDERS and current_buy_status.upper() not in [
                 "FILLED",
-                "matched",
+                "MATCHED",
             ]:
                 should_cancel = False
                 cancel_reason = ""
@@ -1182,7 +1182,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         actual_status = get_order_status(buy_order_id)
                         log(f"   Order status: {actual_status}")
 
-                        if actual_status in ["FILLED", "matched"]:
+                        if actual_status.upper() in ["FILLED", "MATCHED"]:
                             # Order was filled! Update status and continue monitoring
                             log(f"✅ Order was actually FILLED, updating database")
                             c.execute(
