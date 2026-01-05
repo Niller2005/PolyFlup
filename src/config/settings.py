@@ -40,15 +40,15 @@ UNFILLED_RETRY_ON_WINNING_SIDE = (
 # Position Scaling
 ENABLE_SCALE_IN = os.getenv("ENABLE_SCALE_IN", "YES").upper() == "YES"
 SCALE_IN_MIN_PRICE = float(
-    os.getenv("SCALE_IN_MIN_PRICE", "0.70")
-)  # Min 70 cents (70%+ win probability)
+    os.getenv("SCALE_IN_MIN_PRICE", "0.60")
+)  # Min 60 cents (60%+ win probability)
 SCALE_IN_MAX_PRICE = float(os.getenv("SCALE_IN_MAX_PRICE", "0.90"))  # Max 90 cents
 SCALE_IN_TIME_LEFT = int(
-    os.getenv("SCALE_IN_TIME_LEFT", "120")
-)  # 2 minutes (120 seconds)
+    os.getenv("SCALE_IN_TIME_LEFT", "300")
+)  # 5 minutes (300 seconds)
 SCALE_IN_MULTIPLIER = float(
-    os.getenv("SCALE_IN_MULTIPLIER", "1.0")
-)  # Add 100% more (double position)
+    os.getenv("SCALE_IN_MULTIPLIER", "1.5")
+)  # Add 150% more (2.5x total position)
 
 # Exit Plan Configuration
 ENABLE_EXIT_PLAN = os.getenv("ENABLE_EXIT_PLAN", "YES").upper() == "YES"
@@ -87,8 +87,8 @@ ENABLE_BFXD = os.getenv("ENABLE_BFXD", "NO").upper() == "YES"
 # Timing
 WINDOW_DELAY_SEC = int(os.getenv("WINDOW_DELAY_SEC", "12"))
 MAX_ENTRY_LATENESS_SEC = int(
-    os.getenv("MAX_ENTRY_LATENESS_SEC", "300")
-)  # Skip entry if > 5m late
+    os.getenv("MAX_ENTRY_LATENESS_SEC", "600")
+)  # Skip entry if > 10m late (allowed more lateness)
 if WINDOW_DELAY_SEC < 0:
     WINDOW_DELAY_SEC = 0
 if WINDOW_DELAY_SEC > 300:

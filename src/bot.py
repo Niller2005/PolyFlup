@@ -42,6 +42,7 @@ from src.data.database import (
     save_trade,
     generate_statistics,
     get_total_exposure,
+    has_trade_for_window,
 )
 from src.data.market_data import (
     get_token_ids,
@@ -538,6 +539,42 @@ def main():
     last_order_check = time.time()
     last_verbose_log = time.time()
     last_exit_stats_log = time.time()
+    
+    # Check if we should trade immediately (if we haven't traded for current window yet)
+    now_utc = datetime.utcnow()
+    window_start_min = (now_utc.minute // 15) * 15
+    # Since market_data.get_window_times uses ET, we should match that for consistency
+    # but here we just need to know if we are in the window.
+    
+    log("🏁 Bot initialized. Checking for immediate trading opportunities...")
+    
+    # First, run a cycle immediately if we are within lateness limits
+    current_balance = get_balance(addr)
+    
+    # Filter markets that haven't been traded this window
+    eligible_markets = []
+    for m in MARKETS:
+        w_start_et, _ = get_window_times(m)
+        w_start_iso = w_start_et.isoformat()
+        if not has_trade_for_window(m, w_start_iso):
+            eligible_markets.append(m)
+        else:
+            log(f"[{m}] ⏭️ Already traded for current window ({w_start_et.strftime('%H:%M')}).")
+
+    if eligible_markets:
+        log(f"🔍 Evaluating {len(eligible_markets)} eligible markets: {', '.join(eligible_markets)}")
+        # Check lateness for the first market in the list (assuming same windows)
+        w_start_et, _ = get_window_times(eligible_markets[0])
+        now_et = datetime.now(tz=ZoneInfo("America/New_York"))
+        lateness = (now_et - w_start_et).total_seconds()
+        
+        if lateness <= MAX_ENTRY_LATENESS_SEC:
+            if len(eligible_markets) > 1:
+                trade_symbols_batch(eligible_markets, current_balance)
+            else:
+                trade_symbol(eligible_markets[0], current_balance)
+        else:
+            log(f"⏳ Too late in current window ({lateness:.0f}s > {MAX_ENTRY_LATENESS_SEC}s). Waiting for next window.")
 
     while True:
         try:
@@ -617,23 +654,35 @@ def main():
             log(f"💰 Balance: {current_balance:.2f} USDC")
             log(f"🔍 Evaluating {len(MARKETS)} markets: {', '.join(MARKETS)}")
 
-            # Use batch orders for multiple markets (more efficient)
-            # Try up to 3 times if we skip due to zero liquidity (Polymarket warm-up)
-            for attempt in range(3):
-                if len(MARKETS) > 1:
-                    placed = trade_symbols_batch(MARKETS, current_balance)
-                elif len(MARKETS) == 1:
-                    placed = trade_symbol(MARKETS[0], current_balance)
+            # Filter markets that haven't been traded this window
+            current_window_markets = []
+            for m in MARKETS:
+                w_start_et, _ = get_window_times(m)
+                if not has_trade_for_window(m, w_start_et.isoformat()):
+                    current_window_markets.append(m)
                 else:
-                    placed = 0
-                
-                # If we placed a trade, or if we evaluated without hitting the "empty book" state (-1), we're done
-                if placed != -1:
-                    break
-                
-                if attempt < 2:
-                    log(f"⏳ All markets skipped due to zero liquidity (warm-up). Retrying in 10s... (Attempt {attempt+2}/3)")
-                    time.sleep(10)
+                    log(f"[{m}] ⏭️ Already traded for this window. Skipping.")
+
+            if current_window_markets:
+                # Use batch orders for multiple markets (more efficient)
+                # Try up to 3 times if we skip due to zero liquidity (Polymarket warm-up)
+                for attempt in range(3):
+                    if len(current_window_markets) > 1:
+                        placed = trade_symbols_batch(current_window_markets, current_balance)
+                    elif len(current_window_markets) == 1:
+                        placed = trade_symbol(current_window_markets[0], current_balance)
+                    else:
+                        placed = 0
+                    
+                    # If we placed a trade, or if we evaluated without hitting the "empty book" state (-1), we're done
+                    if placed != -1:
+                        break
+                    
+                    if attempt < 2:
+                        log(f"⏳ All markets skipped due to zero liquidity (warm-up). Retrying in 10s... (Attempt {attempt+2}/3)")
+                        time.sleep(10)
+            else:
+                log("ℹ️ No eligible markets to trade for this window (all already traded).")
 
             check_and_settle_trades()
             cycle += 1

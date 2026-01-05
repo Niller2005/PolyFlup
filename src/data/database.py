@@ -120,6 +120,17 @@ def save_trade(cursor=None, **kwargs):
             return trade_id
 
 
+def has_trade_for_window(symbol: str, window_start: str) -> bool:
+    """Check if a trade already exists for the given symbol and window"""
+    with db_connection() as conn:
+        c = conn.cursor()
+        c.execute(
+            "SELECT id FROM trades WHERE symbol = ? AND window_start = ?",
+            (symbol, window_start),
+        )
+        return c.fetchone() is not None
+
+
 def generate_statistics():
     """Generate performance statistics report"""
     with db_connection() as conn:

@@ -607,10 +607,12 @@ def _check_scale_in(
     conn,
     side,
     price_change_pct,
+    verbose=False,
 ):
     if not ENABLE_SCALE_IN:
         return
     if scale_in_id and check_orders:
+
         try:
             o_data = get_order(scale_in_id)
             if o_data and o_data.get("status", "").upper() in ["FILLED", "MATCHED"]:
@@ -642,12 +644,20 @@ def _check_scale_in(
 
     if scaled_in or scale_in_id:
         return
-    if (
-        t_left > SCALE_IN_TIME_LEFT
-        or t_left <= 0
-        or not (SCALE_IN_MIN_PRICE <= current_price <= SCALE_IN_MAX_PRICE)
-    ):
+        
+    # Check if we are in the time window for scale-in
+    if t_left > SCALE_IN_TIME_LEFT:
+        return # Too early to scale in
+        
+    if t_left <= 0:
+        return # Window expired
+        
+    # Price range check
+    if not (SCALE_IN_MIN_PRICE <= current_price <= SCALE_IN_MAX_PRICE):
+        if verbose:
+            log(f"   ⏳ [{symbol}] Scale-in skipped: price ${current_price:.2f} outside range (${SCALE_IN_MIN_PRICE}-${SCALE_IN_MAX_PRICE})")
         return
+
 
     s_size = size * SCALE_IN_MULTIPLIER
     s_price = round(max(0.01, min(0.99, current_price)), 2)
@@ -835,7 +845,9 @@ def check_open_positions(verbose=True, check_orders=False):
                         conn,
                         side,
                         p_chg_val,
+                        verbose=verbose,
                     )
+
 
                     # Refresh data after scale-in check
                     c.execute(
