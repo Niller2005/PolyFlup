@@ -56,13 +56,30 @@ def _check_stop_loss(
     current_spot = get_current_spot_price(symbol)
     
     # Check if we are on the winning side of the prediction market
+    # PRIORITIZE: Prediction Market Midpoint (Fair Value) 
+    # This inherently reflects the Chainlink price source Polymarket uses for resolution.
+    # If the midpoint is high (winning), we hold even if Binance spot looks bad.
     is_on_losing_side = True
-    if current_spot > 0 and target_price:
+    
+    # Midpoint interpretation: 
+    # For UP: > 0.50 is winning, > 0.80 is strongly winning
+    # For DOWN: < 0.50 is winning, < 0.20 is strongly winning
+    if current_price > 0:
+        if side == "UP" and current_price >= 0.50:
+            is_on_losing_side = False
+        elif side == "DOWN" and current_price <= 0.50:
+            is_on_losing_side = False
+            
+    # FALLBACK: Binance Spot Price vs Window Start (Chainlink Proxy)
+    # Only use this if the prediction market itself is extremely illiquid (midpoint near 0.5 but spot moved)
+    if is_on_losing_side and current_spot > 0 and target_price:
         if side == "UP" and current_spot >= target_price:
             is_on_losing_side = False
+            log(f"ℹ️ [{symbol}] Midpoint is weak but Spot is ABOVE target - HOLDING")
         elif side == "DOWN" and current_spot <= target_price:
             is_on_losing_side = False
-    elif current_spot <= 0:
+            log(f"ℹ️ [{symbol}] Midpoint is weak but Spot is BELOW target - HOLDING")
+    elif is_on_losing_side and current_spot <= 0:
         # If we can't verify spot price, default to HOLDING if PnL is not extremely bad
         # or if it's a reversal to avoid accidental closes
         if is_reversal or pnl_pct > -effective_stop_loss * 1.2:
