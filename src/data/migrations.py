@@ -34,7 +34,6 @@ def set_schema_version(conn: Any, version: int) -> None:
         "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
         (version, datetime.now(tz=ZoneInfo("UTC")).isoformat()),
     )
-    conn.commit()
 
 
 def migration_001_add_scale_in_order_id(conn: Any) -> None:
@@ -48,7 +47,6 @@ def migration_001_add_scale_in_order_id(conn: Any) -> None:
     if "scale_in_order_id" not in columns:
         log("  - Adding scale_in_order_id column...")
         c.execute("ALTER TABLE trades ADD COLUMN scale_in_order_id TEXT")
-        conn.commit()
         log("    ✓ Column added")
     else:
         log("    ✓ scale_in_order_id column already exists")
@@ -105,7 +103,6 @@ def run_migrations() -> None:
                     conn.rollback()
                     raise
 
-            conn.commit()
             log(f"✓ All migrations completed. Schema version: {latest_version}")
 
         except Exception as e:

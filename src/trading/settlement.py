@@ -140,8 +140,6 @@ def check_and_settle_trades():
             except Exception as e:
                 log(f"⚠️ Error settling trade #{trade_id}: {e}")
 
-        conn.commit()
-
         if settled_count > 0:
             send_discord(
                 f"📊 Settled {settled_count} trades | Total PnL: ${total_pnl:+.2f}"
