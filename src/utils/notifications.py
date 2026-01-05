@@ -75,7 +75,7 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
             if row:
                 trade_id, symbol, trade_side, size = row
-                log(f"🔔 [{symbol}] Buy filled: #{trade_id} {trade_side} ({size:.2f})")
+                log(f"🔔 [{symbol}] #{trade_id} Buy filled: {trade_side} ({size:.2f})")
                 c.execute(
                     "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
                     (trade_id,),

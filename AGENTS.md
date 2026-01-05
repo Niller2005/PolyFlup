@@ -145,10 +145,19 @@ docker compose down
   - 🚀 Trade execution
 
 **Logging Best Practices:**
+- Always start log lines with relevant emojis and include the symbol and trade ID in brackets: `EMOJI [SYMBOL] #ID message`
+- For trade settlements and exit plans, place the symbol and trade ID at the beginning of the message for quick scanning
 - Only log position details on verbose cycles (60s) and only when P&L is significant (>20% or <-30%)
 - Don't log routine order status checks (LIVE, DELAYED, UNMATCHED) unless there's an issue
 - Consolidate related information into single log lines
 - Use emojis consistently to make log scanning effortless
+
+**Exit & Settlement Log Examples:**
+```text
+🎯 [BTC] EXIT PLAN SUCCESS: Trade #143 MATCHED at 0.99! (matched 30.58 shares)
+💰 [BTC] #143 UP: +4.89$ (+19.2%) | Settled
+```
+
 
 #### Configuration
 - All config in `src/config/settings.py`
@@ -204,6 +213,7 @@ src/
 3. **Timing**: UTC timezone via `ZoneInfo('UTC')`
 4. **Position Monitoring**: High-frequency checks (1 second intervals)
 5. **Trade Execution**: Validate before saving to database
+6. **Order Status**: Treat both `FILLED` and `MATCHED` statuses as successful executions in the position manager to ensure trades are settled promptly and redundant logging is avoided.
 
 ### Data Flow
 ```
@@ -272,7 +282,7 @@ When modifying code:
 4. Test with actual API if possible
 5. Consider Discord notifications for user-facing events
 6. Document complex trading logic in comments
-7. Provide "Before and After" Examples: When making visual changes (e.g., logging formatting, UI layouts) or significant logic refactors, provide a brief "before and after" comparison in your response to help the user visualize the impact.
+7. Provide "Before and After" Examples: When making visual changes (e.g., logging formatting, UI layouts) or significant logic refactors, provide a brief "before and after" comparison in your response to help the user visualize the impact. Ensure these are wrapped in code blocks (markdown triple backticks) to preserve exact formatting.
 
 ## Documentation Reference
 

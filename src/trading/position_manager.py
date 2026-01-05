@@ -280,7 +280,7 @@ def _check_stop_loss(
         return False
 
     log(
-        f"🛑 {sl_label} trade #{trade_id}: {pnl_pct:.1f}% PnL (Threshold: {stop_threshold}%) | Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}"
+        f"🛑 [{symbol}] #{trade_id} {sl_label}: {pnl_pct:.1%}% PnL | Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}"
     )
 
     if limit_sell_order_id:
@@ -726,7 +726,8 @@ def _check_scale_in(
     else:
         # Enhanced error reporting
         error_msg = scale_result.get("error", "Unknown error")
-        log(f"⚠️ [{symbol}] Scale in failed for trade #{trade_id}: {error_msg}")
+        log(f"⚠️ [{symbol}] #{trade_id} Scale in failed: {error_msg}")
+
         # Don't send Discord for scale-in failures (too noisy), just log it
 
 
@@ -772,9 +773,7 @@ def _check_take_profit(
         if position_age < 30:
             return False  # Too young to sell
 
-    log(
-        f"🎯 [{symbol}] TAKE PROFIT triggered for trade #{trade_id}: {pnl_pct:.1f}% gain"
-    )
+    log(f"🎯 [{symbol}] #{trade_id} TAKE PROFIT triggered: {pnl_pct:.1f}% gain")
 
     if limit_sell_order_id:
         if cancel_order(limit_sell_order_id):
@@ -910,16 +909,14 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         current_buy_status = get_order_status(buy_order_id)
 
                         if current_buy_status == "FILLED":
-                            log(
-                                f"✅ [{symbol}] BUY order for trade #{trade_id} has been FILLED"
-                            )
+                            log(f"✅ [{symbol}] #{trade_id} BUY order has been FILLED")
                             c.execute(
                                 "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
                                 (trade_id,),
                             )
                         elif current_buy_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
                             log(
-                                f"⚠️ [{symbol}] BUY order for trade #{trade_id} was {current_buy_status}. Settling trade."
+                                f"⚠️ [{symbol}] #{trade_id} BUY order was {current_buy_status}. Settling trade."
                             )
                             c.execute(
                                 "UPDATE trades SET settled = 1, final_outcome = ? WHERE id = ?",
@@ -930,18 +927,16 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                             # Order is pending, log status but continue monitoring
                             if verbose:
                                 log(
-                                    f"ℹ️ [{symbol}] BUY order for trade #{trade_id} status: {current_buy_status}"
+                                    f"ℹ️ [{symbol}] #{trade_id} BUY order status: {current_buy_status}"
                                 )
                         elif current_buy_status == "LIVE":
                             # Order is live on the book, waiting for fill
                             if verbose:
                                 log(
-                                    f"📋 [{symbol}] BUY order for trade #{trade_id} is LIVE on the book"
+                                    f"📋 [{symbol}] #{trade_id} BUY order is LIVE on the book"
                                 )
                         elif current_buy_status == "ERROR":
-                            log(
-                                f"⚠️ [{symbol}] Error checking BUY order for trade #{trade_id}"
-                            )
+                            log(f"⚠️ [{symbol}] #{trade_id} Error checking BUY order")
 
                     # Note: Limit sell order placement moved to 60-second mark (after price checks below)
 
@@ -954,43 +949,55 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                             if order_data:
                                 status = order_data.get("status", "").upper()
 
-                                if status == "FILLED":
+                                if status in ["FILLED", "MATCHED"]:
                                     # Get actual exit price from order data if available
-                                    exit_price = order_data.get(
-                                        "price", EXIT_PRICE_TARGET
+                                    exit_price = float(
+                                        order_data.get("price", EXIT_PRICE_TARGET)
                                     )
-                                    size_matched = order_data.get("size_matched", size)
-
-                                    log(
-                                        f"🎯 EXIT PLAN SUCCESS: Trade #{trade_id} filled at {exit_price}! (matched {size_matched} shares)"
+                                    size_matched = float(
+                                        order_data.get("size_matched", size)
                                     )
 
-                                    pnl_usd = (exit_price * size_matched) - bet_usd
-                                    roi_pct = (
-                                        (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
-                                    )
+                                    # Only settle if significantly filled (or matched)
+                                    if (
+                                        status == "FILLED"
+                                        or size_matched >= size * 0.99
+                                    ):
+                                        exit_pnl_usd = (
+                                            exit_price * size_matched
+                                        ) - bet_usd
+                                        exit_roi_pct = (
+                                            (exit_pnl_usd / bet_usd) * 100
+                                            if bet_usd > 0
+                                            else 0
+                                        )
 
-                                    c.execute(
-                                        """UPDATE trades 
-                                           SET settled=1, exited_early=1, exit_price=?, 
-                                               pnl_usd=?, roi_pct=?, 
-                                               final_outcome='EXIT_PLAN_FILLED', settled_at=? 
-                                           WHERE id=?""",
-                                        (
-                                            exit_price,
-                                            pnl_usd,
-                                            roi_pct,
-                                            now.isoformat(),
-                                            trade_id,
-                                        ),
-                                    )
-                                    send_discord(
-                                        f"🎯 **EXIT PLAN SUCCESS** [{symbol}] {side} closed at {exit_price} ({roi_pct:+.1f}%)"
-                                    )
-                                    continue
+                                        log(
+                                            f"💰 [{symbol}] #{trade_id} {side}: {exit_pnl_usd:+.2f}$ ({exit_roi_pct:+.1f}%) | Settled"
+                                        )
+
+                                        c.execute(
+                                            """UPDATE trades 
+                                               SET settled=1, exited_early=1, exit_price=?, 
+                                                   pnl_usd=?, roi_pct=?, 
+                                                   final_outcome='EXIT_PLAN_FILLED', settled_at=? 
+                                               WHERE id=?""",
+                                            (
+                                                exit_price,
+                                                exit_pnl_usd,
+                                                exit_roi_pct,
+                                                now.isoformat(),
+                                                trade_id,
+                                            ),
+                                        )
+                                        send_discord(
+                                            f"🎯 **EXIT PLAN SUCCESS** [{symbol}] {side} closed at {exit_price} ({exit_roi_pct:+.1f}%)"
+                                        )
+                                        continue
+
                                 elif status in ["CANCELED", "EXPIRED"]:
                                     log(
-                                        f"⚠️ EXIT PLAN: Limit sell order for trade #{trade_id} was {status}"
+                                        f"⚠️ [{symbol}] #{trade_id} EXIT PLAN: Order was {status}"
                                     )
                                     # Clear the limit_sell_order_id so it can be re-placed
                                     c.execute(
@@ -999,20 +1006,20 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                     )
                                 elif status == "LIVE" and verbose:
                                     log(
-                                        f"📋 EXIT PLAN: Limit sell order for trade #{trade_id} is LIVE at {EXIT_PRICE_TARGET}"
+                                        f"📋 [{symbol}] #{trade_id} EXIT PLAN: Order is LIVE at {EXIT_PRICE_TARGET}"
                                     )
-                            else:
-                                # Order not found, might be too old
-                                if verbose:
-                                    log(
-                                        f"⚠️ EXIT PLAN: Could not find limit sell order {limit_sell_order_id[:10]}..."
-                                    )
+                                else:
+                                    # Order not found, might be too old
+                                    if verbose:
+                                        log(
+                                            f"⚠️ [{symbol}] #{trade_id} EXIT PLAN: Could not find limit sell order {limit_sell_order_id[:10]}..."
+                                        )
 
                         except Exception as e:
                             # Order might be too old or other error, log if significant
                             if "404" not in str(e):
                                 log(
-                                    f"⚠️ Error checking exit plan order {limit_sell_order_id}: {e}"
+                                    f"⚠️ [{symbol}] #{trade_id} Error checking exit plan order: {e}"
                                 )
 
                     # Get current market price and calculate P&L
@@ -1157,7 +1164,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
                             if verbose:
                                 log(
-                                    f"⏰ [{symbol}] Trade #{trade_id} timeout: {position_age_seconds:.0f}s old, P&L: {pnl_pct:+.1f}%"
+                                    f"⏰ [{symbol}] #{trade_id} timeout: {position_age_seconds:.0f}s old, P&L: {pnl_pct:+.1f}%"
                                 )
 
                             # Check if we're on the winning side with good P&L
@@ -1197,17 +1204,19 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                 continue
 
                             log(
-                                f"🛑 CANCELLING unfilled order for trade #{trade_id}: {cancel_reason}"
+                                f"🛑 [{symbol}] #{trade_id} CANCELLING unfilled order: {cancel_reason}"
                             )
                             cancel_result = cancel_order(buy_order_id)
 
                             if cancel_result:
-                                log(f"✅ Buy order cancelled successfully")
+                                log(
+                                    f"✅ [{symbol}] #{trade_id} Buy order cancelled successfully"
+                                )
 
                                 if should_reverse:
                                     # Try to enter at current market price
                                     log(
-                                        f"🔄 Retrying [{symbol}] {side} at current market price"
+                                        f"🔄 [{symbol}] #{trade_id} Retrying entry at current market price"
                                     )
 
                                     # Get current market price
@@ -1222,7 +1231,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
 
                                     if retry_result["success"]:
                                         log(
-                                            f"✅ Retry order placed at ${retry_price:.2f} (was ${entry_price:.2f})"
+                                            f"✅ [{symbol}] #{trade_id} Retry order placed at ${retry_price:.2f} (was ${entry_price:.2f})"
                                         )
                                         # Update the trade with new order info
                                         c.execute(
@@ -1244,7 +1253,9 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                         error_msg = retry_result.get(
                                             "error", "Unknown error"
                                         )
-                                        log(f"⚠️ Retry order failed: {error_msg}")
+                                        log(
+                                            f"⚠️ [{symbol}] #{trade_id} Retry order failed: {error_msg}"
+                                        )
 
                                 # Mark as cancelled if not retrying or retry failed
                                 c.execute(
@@ -1255,7 +1266,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                 # Cancel failed - likely order already filled or cancelled
                                 # Update status so we don't keep trying
                                 log(
-                                    f"ℹ️ Cancel returned False - order may already be filled/cancelled, checking status..."
+                                    f"ℹ️ [{symbol}] #{trade_id} Cancel returned False - checking status..."
                                 )
 
                                 # Re-check order status
@@ -1265,7 +1276,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                 if actual_status.upper() in ["FILLED", "MATCHED"]:
                                     # Order was filled! Update status and continue monitoring
                                     log(
-                                        f"✅ Order was actually FILLED, updating database"
+                                        f"✅ [{symbol}] #{trade_id} Order was actually FILLED"
                                     )
                                     c.execute(
                                         "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
@@ -1279,7 +1290,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                 ]:
                                     # Order already cancelled/expired, settle it
                                     log(
-                                        f"ℹ️ Order already {actual_status}, settling trade"
+                                        f"ℹ️ [{symbol}] #{trade_id} Order already {actual_status}, settling trade"
                                     )
                                     c.execute(
                                         "UPDATE trades SET settled = 1, final_outcome = ?, order_status = ? WHERE id = ?",
@@ -1293,7 +1304,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                                 elif actual_status == "ERROR":
                                     # Can't determine status (API error) - mark to prevent infinite retry
                                     log(
-                                        f"⚠️ Can't determine order status, marking as CANCEL_ATTEMPTED to prevent spam"
+                                        f"⚠️ [{symbol}] #{trade_id} Can't determine order status, marking as CANCEL_ATTEMPTED"
                                     )
                                     c.execute(
                                         "UPDATE trades SET order_status = 'CANCEL_ATTEMPTED' WHERE id = ?",
@@ -1332,7 +1343,7 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                         continue
 
                 except Exception as e:
-                    log(f"⚠️ Error checking position #{trade_id}: {e}")
+                    log(f"⚠️ [{symbol}] #{trade_id} Error checking position: {e}")
 
     finally:
         _position_check_lock.release()

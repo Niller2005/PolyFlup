@@ -138,13 +138,13 @@ def check_and_settle_trades():
 
                 emoji = "💰" if pnl_usd > 0 else "💀"
                 log(
-                    f"{emoji} Settled #{trade_id} [{symbol}] {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%)"
+                    f"{emoji} [{symbol}] #{trade_id} {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%) | Settled"
                 )
                 total_pnl += pnl_usd
                 settled_count += 1
 
             except Exception as e:
-                log(f"⚠️ Error settling trade #{trade_id}: {e}")
+                log(f"⚠️ [{symbol}] #{trade_id} Error settling trade: {e}")
 
         if settled_count > 0:
             send_discord(
