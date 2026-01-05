@@ -480,7 +480,27 @@ UNFILLED_CANCEL_THRESHOLD=15.0         # Cancel if price moves -15%
 
 ---
 
-### 26. Exit Plan Update After Scale-In
+### 26. Responsive Exit Plan & Visibility
+**Description:** Reduced wait time before placing exit plan orders and added visibility for pending plans.
+
+**Problem:** 
+- Hardcoded 5-minute wait was too slow for 15-minute markets
+- No feedback in logs while waiting for the age threshold
+
+**Fix:**
+- Reduced default `EXIT_MIN_POSITION_AGE` from 300s to 60s
+- Added `⏳ Exit plan pending (age/threshold)` status to verbose logs
+- Removed redundant hardcoded 60s check
+
+**Impact:** Bot captures profits much faster. Better visibility into bot's internal wait states.
+
+**Files Changed:**
+- `src/config/settings.py` - Changed default `EXIT_MIN_POSITION_AGE`
+- `src/trading/position_manager.py` - Updated `_check_exit_plan()` logic and logging
+
+---
+
+### 27. Exit Plan Update After Scale-In
 **Description:** Automatically update exit plan limit order when scale-in increases position size.
 
 **Critical Problem:**
@@ -531,10 +551,10 @@ Result: Complete exit ✅
 
 ### Features
 - **Critical Bugs Fixed:** 5
-- **Features Added:** 21
+- **Features Added:** 22
 - **API Methods Integrated:** 8
-- **UX Improvements:** 4
-- **Total Improvements:** 38+
+- **UX Improvements:** 5
+- **Total Improvements:** 40+
 
 ---
 

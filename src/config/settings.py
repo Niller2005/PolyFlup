@@ -53,8 +53,8 @@ SCALE_IN_MULTIPLIER = float(
 ENABLE_EXIT_PLAN = os.getenv("ENABLE_EXIT_PLAN", "YES").upper() == "YES"
 EXIT_PRICE_TARGET = float(os.getenv("EXIT_PRICE_TARGET", "0.99"))  # Target exit price
 EXIT_MIN_POSITION_AGE = int(
-    os.getenv("EXIT_MIN_POSITION_AGE", "300")
-)  # Minimum position age in seconds (5 minutes) before exit plan activates
+    os.getenv("EXIT_MIN_POSITION_AGE", "60")
+)  # Minimum position age in seconds (1 minute) before exit plan activates
 EXIT_CHECK_INTERVAL = int(
     os.getenv("EXIT_CHECK_INTERVAL", "60")
 )  # Check for exit opportunities every N seconds

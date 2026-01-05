@@ -84,7 +84,7 @@ ENABLE_REVERSAL=NO                   # Reverse position on stop loss
 # Exit Plan (Aggressive Profit Taking)
 ENABLE_EXIT_PLAN=YES                 # Place limit sell orders at target price
 EXIT_PRICE_TARGET=0.99               # Target exit price (99 cents)
-EXIT_MIN_POSITION_AGE=300            # Wait 5 minutes before placing exit order
+EXIT_MIN_POSITION_AGE=60             # Wait 1 minute before placing exit order
 
 # Position Scaling
 ENABLE_SCALE_IN=YES                  # Add to winners near expiry

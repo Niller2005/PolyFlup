@@ -500,11 +500,7 @@ def _check_exit_plan(
     if now.timestamp() - last_attempt < 30:
         return
 
-    if (
-        not limit_sell_order_id
-        and position_age_seconds >= EXIT_MIN_POSITION_AGE
-        and position_age_seconds > 60
-    ):
+    if not limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE:
         # Update last attempt time
         _last_exit_attempt[trade_id] = now.timestamp()
 
@@ -591,7 +587,7 @@ def _check_exit_plan(
                 log(
                     f"  {emoji} [{symbol}] Trade #{trade_id} {side} PnL={price_change_pct:+.1f}% | ⚠️ EXIT PLAN: Failed to place limit sell: {error_msg}"
                 )
-    elif limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60:
+    elif limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE:
         # Exit plan status will be shown in combined position log (verbose cycle)
         pass
 
@@ -608,9 +604,13 @@ def _check_exit_plan(
         elif scale_in_order_id:
             status_parts.append("📋 Scale-in pending")
 
-        # Add exit plan status if active
-        if limit_sell_order_id and position_age_seconds >= EXIT_MIN_POSITION_AGE + 60:
+        # Add exit plan status
+        if limit_sell_order_id:
             status_parts.append(f"⏰ Exit plan active ({position_age_seconds:.0f}s)")
+        else:
+            status_parts.append(
+                f"⏳ Exit plan pending ({position_age_seconds:.0f}s/{EXIT_MIN_POSITION_AGE}s)"
+            )
 
         log("  " + " | ".join(status_parts))
 
