@@ -9,6 +9,12 @@ PolyAstra is an automated trading bot for 15-minute crypto prediction markets on
 - **Frontend**: Svelte dashboard (`ui/`)
 - **Database**: SQLite (`trades.db`)
 
+## Helper Tools
+
+The following tools are installed and available for system tasks:
+- **ripgrep (`rg`)**: Fast content search across the codebase.
+- **sqlite3**: CLI tool for inspecting and modifying the `trades.db` database.
+
 ## Build, Lint, and Test Commands
 
 ### Python Backend
