@@ -1,7 +1,9 @@
 """Order placement and management"""
 
 import os
+import time
 from typing import List, Dict, Optional, Any, cast
+
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import (
     OrderArgs,
@@ -66,14 +68,19 @@ if not hasattr(client, "builder_config"):
     setattr(client, "builder_config", None)
 
 
+_last_midpoint_error_time = 0
+
 def get_multiple_market_prices(token_ids: List[str]) -> Dict[str, float]:
     """Get market prices for multiple tokens in a single call"""
+    global _last_midpoint_error_time
     if not token_ids:
         return {}
     try:
-        # We use midpoint for all tokens as it's the fairest price
-        # The API supports get_midpoints for bulk fetch
-        resp: Any = client.get_midpoints(token_ids)
+        # Use BookParams for consistency with other bulk methods
+        params = [BookParams(token_id=str(tid)) for tid in token_ids]
+        # The correct method in py_clob_client is often get_midpoints or similar
+        # If it fails with attribute error, we catch it and fallback
+        resp: Any = client.get_midpoints(params)
         result = {}
         if isinstance(resp, dict):
             for tid, val in resp.items():
@@ -81,20 +88,26 @@ def get_multiple_market_prices(token_ids: List[str]) -> Dict[str, float]:
                     result[str(tid)] = float(val)
         elif isinstance(resp, list):
             for item in resp:
-                tid = item.get("asset_id") if isinstance(item, dict) else getattr(item, "asset_id", None)
-                mid = item.get("mid") if isinstance(item, dict) else getattr(item, "mid", None)
+                tid = (
+                    item.get("asset_id")
+                    if isinstance(item, dict)
+                    else getattr(item, "asset_id", None)
+                )
+                mid = (
+                    item.get("mid")
+                    if isinstance(item, dict)
+                    else getattr(item, "mid", None)
+                )
                 if tid and mid is not None:
                     result[str(tid)] = float(mid)
         return result
     except Exception as e:
-        log(f"⚠️ Error getting bulk midpoints: {e}")
-        # Fallback to individual midpoints if bulk fails
-        result = {}
-        for tid in token_ids:
-            price = get_midpoint(tid)
-            if price is not None:
-                result[tid] = price
-        return result
+        # Avoid spamming logs every second if this fails
+        now = time.time()
+        if now - _last_midpoint_error_time > 60: # Log once per minute
+            log(f"⚠️ Error getting bulk midpoints (falling back to single calls): {e}")
+            _last_midpoint_error_time = now
+        return {}
 
 
 def get_clob_client() -> ClobClient:

@@ -46,7 +46,7 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 
 2. **Install dependencies**
    ```bash
-   pip install -r requirements.txt
+   uv sync
    ```
 
 3. **Configure environment**
@@ -112,7 +112,7 @@ docker compose up -d --build
 ### Option 2: Local Installation
 #### Start Trading
 ```bash
-python polyastra.py
+uv run polyastra.py
 ```
 
 #### Start Dashboard

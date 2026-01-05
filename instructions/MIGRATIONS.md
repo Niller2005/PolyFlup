@@ -139,7 +139,7 @@ def migration_00X_rename_column(conn: sqlite3.Connection) -> None:
 
 Check current version:
 ```bash
-python -c "import sqlite3; conn = sqlite3.connect('trades.db'); c = conn.cursor(); c.execute('SELECT MAX(version) FROM schema_version'); print(f'Schema version: {c.fetchone()[0]}'); conn.close()"
+uv run python -c "import sqlite3; conn = sqlite3.connect('trades.db'); c = conn.cursor(); c.execute('SELECT MAX(version) FROM schema_version'); print(f'Schema version: {c.fetchone()[0]}'); conn.close()"
 ```
 
 ## Applied Migrations
@@ -182,5 +182,5 @@ cp trades.db trades_test.db
 # Run bot or init_database()
 
 # Check if migration worked
-python check_db.py
+uv run check_db.py
 ```

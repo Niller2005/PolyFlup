@@ -203,7 +203,7 @@ The bot uses a local `trades.db` file for all operations.
 
 #### Check Migration Status
 ```bash
-python check_migration_status.py
+uv run check_migration_status.py
 ```
 
 #### Add New Migration

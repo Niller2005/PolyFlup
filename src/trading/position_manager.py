@@ -74,7 +74,7 @@ def sync_positions_with_exchange(user_address: str):
     log(f"🔄 Syncing positions with exchange for {user_address[:10]}...")
 
     try:
-            # 1. Get positions from Data API
+        # 1. Get positions from Data API
         exchange_positions = get_current_positions(user_address)
 
         # Create a map of token_id -> position_data for easy lookup
@@ -84,11 +84,8 @@ def sync_positions_with_exchange(user_address: str):
             aid = p.get("assetId")
             if aid:
                 pos_map[str(aid)] = p
-                
-        log(f"   📊 Exchange map built with {len(pos_map)} assets: {list(pos_map.keys())[:2]}")
 
         with db_connection() as conn:
-
             c = conn.cursor()
             now = datetime.now(tz=ZoneInfo("UTC"))
 
@@ -97,8 +94,6 @@ def sync_positions_with_exchange(user_address: str):
                 "SELECT id, symbol, side, size, token_id, entry_price FROM trades WHERE settled = 0"
             )
             db_trades = c.fetchall()
-            
-            log(f"   📊 DB has {len(db_trades)} open trades. Comparing with {len(pos_map)} exchange positions...")
 
             db_token_ids = []
 
@@ -152,19 +147,16 @@ def sync_positions_with_exchange(user_address: str):
                 t_id_str = str(t_id)
                 if t_id_str and t_id_str not in db_token_ids:
                     size = float(p_data.get("size", 0))
-                    if size < 1.0:
+                    if size < 0.001:
                         continue
                         
-                    log(f"   ⚠️ Found UNTRACKED position: {size} shares of {str(t_id)[:10]}...")
+                    log(f"   ⚠️ Found UNTRACKED position: {size} shares of {t_id_str[:10]}...")
                     
                     try:
                         avg_price = float(p_data.get("avgPrice", 0.5))
                         symbol = p_data.get("symbol", "ADOPTED")
-                        title = p_data.get("title", "")
                         
-                        # Try to find a window matching this position if possible
-                        # For now, we'll just create a placeholder entry
-                        log(f"   📥 Adopting untracked position: {symbol} ({title}) {size} shares @ ${avg_price}")
+                        log(f"   📥 Adopting untracked position: {symbol} {size} shares @ ${avg_price}")
                         
                         c.execute(
                             """INSERT INTO trades (
@@ -174,7 +166,7 @@ def sync_positions_with_exchange(user_address: str):
                             (
                                 symbol, 
                                 "adopted-market", 
-                                t_id, 
+                                t_id_str, 
                                 "UNKNOWN", 
                                 avg_price, 
                                 size, 
@@ -187,7 +179,6 @@ def sync_positions_with_exchange(user_address: str):
                                 "ADOPTED"
                             )
                         )
-                        log(f"   ✅ Position adopted into database")
                     except Exception as e:
                         log(f"   ❌ Failed to adopt position: {e}")
 
@@ -285,6 +276,7 @@ def _get_position_pnl(token_id: str, entry_price: float, size: float, cached_pri
     
     if current_price is None:
         current_price = get_midpoint(token_id)
+
     if current_price is None:
         client = get_clob_client()
         book: Any = client.get_order_book(token_id)
@@ -394,6 +386,7 @@ def _check_stop_loss(
             opp_price = round(max(0.01, min(0.99, 1.0 - current_price)), 2)
             rev_res = place_order(opposite_token, opp_price, size)
             if rev_res["success"]:
+                log(f"🚀 [{symbol}] Reversal order placed: {opposite_side} @ {opp_price}")
                 send_discord(f"🔄 **REVERSED** [{symbol}] {side} → {opposite_side}")
                 try:
                     w_start, w_end = get_window_times(symbol.split("-")[0])
@@ -707,6 +700,10 @@ def check_open_positions(verbose=True, check_orders=False):
                                 (tid,),
                             )
                             curr_b_status = "FILLED"
+                    
+                    if verbose and curr_b_status not in ["FILLED", "MATCHED"]:
+                        log(f"  ⏳ [{sym}] #{tid} {side}: Waiting for fill (Status: {curr_b_status})")
+                        continue
 
                     if check_orders and l_sell:
                         o_data = get_order(l_sell)

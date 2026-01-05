@@ -160,11 +160,6 @@ def _prepare_trade_params(
             log("")  # Add blank line
         return
 
-    # Register tokens with WebSocket manager for real-time price updates
-    ws_manager.subscribe_to_prices(
-        [up_id, down_id], {up_id: f"{symbol}-UP", down_id: f"{symbol}-DOWN"}
-    )
-
     client = get_clob_client()
     confidence, bias, p_up, best_bid, best_ask, signals = calculate_confidence(
         symbol, up_id, client
@@ -360,6 +355,10 @@ def trade_symbols_batch(symbols: list, balance: float) -> int:
         if up_id and down_id:
             market_tokens[symbol] = (up_id, down_id)
             all_token_ids.extend([up_id, down_id])
+    
+    # Register all tokens at once with WebSocket manager
+    if all_token_ids:
+        ws_manager.subscribe_to_prices(all_token_ids)
 
     # Bulk check spreads
     spreads = get_bulk_spreads(all_token_ids)

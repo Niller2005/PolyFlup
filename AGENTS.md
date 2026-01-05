@@ -15,22 +15,22 @@ PolyAstra is an automated trading bot for 15-minute crypto prediction markets on
 
 ```bash
 # Run the trading bot
-python polyastra.py
+uv run polyastra.py
 
 # Run a specific test script
-python test_price_buffer.py
+uv run test_price_buffer.py
 
 # Install dependencies
-pip install -r requirements.txt
-
-# Alternative with uv (if available)
 uv pip install -r requirements.txt
 
+# Alternative with uv sync (if pyproject.toml exists)
+uv sync
+
 # Check database
-python check_db.py
+uv run check_db.py
 
 # Database migration
-python migrate_db.py
+uv run migrate_db.py
 ```
 
 **Note**: No pytest configuration found. Test files are standalone scripts run directly with Python.
@@ -268,9 +268,9 @@ Main table: `trades`
 ## Testing
 
 - Test scripts are standalone Python files (e.g., `test_price_buffer.py`)
-- Run directly: `python test_<name>.py`
+- Run directly: `uv run test_<name>.py`
 - No pytest framework currently in use
-- Test database operations with `check_db.py`
+- Test database operations with `uv run check_db.py`
 
 ## Deployment
 
