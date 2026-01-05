@@ -95,7 +95,7 @@ The migration will run automatically and be tracked.
 - Don't skip version numbers
 - Don't make destructive changes (DROP TABLE, DROP COLUMN)
 - Don't assume data state - check before migrating
-- Don't call `conn.commit()` manually - it will cause panics with Turso/libsql
+- Don't call `conn.commit()` manually - it is handled by the context manager
 
 ## Common Migration Patterns
 

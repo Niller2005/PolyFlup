@@ -37,11 +37,11 @@ def process_notifications() -> None:
 
             # Process based on type
             if notif_type == NOTIF_ORDER_FILLED:
-                _handle_order_fill(payload, timestamp)
+                _handle_order_fill(payload, timestamp or 0)
             elif notif_type == NOTIF_ORDER_CANCELLED:
-                _handle_order_cancelled(payload, timestamp)
+                _handle_order_cancelled(payload, timestamp or 0)
             elif notif_type == NOTIF_MARKET_RESOLVED:
-                _handle_market_resolved(payload, timestamp)
+                _handle_market_resolved(payload, timestamp or 0)
 
             if notif_id:
                 processed_ids.append(str(notif_id))

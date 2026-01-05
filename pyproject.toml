@@ -6,7 +6,6 @@ readme = "README.md"
 requires-python = ">=3.9.10"
 dependencies = [
     "eth-account>=0.13.7",
-    "libsql>=0.1.11",
     "pandas>=2.3.3",
     "py-clob-client>=0.34.1",
     "python-dotenv>=1.2.1",

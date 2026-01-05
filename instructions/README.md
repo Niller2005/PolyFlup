@@ -10,8 +10,7 @@ This folder contains internal documentation and instructions for PolyAstra devel
 
 ### Database
 - **MIGRATIONS.md** - Database migration system guide
-- **TURSO_MIGRATION.md** - Complete setup guide for Turso database
-- **TURSO_CHANGES.md** - Technical summary of Turso migration changes
+- **DATABASE_BEST_PRACTICES.md** - Database patterns and performance tips
 
 ## Root-Level Documentation
 

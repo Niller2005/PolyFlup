@@ -3,7 +3,7 @@
 import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from src.config.settings import DB_FILE, REPORTS_DIR, USE_TURSO, USE_EMBEDDED_REPLICA
+from src.config.settings import DB_FILE, REPORTS_DIR
 from src.utils.logger import log, send_discord
 from src.data.db_connection import db_connection
 from src.data.migrations import run_migrations
@@ -14,9 +14,8 @@ def init_database():
     with db_connection() as conn:
         c = conn.cursor()
 
-        # Enable WAL mode for better concurrency (only for local SQLite, not Turso)
-        if not USE_TURSO and not USE_EMBEDDED_REPLICA:
-            c.execute("PRAGMA journal_mode=WAL")
+        # Enable WAL mode for better concurrency
+        c.execute("PRAGMA journal_mode=WAL")
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS trades (

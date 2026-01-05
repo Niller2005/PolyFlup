@@ -201,7 +201,6 @@ src/
 2. **Database Connection**: Use `db_connection()` context manager
    - **NEVER** call `conn.commit()` manually - handled by context manager
    - Context manager automatically commits on success, rolls back on error
-   - For embedded replicas, syncs every 30s on reads, immediately on writes
 3. **Timing**: UTC timezone via `ZoneInfo('UTC')`
 4. **Position Monitoring**: High-frequency checks (1 second intervals)
 5. **Trade Execution**: Validate before saving to database
@@ -229,11 +228,8 @@ Key settings (see `.env.example`):
 - `MARKETS`: Comma-separated symbols (e.g., "BTC,ETH,SOL,XRP")
 
 ### Database Configuration
-- `USE_TURSO`: YES/NO (direct remote Turso connection)
-- `USE_EMBEDDED_REPLICA`: YES/NO (local replica synced with Turso - **recommended for local dev**)
-- `TURSO_DATABASE_URL`: Turso database URL
-- `TURSO_AUTH_TOKEN`: Turso authentication token
-- `EMBEDDED_REPLICA_FILE`: Local replica file path (default: trades_replica.db)
+- The bot uses local SQLite (`trades.db`) for all operations.
+- Data is stored in the project root.
 
 ## Database Schema
 
@@ -264,12 +260,8 @@ Main table: `trades`
 
 - Production uses Docker Compose
 - Two containers: bot + UI
-- Database options:
-  - **Recommended:** Embedded replica (local file synced with Turso)
-  - Alternative: Direct Turso connection
-  - Alternative: Local SQLite only
+- Database: Local SQLite only
 - UI serves on port 3001 (API + frontend)
-- Dockerfile includes Rust build tools for `libsql` compilation
 
 ## Contributing
 
@@ -288,6 +280,5 @@ For additional information about the codebase and recent improvements:
 - **instructions/SESSION_IMPROVEMENTS.md** - Full details on all improvements from latest session (bug fixes, features, API integrations)
 - **instructions/QUICK_REFERENCE.md** - Code examples and quick lookup for new features (batch orders, market orders, notifications, etc.)
 - **instructions/MIGRATIONS.md** - How to add database migrations (step-by-step guide with examples)
-- **instructions/TURSO_MIGRATION.md** - Complete guide for Turso database setup and migration
-- **instructions/DATABASE_BEST_PRACTICES.md** - Database connection patterns and best practices (CRITICAL for avoiding panics)
+- **instructions/DATABASE_BEST_PRACTICES.md** - Database connection patterns and best practices
 - **AGENTS.md** - This file - General coding standards and project overview

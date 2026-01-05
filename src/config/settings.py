@@ -111,20 +111,10 @@ BINANCE_FUNDING_MAP = {
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LOG_FILE = f"{BASE_DIR}/logs/trades_2025.log"
+# Database Configuration
 DB_FILE = f"{BASE_DIR}/trades.db"
 REPORTS_DIR = f"{BASE_DIR}/logs/reports"
-os.makedirs(f"{BASE_DIR}/logs/reports", exist_ok=True)
-
-# Database Configuration (Turso or Local SQLite)
-USE_TURSO = os.getenv("USE_TURSO", "NO").upper() == "YES"
-TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "")
-TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "")
-
-# Embedded Replica Configuration (for local dev with Turso sync)
-USE_EMBEDDED_REPLICA = os.getenv("USE_EMBEDDED_REPLICA", "NO").upper() == "YES"
-EMBEDDED_REPLICA_FILE = os.getenv(
-    "EMBEDDED_REPLICA_FILE", f"{BASE_DIR}/trades_replica.db"
-)
+os.makedirs(REPORTS_DIR, exist_ok=True)
 
 # API Endpoints
 CLOB_HOST = "https://clob.polymarket.com"
