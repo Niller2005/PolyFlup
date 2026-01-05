@@ -596,7 +596,9 @@ def _check_scale_in(
                         return
 
                 elif status in ["CANCELED", "EXPIRED"]:
-                    log(f"⚠️ SCALE IN: Order for trade #{trade_id} was {status}")
+                    log(
+                        f"⚠️ [{symbol}] SCALE IN: Order for trade #{trade_id} was {status}"
+                    )
                     # Clear the order ID so it can potentially be re-placed
                     c.execute(
                         "UPDATE trades SET scale_in_order_id = NULL WHERE id = ?",
@@ -605,11 +607,13 @@ def _check_scale_in(
                 elif status == "LIVE":
                     # Order is live, waiting for fill
                     log(
-                        f"📋 SCALE IN: Order for trade #{trade_id} is LIVE, waiting for fill..."
+                        f"📋 [{symbol}] SCALE IN: Order for trade #{trade_id} is LIVE, waiting for fill..."
                     )
                     return  # Don't try to place another one
                 elif status in ["DELAYED", "UNMATCHED"]:
-                    log(f"ℹ️ SCALE IN: Order for trade #{trade_id} status: {status}")
+                    log(
+                        f"ℹ️ [{symbol}] SCALE IN: Order for trade #{trade_id} status: {status}"
+                    )
                     return  # Still pending
         except Exception as e:
             log(f"⚠️ Error checking scale-in order {scale_in_order_id}: {e}")
@@ -694,7 +698,7 @@ def _check_scale_in(
     else:
         # Enhanced error reporting
         error_msg = scale_result.get("error", "Unknown error")
-        log(f"⚠️ Scale in failed for trade #{trade_id}: {error_msg}")
+        log(f"⚠️ [{symbol}] Scale in failed for trade #{trade_id}: {error_msg}")
         # Don't send Discord for scale-in failures (too noisy), just log it
 
 
@@ -740,7 +744,9 @@ def _check_take_profit(
         if position_age < 30:
             return False  # Too young to sell
 
-    log(f"🎯 TAKE PROFIT triggered for trade #{trade_id}: {pnl_pct:.1f}% gain")
+    log(
+        f"🎯 [{symbol}] TAKE PROFIT triggered for trade #{trade_id}: {pnl_pct:.1f}% gain"
+    )
 
     if limit_sell_order_id:
         if cancel_order(limit_sell_order_id):
@@ -858,20 +864,29 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
         scale_in_order_id,
     ) in open_positions:
         try:
+            # CRITICAL FIX: Skip if already settled in this cycle
+            # This prevents processing trades that were just marked as settled
+            c.execute("SELECT settled FROM trades WHERE id = ?", (trade_id,))
+            row = c.fetchone()
+            if row and row[0] == 1:
+                continue  # Already settled, skip
+
             # 0. Check buy order status if not filled
             current_buy_status = buy_order_status
             if buy_order_status != "FILLED" and buy_order_id:
                 current_buy_status = get_order_status(buy_order_id)
 
                 if current_buy_status == "FILLED":
-                    log(f"✅ BUY order for trade #{trade_id} has been FILLED")
+                    log(
+                        f"✅ [{symbol}] BUY order for trade #{trade_id} has been FILLED"
+                    )
                     c.execute(
                         "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
                         (trade_id,),
                     )
                 elif current_buy_status in ["CANCELED", "EXPIRED", "NOT_FOUND"]:
                     log(
-                        f"⚠️ BUY order for trade #{trade_id} was {current_buy_status}. Settling trade."
+                        f"⚠️ [{symbol}] BUY order for trade #{trade_id} was {current_buy_status}. Settling trade."
                     )
                     c.execute(
                         "UPDATE trades SET settled = 1, final_outcome = ? WHERE id = ?",
@@ -882,14 +897,16 @@ def check_open_positions(verbose: bool = True, check_orders: bool = False):
                     # Order is pending, log status but continue monitoring
                     if verbose:
                         log(
-                            f"ℹ️ BUY order for trade #{trade_id} status: {current_buy_status}"
+                            f"ℹ️ [{symbol}] BUY order for trade #{trade_id} status: {current_buy_status}"
                         )
                 elif current_buy_status == "LIVE":
                     # Order is live on the book, waiting for fill
                     if verbose:
-                        log(f"📋 BUY order for trade #{trade_id} is LIVE on the book")
+                        log(
+                            f"📋 [{symbol}] BUY order for trade #{trade_id} is LIVE on the book"
+                        )
                 elif current_buy_status == "ERROR":
-                    log(f"⚠️ Error checking BUY order for trade #{trade_id}")
+                    log(f"⚠️ [{symbol}] Error checking BUY order for trade #{trade_id}")
 
             # Note: Limit sell order placement moved to 60-second mark (after price checks below)
 
