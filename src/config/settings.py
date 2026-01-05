@@ -79,6 +79,9 @@ ENABLE_BFXD = os.getenv("ENABLE_BFXD", "NO").upper() == "YES"
 
 # Timing
 WINDOW_DELAY_SEC = int(os.getenv("WINDOW_DELAY_SEC", "12"))
+MAX_ENTRY_LATENESS_SEC = int(
+    os.getenv("MAX_ENTRY_LATENESS_SEC", "300")
+)  # Skip entry if > 5m late
 if WINDOW_DELAY_SEC < 0:
     WINDOW_DELAY_SEC = 0
 if WINDOW_DELAY_SEC > 300:

@@ -3,6 +3,7 @@
 import time
 from typing import Optional
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from eth_account import Account
 from src.config.settings import (
     MARKETS,
@@ -11,6 +12,7 @@ from src.config.settings import (
     MIN_EDGE,
     MAX_SPREAD,
     WINDOW_DELAY_SEC,
+    MAX_ENTRY_LATENESS_SEC,
     ADX_ENABLED,
     ADX_PERIOD,
     ADX_INTERVAL,
@@ -177,6 +179,26 @@ def _prepare_trade_params(
     else:
         token_id, side, price = down_id, "DOWN", 1.0 - p_up
 
+    # Return trade parameters
+    window_start, window_end = get_window_times(symbol)
+
+    # Check lateness
+    now_et = datetime.now(tz=ZoneInfo("America/New_York"))
+    lateness = (now_et - window_start).total_seconds()
+    time_left = (window_end - now_et).total_seconds()
+
+    if lateness > MAX_ENTRY_LATENESS_SEC:
+        log(
+            f"[{symbol}] ⚠️  Cycle is TOO LATE ({lateness:.0f}s into window, {time_left:.0f}s left). SKIPPING."
+        )
+        if add_spacing:
+            log("")
+        return
+    elif lateness > 60:
+        log(
+            f"[{symbol}] ⏳ Cycle is LATE ({lateness:.0f}s into window, {time_left:.0f}s left)"
+        )
+
     target_price = float(get_window_start_price(symbol))
 
     current_spot = 0.0
@@ -236,10 +258,6 @@ def _prepare_trade_params(
 
     size, bet_usd_effective = _calculate_bet_size(balance, price, sizing_confidence)
 
-    # Return trade parameters
-    window_start, window_end = get_window_times(symbol)
-    target_price_final = get_window_start_price(symbol)
-
     return {
         "symbol": symbol,
         "token_id": token_id,
@@ -253,7 +271,7 @@ def _prepare_trade_params(
         "best_ask": best_ask,
         "imbalance": imbalance_val,
         "funding_bias": get_funding_bias(symbol),
-        "target_price": target_price_final if target_price_final > 0 else None,
+        "target_price": target_price if target_price > 0 else None,
         "window_start": window_start,
         "window_end": window_end,
         "slug": get_current_slug(symbol),

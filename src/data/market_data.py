@@ -116,56 +116,56 @@ def get_fear_greed() -> int:
 
 def get_window_start_price(symbol: str) -> float:
     """
-    Get the spot price at the START of the current 15-minute window.
-    This is cached per window so all trades in the same window use the same target price.
-
-    Note: When comparing cached price to actual settlement price, use
-    get_window_start_price_range() to account for timing and API differences.
-    A buffer of WINDOW_START_PRICE_BUFFER_PCT (default 0.05%) is recommended
-    for price comparisons to handle minor discrepancies between the cached price
-    and the actual Polymarket settlement reference price.
-
-    Args:
-        symbol: Trading symbol (e.g., 'BTC', 'ETH')
-
-    Returns:
-        Window start spot price in USDT, or -1.0 on error
+    Get the spot price at the ACTUAL START of the current 15-minute window.
+    This uses Binance historical klines to ensure we get the price at :00, :15, :30, or :45,
+    even if the bot starts the cycle a few minutes late.
     """
-    # Generate cache key based on window start timestamp
-    now_et = datetime.now(tz=ZoneInfo("America/New_York"))
-    minute_slot = (now_et.minute // 15) * 15
-    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0)
-    window_start_utc = window_start_et.astimezone(ZoneInfo("UTC"))
-    cache_key = f"{symbol}_{int(window_start_utc.timestamp())}"
+    now_utc = datetime.now(tz=ZoneInfo("UTC"))
+    minute_slot = (now_utc.minute // 15) * 15
+    window_start_utc = now_utc.replace(minute=minute_slot, second=0, microsecond=0)
+    window_start_ts = int(window_start_utc.timestamp())
+    cache_key = f"{symbol}_{window_start_ts}"
 
-    # Return cached price if available
     if cache_key in _window_start_prices:
         return _window_start_prices[cache_key]
 
-    # Fetch current spot price as the window start price
     pair = BINANCE_FUNDING_MAP.get(symbol.upper())
     if not pair:
         log(f"[{symbol}] No Binance mapping found for spot price")
         return -1.0
 
+    # If we are within 10 seconds of the window start, we can use current ticker price for speed
+    # Otherwise, we MUST use historical klines to be accurate
+    lateness = (now_utc - window_start_utc).total_seconds()
+
     try:
-        url = f"https://api.binance.com/api/v3/ticker/price?symbol={pair}"
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        price = float(data["price"])
+        if lateness < 10:
+            url = f"https://api.binance.com/api/v3/ticker/price?symbol={pair}"
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            price = float(response.json()["price"])
+            method = "ticker"
+        else:
+            # Fetch the 1m kline starting exactly at the window start
+            start_time_ms = window_start_ts * 1000
+            url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1m&startTime={start_time_ms}&limit=1"
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            klines = response.json()
+            if not klines:
+                log(f"[{symbol}] No kline data found for {window_start_utc}")
+                return -1.0
+            # kline format: [open_time, open, high, low, close, volume, ...]
+            price = float(klines[0][1])
+            method = f"kline@{lateness:.0f}s_late"
 
-        # Cache this price for the current window
         _window_start_prices[cache_key] = price
-
-        # Clean up old cache entries (keep only last 10 windows)
         if len(_window_start_prices) > 10:
             oldest_key = min(_window_start_prices.keys())
             del _window_start_prices[oldest_key]
 
-        buffer_pct = WINDOW_START_PRICE_BUFFER_PCT
         log(
-            f"[{symbol}] 🎯 Window start price cached: ${price:,.2f} ±{buffer_pct}% (window: {cache_key})"
+            f"[{symbol}] 🎯 Window start price ({method}): ${price:,.2f} (window: {window_start_utc.strftime('%H:%M:%S')})"
         )
         return price
     except Exception as e:
