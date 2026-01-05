@@ -469,15 +469,23 @@ def _check_exit_plan(
             silent_on_balance_error=True,
             order_type="GTC",  # Good-til-cancelled for exit plan
         )
-        if sell_limit_result["success"]:
-            limit_sell_order_id = sell_limit_result["order_id"]
-            log(
-                f"[{symbol}] ✅ EXIT PLAN: Limit sell order placed at {EXIT_PRICE_TARGET}: {limit_sell_order_id}"
-            )
-            c.execute(
-                "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
-                (limit_sell_order_id, trade_id),
-            )
+
+        # CRITICAL FIX: Always save the order_id if we got one, even if success=False
+        # Polymarket API sometimes returns errors but still creates the order
+        order_id_to_save = sell_limit_result.get("order_id")
+
+        if sell_limit_result["success"] or order_id_to_save:
+            if order_id_to_save:
+                limit_sell_order_id = order_id_to_save
+                log(
+                    f"[{symbol}] ✅ EXIT PLAN: Limit sell order placed at {EXIT_PRICE_TARGET}: {limit_sell_order_id}"
+                )
+                c.execute(
+                    "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                    (limit_sell_order_id, trade_id),
+                )
+            else:
+                log(f"[{symbol}] ⚠️ EXIT PLAN: Order succeeded but no order_id returned")
         else:
             error_msg = sell_limit_result.get("error", "Unknown error")
             log(

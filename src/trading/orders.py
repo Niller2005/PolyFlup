@@ -647,6 +647,16 @@ def place_limit_order(
         error_str = str(e)
         parsed_error = _parse_api_error(error_str)
 
+        # CRITICAL FIX: Try to extract order_id from exception if it exists
+        # Sometimes the API returns an error but still creates the order
+        order_id_from_error = None
+        if hasattr(e, "response") and hasattr(e.response, "json"):
+            try:
+                error_json = e.response.json()
+                order_id_from_error = error_json.get("orderID")
+            except:
+                pass
+
         # Only log if not a balance error during retry, or if we want full logging
         if not (silent_on_balance_error and "balance" in error_str.lower()):
             log(f"❌ {side} Order error: {parsed_error}")
@@ -659,9 +669,11 @@ def place_limit_order(
                 log(traceback.format_exc())
 
         return {
-            "success": False,
-            "status": "ERROR",
-            "order_id": None,
+            "success": bool(
+                order_id_from_error
+            ),  # Success if we got an order_id despite error
+            "status": "ERROR" if not order_id_from_error else "UNKNOWN",
+            "order_id": order_id_from_error,
             "error": parsed_error,
             "errorMsg": parsed_error,
             "orderHashes": [],
