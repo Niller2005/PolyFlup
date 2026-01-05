@@ -189,7 +189,12 @@ def _prepare_trade_params(
     actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
 
     if actual_side == "NEUTRAL":
-        log(f"[{symbol}] ⏳ Monitoring: Confidence {confidence:.1%} is in 'Wait Zone' ({CONTRARIAN_THRESHOLD} < x < {MIN_EDGE})")
+        # Check if this is an "Empty Book" scenario or just low confidence
+        if confidence == 0 and bias == "NEUTRAL":
+            log(f"[{symbol}] ⚪ Neutral / No Signal")
+        else:
+            log(f"[{symbol}] ⏳ WAIT ZONE: {bias} ({confidence:.1%}) | {CONTRARIAN_THRESHOLD} < x < {MIN_EDGE}")
+        
         if add_spacing:
             log("")
         return
@@ -577,6 +582,8 @@ def main():
             # Wait in 1-second chunks so we can check positions
             if cycle == 0 or wait > 30:
                 log(f"⏱️  Waiting {wait}s until next window...")
+            elif wait <= 5:
+                log(f"⏳ Window starting in {wait}s...")
 
             remaining = wait + WINDOW_DELAY_SEC
             while remaining > 0:
@@ -607,9 +614,8 @@ def main():
 
             # Fetch balance once for the cycle
             current_balance = get_balance(addr)
-            log(
-                f"💰 Balance: {current_balance:.2f} USDC | Evaluating {len(MARKETS)} markets"
-            )
+            log(f"💰 Balance: {current_balance:.2f} USDC")
+            log(f"🔍 Evaluating {len(MARKETS)} markets: {', '.join(MARKETS)}")
 
             # Use batch orders for multiple markets (more efficient)
             # Try up to 3 times if we skip due to zero liquidity (Polymarket warm-up)
