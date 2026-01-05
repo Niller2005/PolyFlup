@@ -464,6 +464,42 @@ def _check_exit_plan(
         and position_age_seconds >= EXIT_MIN_POSITION_AGE
         and position_age_seconds > 60
     ):
+        # CRITICAL FIX: Check if exit plan order already exists on Polymarket
+        # This prevents duplicate orders when API returns errors but still creates the order
+        from src.trading.orders import get_orders
+
+        existing_orders = get_orders(asset_id=token_id)
+
+        # Check if there's already a sell order at 0.99 for this token
+        existing_exit_plan = None
+        for order in existing_orders:
+            if isinstance(order, dict):
+                order_side = order.get("side", "").upper()
+                order_price = float(order.get("price", 0))
+                order_size = float(order.get("original_size", 0))
+            else:
+                order_side = getattr(order, "side", "").upper()
+                order_price = float(getattr(order, "price", 0))
+                order_size = float(getattr(order, "original_size", 0))
+
+            # Found an existing sell order at our exit price
+            if order_side == "SELL" and abs(order_price - EXIT_PRICE_TARGET) < 0.01:
+                existing_exit_plan = order
+                if isinstance(order, dict):
+                    order_id = order.get("id")
+                else:
+                    order_id = getattr(order, "id", None)
+
+                # Save it to database so we don't try to create another one
+                log(
+                    f"[{symbol}] ℹ️ EXIT PLAN: Found existing sell order at {EXIT_PRICE_TARGET} ({order_size:.2f} shares) - saving to database"
+                )
+                c.execute(
+                    "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                    (order_id, trade_id),
+                )
+                return
+
         # CRITICAL FIX: Check if we actually have the tokens before placing exit plan
         # Prevents duplicate orders from repeated placement attempts
         balance_info = get_balance_allowance(token_id)
