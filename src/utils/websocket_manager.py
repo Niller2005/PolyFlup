@@ -65,10 +65,13 @@ class WebSocketManager:
         """Main connection and message loop"""
         while self._running:
             try:
-                async with websockets.connect(self.wss_url) as websocket:
+                # Use longer timeout for connection
+                async with websockets.connect(
+                    self.wss_url, ping_interval=20, ping_timeout=20
+                ) as websocket:
                     self._connected = True
                     self._auth_done = False
-                    log("✅ WebSocket connected to Polymarket")
+                    log(f"✅ WebSocket connected to {self.wss_url}")
 
                     # 1. Authenticate (required for user channel)
                     await self._authenticate(websocket)
@@ -76,9 +79,9 @@ class WebSocketManager:
                     # 2. Subscribe to user updates
                     await self._subscribe_user(websocket)
 
-                    # 3. Re-subscribe to existing prices
+                    # 3. Re-subscribe to existing prices using the "market" channel
                     if self.subscribed_tokens:
-                        await self._subscribe_prices(websocket, self.subscribed_tokens)
+                        await self._subscribe_market(websocket, self.subscribed_tokens)
 
                     # 4. Handle incoming messages and subscription queue
                     recv_task = asyncio.create_task(self._receive_messages(websocket))
@@ -119,7 +122,7 @@ class WebSocketManager:
         nonce = 0
 
         # Build HMAC signature for WSS auth
-        # Polymarket expects: build_hmac_signature(secret, timestamp, "GET", "/ws", None)
+        # Request path for WSS auth is usually "/ws"
         signature = build_hmac_signature(api_secret, timestamp, "GET", "/ws")
 
         auth_msg = {
@@ -137,23 +140,23 @@ class WebSocketManager:
         """Subscribe to user specific updates (orders, fills)"""
         msg = {"type": "subscribe", "channel": "user"}
         await websocket.send(json.dumps(msg))
-        log("📡 Subscribed to User Channel (order updates)")
+        log("📡 Subscribed to User Channel")
 
-    async def _subscribe_prices(self, websocket, token_ids: List[str]):
-        """Subscribe to price updates for specific tokens"""
+    async def _subscribe_market(self, websocket, token_ids: List[str]):
+        """Subscribe to market channel for price updates"""
         if not token_ids:
             return
 
-        msg = {"type": "subscribe", "channel": "prices", "token_ids": token_ids}
+        msg = {"type": "subscribe", "channel": "market", "assets_ids": token_ids}
         await websocket.send(json.dumps(msg))
-        log(f"📡 Subscribed to Price Channel for {len(token_ids)} tokens")
+        log(f"📡 Subscribed to Market Channel for {len(token_ids)} tokens")
 
     async def _process_subscription_queue(self, websocket):
         """Handle new subscriptions while connection is active"""
         while self._running:
             token_ids = await self.subscription_queue.get()
             if self._connected:
-                await self._subscribe_prices(websocket, token_ids)
+                await self._subscribe_market(websocket, token_ids)
             self.subscription_queue.task_done()
 
     async def _receive_messages(self, websocket):
@@ -170,28 +173,45 @@ class WebSocketManager:
                 message = message.decode("utf-8")
 
             data = json.loads(message)
-            msg_type = data.get("type")
+            msg_type = data.get("event_type") or data.get("type")
 
-            if msg_type == "price":
-                # Handle price update
-                token_id = data.get("token_id")
-                price = data.get("price")
-                if token_id and price:
-                    self.prices[token_id] = float(price)
+            # Handle multiple message formats from Polymarket
+            if msg_type in ["book", "price_change", "best_bid_ask", "last_trade_price"]:
+                # Handle price update from market channel
+                asset_id = data.get("asset_id")
 
-                    # Execute callbacks
+                if msg_type == "best_bid_ask":
+                    bid = data.get("best_bid")
+                    ask = data.get("best_ask")
+                    if bid and ask:
+                        mid = (float(bid) + float(ask)) / 2.0
+                        self.prices[asset_id] = mid
+                elif msg_type == "price_change":
+                    changes = data.get("price_changes", [])
+                    for c in changes:
+                        a_id = c.get("asset_id")
+                        bid = c.get("best_bid")
+                        ask = c.get("best_ask")
+                        if bid and ask and float(bid) > 0 and float(ask) > 0:
+                            self.prices[a_id] = (float(bid) + float(ask)) / 2.0
+                elif msg_type == "last_trade_price":
+                    price = data.get("price")
+                    if asset_id and price:
+                        self.prices[asset_id] = float(price)
+
+                # Execute callbacks if price updated
+                new_price = self.prices.get(asset_id)
+                if new_price:
                     for cb in self.callbacks["price"]:
                         try:
-                            cb(token_id, float(price))
+                            cb(asset_id, new_price)
                         except Exception as e:
                             log(f"❌ Error in price callback: {e}")
 
             elif msg_type == "order":
-                # Handle user order updates (fills, cancellations)
+                # Handle user order updates
                 event = data.get("event")
                 order = data.get("order", {})
-
-                # Execute callbacks
                 for cb in self.callbacks["order"]:
                     try:
                         cb(event, order)

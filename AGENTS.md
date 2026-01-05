@@ -161,6 +161,7 @@ docker compose down
   📈 [XRP] Trade #154 UP PnL=+71.1% | ⏳ Exit plan pending (45s/60s)
 🎯 [BTC] EXIT PLAN SUCCESS: Trade #143 MATCHED at 0.99! (matched 30.58 shares)
 💰 [BTC] #143 UP: +4.89$ (+19.2%)
+✅ [BTC] #154 UP PnL=+71.1% | ⏰ Exit plan active (120s) | ✅ SCORING
 ```
 
 

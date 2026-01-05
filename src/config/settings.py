@@ -52,6 +52,9 @@ SCALE_IN_MULTIPLIER = float(
 # Exit Plan Configuration
 ENABLE_EXIT_PLAN = os.getenv("ENABLE_EXIT_PLAN", "YES").upper() == "YES"
 EXIT_PRICE_TARGET = float(os.getenv("EXIT_PRICE_TARGET", "0.99"))  # Target exit price
+ENABLE_REWARD_OPTIMIZATION = (
+    os.getenv("ENABLE_REWARD_OPTIMIZATION", "NO").upper() == "YES"
+)  # Adjust orders to earn rewards
 EXIT_MIN_POSITION_AGE = int(
     os.getenv("EXIT_MIN_POSITION_AGE", "60")
 )  # Minimum position age in seconds (1 minute) before exit plan activates
@@ -121,8 +124,9 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 
 # API Endpoints
 CLOB_HOST = "https://clob.polymarket.com"
-CLOB_WSS_HOST = "wss://clob.polymarket.com/ws"
+CLOB_WSS_HOST = "wss://ws-subscriptions-clob.polymarket.com/ws/"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
+DATA_API_BASE = "https://data-api.polymarket.com"
 CHAIN_ID = 137
 SIGNATURE_TYPE = 2
 POLYGON_RPC = "https://polygon-rpc.com"

@@ -4,6 +4,29 @@ This document summarizes all improvements made during the development session.
 
 ---
 
+## High Impact: Real-time Execution & API Efficiency
+
+### 1. WebSocket Integration (Priority 1)
+**Description:** Replaced inefficient 30s notification polling and 1s price polling with a persistent WebSocket connection.
+- **WebSocketManager:** Created `src/utils/websocket_manager.py` to handle background connections, authentication (HMAC), and channel subscriptions.
+- **Market Data:** Near-instant P&L updates using real-time midpoint prices cached from the `prices` channel.
+- **User Updates:** Order fills and cancellations are now processed instantly via the `user` channel callbacks.
+- **Reduced Latency:** Significant improvement in Stop Loss and Exit Plan response times.
+
+### 2. Startup State Synchronization (Priority 2)
+**Description:** Enhanced bot startup to ensure local database matches exchange state perfectly.
+- **Gamma Sync:** Added `sync_positions_with_exchange` to fetch actual positions from Gamma API on startup.
+- **Auto-Correction:** Automatically updates database size and entry prices if discrepancies are detected.
+- **Cleanup:** Settles "ghost" trades in the DB that were closed while the bot was offline.
+
+### 3. Reward Scoring Monitoring (Priority 1.3)
+**Description:** Integrated liquidity reward tracking for active orders.
+- **Scoring Checks:** Integrated `is_order_scoring` API to verify if limit orders are earning rewards.
+- **Reward Optimization:** Added `ENABLE_REWARD_OPTIMIZATION` setting. If enabled, the bot automatically adjusts Exit Plan orders closer to the midpoint (while maintaining profit) to ensure they are "scoring" for rewards.
+- **Visibility:** Added scoring status (✅ SCORING / ❌ NOT SCORING) to monitoring logs.
+
+---
+
 ## Critical Bug Fixes (3 items)
 
 ### 1. Exit Plan Timer/Cooldown Stuck

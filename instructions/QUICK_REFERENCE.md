@@ -320,6 +320,8 @@ Result: Full position covered ✅
 | `run_migrations()` | Schema updates | No data loss |
 | `process_notifications()` | Monitor fills | Real-time updates |
 | `_update_exit_plan_after_scale_in()` | Update exit after scale | Cover full position |
+| `check_order_scoring()` | Reward verification | Earn liquidity rewards |
+| `sync_positions_with_exchange()` | Startup sync | Prevent ghost positions |
 
 ---
 
