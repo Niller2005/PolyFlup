@@ -82,13 +82,18 @@ def sync_positions_with_exchange(user_address: str):
         exchange_positions = get_current_positions(user_address)
 
         # Create a map of token_id -> position_data for easy lookup
-        # ENSURE token_id is handled as a normalized string for consistent comparison
+        # We normalize to decimal string for the primary key
         pos_map = {}
         for p in exchange_positions:
             aid = p.get("asset_id") or p.get("assetId") or p.get("token_id")
             if aid:
-                # Normalize ID: strip and lowercase
-                norm_aid = str(aid).strip().lower()
+                aid_str = str(aid).strip().lower()
+                norm_aid = aid_str
+                # If it's hex, convert to decimal string
+                if aid_str.startswith("0x"):
+                    try:
+                        norm_aid = str(int(aid_str, 16))
+                    except: pass
                 pos_map[norm_aid] = p
 
         with db_connection() as conn:
@@ -103,13 +108,21 @@ def sync_positions_with_exchange(user_address: str):
 
             # Track which exchange positions were matched to DB trades
             matched_exchange_ids = set()
-            db_token_ids = []
+            db_token_ids = set()
 
             for trade_id, symbol, side, db_size, token_id, db_entry in db_trades:
-                # Normalize DB token_id
-                tid_str = str(token_id).strip().lower() if token_id else ""
-                db_token_ids.append(tid_str)
+                # Normalize DB token_id to decimal string
+                tid_raw = str(token_id).strip().lower() if token_id else ""
+                tid_str = tid_raw
+                if tid_raw.startswith("0x"):
+                    try:
+                        tid_str = str(int(tid_raw, 16))
+                    except: pass
                 
+                if tid_str:
+                    db_token_ids.add(tid_str)
+                
+                # Check match in pos_map (which is also indexed by decimal string)
                 if tid_str and tid_str in pos_map:
                     pos = pos_map[tid_str]
                     matched_exchange_ids.add(tid_str)
@@ -158,8 +171,7 @@ def sync_positions_with_exchange(user_address: str):
                             )
 
             # 3. Check for untracked positions
-            for t_id_raw, p_data in pos_map.items():
-                t_id_str = str(t_id_raw).strip().lower()
+            for t_id_str, p_data in pos_map.items():
                 if t_id_str and t_id_str not in db_token_ids:
                     size = float(p_data.get("size", 0))
                     if size < 0.001:
@@ -501,7 +513,6 @@ def _check_exit_plan(
     on_cd = now.timestamp() - last_att < 30
 
     if not limit_sell_id and age >= EXIT_MIN_POSITION_AGE:
-        # ... (keep existing logic for placing new exit order)
         if on_cd:
             if verbose:
                 log(f"   ⏳ [{symbol}] Exit plan cooldown: {30 - (now.timestamp() - last_att):.0f}s left (Trade age: {age:.0f}s)")
@@ -578,7 +589,6 @@ def _check_exit_plan(
         log(f"  {'📈' if pnl_pct > 0 else '📉'} [{symbol}] {status}")
 
 
-
 def _check_scale_in(
     symbol,
     trade_id,
@@ -600,7 +610,6 @@ def _check_scale_in(
     if not ENABLE_SCALE_IN:
         return
     if scale_in_id and check_orders:
-
         try:
             o_data = get_order(scale_in_id)
             if o_data and o_data.get("status", "").upper() in ["FILLED", "MATCHED"]:
@@ -674,7 +683,6 @@ def _check_scale_in(
                 "UPDATE trades SET scale_in_order_id = ? WHERE id = ?",
                 (res["order_id"], trade_id),
             )
-
 
 
 def check_open_positions(verbose=True, check_orders=False):
@@ -799,7 +807,6 @@ def check_open_positions(verbose=True, check_orders=False):
                                     c.execute("SELECT limit_sell_order_id FROM trades WHERE id = ?", (tid,))
                                     l_sell = c.fetchone()[0]
 
-
                     pnl_i = _get_position_pnl(tok, entry, size, cached_prices)
                     if not pnl_i:
                         continue
@@ -858,7 +865,6 @@ def check_open_positions(verbose=True, check_orders=False):
                         verbose=verbose,
                     )
 
-
                     # Refresh data after scale-in check
                     c.execute(
                         "SELECT size, entry_price, bet_usd, scaled_in, limit_sell_order_id, scale_in_order_id FROM trades WHERE id = ?",
@@ -893,4 +899,3 @@ def check_open_positions(verbose=True, check_orders=False):
                     log(f"⚠️ [{sym}] #{tid} Error: {e}")
     finally:
         _position_check_lock.release()
-
