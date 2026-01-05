@@ -65,6 +65,7 @@ from src.trading.orders import (
     get_clob_client,
     get_bulk_spreads,
     get_spread,
+    get_order,
     check_liquidity,
     BUY,
     SELL,
@@ -335,8 +336,28 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
         log(f"[{trade_params['symbol']}] ❌ Order failed, skipping trade tracking")
         return 0
 
+    actual_size = trade_params["size"]
+    actual_price = trade_params["price"]
+    actual_status = result["status"]
+    
+    # If already matched, try to get the actual execution details immediately
+    if actual_status.upper() in ["FILLED", "MATCHED"]:
+        try:
+            o_data = get_order(result["order_id"])
+            if o_data:
+                sz_m = float(o_data.get("size_matched", 0))
+                pr_m = float(o_data.get("price", 0))
+                if sz_m > 0:
+                    actual_size = sz_m
+                    if pr_m > 0:
+                        actual_price = pr_m
+                    # Recalculate bet_usd based on actual fill
+                    trade_params["bet_usd"] = actual_size * actual_price
+        except Exception as e:
+            log(f"⚠️ [{trade_params['symbol']}] Could not sync execution details immediately: {e}")
+
     send_discord(
-        f"**[{trade_params['symbol']}] {trade_params['side']} ${trade_params['bet_usd']:.2f}** | Confidence {trade_params['confidence']:.1%} | Price {trade_params['price']:.4f}"
+        f"**[{trade_params['symbol']}] {trade_params['side']} ${trade_params['bet_usd']:.2f}** | Confidence {trade_params['confidence']:.1%} | Price {actual_price:.4f}"
     )
 
     try:
@@ -348,15 +369,15 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
             token_id=trade_params["token_id"],
             side=trade_params["side"],
             edge=trade_params["confidence"],
-            price=trade_params["price"],
-            size=trade_params["size"],
+            price=actual_price,
+            size=actual_size,
             bet_usd=trade_params["bet_usd"],
             p_yes=trade_params["p_up"],
             best_bid=trade_params["best_bid"],
             best_ask=trade_params["best_ask"],
             imbalance=trade_params["imbalance"],
             funding_bias=trade_params["funding_bias"],
-            order_status=result["status"],
+            order_status=actual_status,
             order_id=result["order_id"],
             limit_sell_order_id=None,
             target_price=trade_params["target_price"],
@@ -469,8 +490,27 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         if i < len(trade_params_list) and result["success"]:
             placed_count += 1
             p = trade_params_list[i]
+            
+            actual_size = p["size"]
+            actual_price = p["price"]
+            actual_status = result["status"]
+            
+            # Sync execution details for matched orders
+            if actual_status.upper() in ["FILLED", "MATCHED"]:
+                try:
+                    o_data = get_order(result["order_id"])
+                    if o_data:
+                        sz_m = float(o_data.get("size_matched", 0))
+                        pr_m = float(o_data.get("price", 0))
+                        if sz_m > 0:
+                            actual_size = sz_m
+                            if pr_m > 0:
+                                actual_price = pr_m
+                            p["bet_usd"] = actual_size * actual_price
+                except: pass
+
             send_discord(
-                f"**[{p['symbol']}] {p['side']} ${p['bet_usd']:.2f}** | Confidence {p['confidence']:.1%} | Price {p['price']:.4f}"
+                f"**[{p['symbol']}] {p['side']} ${p['bet_usd']:.2f}** | Confidence {p['confidence']:.1%} | Price {actual_price:.4f}"
             )
             try:
                 trade_id = save_trade(
@@ -481,21 +521,21 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                     token_id=p["token_id"],
                     side=p["side"],
                     edge=p["confidence"],
-                    price=p["price"],
-                    size=p["size"],
+                    price=actual_price,
+                    size=actual_size,
                     bet_usd=p["bet_usd"],
                     p_yes=p["p_up"],
                     best_bid=p["best_bid"],
                     best_ask=p["best_ask"],
                     imbalance=p["imbalance"],
                     funding_bias=p["funding_bias"],
-                    order_status=result["status"],
+                    order_status=actual_status,
                     order_id=result["order_id"],
                     limit_sell_order_id=None,
                     target_price=p["target_price"],
                 )
                 log(
-                    f"[{p['symbol']}] 🚀 #{trade_id} {p['side']} ${p['bet_usd']:.2f} @ {p['price']:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
+                    f"[{p['symbol']}] 🚀 #{trade_id} {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | {actual_status} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
                 )
             except Exception as e:
                 log(f"[{p['symbol']}] Trade completion error: {e}")

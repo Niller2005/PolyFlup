@@ -91,6 +91,18 @@ def _check_stop_loss(
         outcome = 'REVERSAL_STOP_LOSS'
 
     log(f"🛑 [{symbol}] #{trade_id} {outcome}: {pnl_pct:.1f}% PnL")
+    
+    # Robust size check: fetch actual balance to ensure we sell everything
+    # This prevents "leftover" shares if the database size was slightly inaccurate
+    try:
+        balance_info = get_balance_allowance(token_id)
+        actual_balance = balance_info.get("balance", 0) if balance_info else 0
+        if actual_balance > 0 and abs(actual_balance - size) > 0.01:
+            log(f"   📊 [{symbol}] #{trade_id} Sync: Database size {size:.2f} != actual balance {actual_balance:.2f} - Updating sell size.")
+            size = actual_balance
+    except Exception as e:
+        log(f"   ⚠️ [{symbol}] Could not verify balance before sell: {e}")
+
     if limit_sell_order_id:
         if cancel_order(limit_sell_order_id):
             time.sleep(2)

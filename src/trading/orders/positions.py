@@ -96,17 +96,26 @@ def sell_position(
 ) -> dict:
     retry_delays = [2, 3, 5]
     import time
+    remaining_size = size
+    
     for attempt in range(max_retries):
         try:
             if attempt > 0:
+                # Before retry, check actual balance to see what's left
+                balance_info = get_balance_allowance(token_id)
+                remaining_size = balance_info.get("balance", 0) if balance_info else remaining_size
+                if remaining_size < 0.1:
+                    return {"success": True, "sold": size - remaining_size, "status": "FILLED"}
+                
                 log(
-                    f"🔄 Retry {attempt} selling... waiting {retry_delays[attempt - 1]}s"
+                    f"🔄 Retry {attempt} selling {remaining_size:.2f} shares... waiting {retry_delays[attempt - 1]}s"
                 )
                 time.sleep(retry_delays[attempt - 1])
+
             if use_market_order:
                 result = place_market_order(
                     token_id=token_id,
-                    amount=size,
+                    amount=remaining_size,
                     side=SELL,
                     order_type="FAK",
                     silent_on_error=(attempt < max_retries - 1),
@@ -116,19 +125,28 @@ def sell_position(
                 result = place_limit_order(
                     token_id=token_id,
                     price=sell_price,
-                    size=size,
+                    size=remaining_size,
                     side=SELL,
                     silent_on_balance_error=(attempt < max_retries - 1),
                     order_type="FAK" if attempt == 0 else "GTC",
                 )
+
             if result["success"]:
-                return {
-                    "success": True,
-                    "sold": size,
-                    "price": result.get("price", current_price),
-                    "status": result["status"],
-                    "order_id": result["order_id"],
-                }
+                # Check if it was a full fill
+                matched = float(result.get("size_matched", 0))
+                if matched >= remaining_size * 0.99:
+                    return {
+                        "success": True,
+                        "sold": size,
+                        "price": result.get("price", current_price),
+                        "status": result["status"],
+                        "order_id": result["order_id"],
+                    }
+                else:
+                    # Partial fill - allow loop to retry with remaining
+                    log(f"   ⚠️ Partial sell fill: {matched:.2f}/{remaining_size:.2f} matched.")
+                    continue
+
             err = result.get("error", "").lower()
             if "balance" in err and attempt < max_retries - 1:
                 continue
