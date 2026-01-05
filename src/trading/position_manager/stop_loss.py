@@ -35,25 +35,39 @@ def _check_stop_loss(
     c.execute("SELECT settled FROM trades WHERE id = ?", (trade_id,))
     if (row := c.fetchone()) and row[0] == 1:
         return True
-    if not ENABLE_STOP_LOSS or pnl_pct > -STOP_LOSS_PERCENT or size == 0:
+    # Adjusted threshold for reversals - minimize chances to stop loss after reversal
+    effective_stop_loss = STOP_LOSS_PERCENT
+    if is_reversal:
+        effective_stop_loss = STOP_LOSS_PERCENT * 1.5
+        
+    if not ENABLE_STOP_LOSS or pnl_pct > -effective_stop_loss or size == 0:
         return False
     if buy_order_status not in ["FILLED", "MATCHED"]:
         return False
     c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
     if row := c.fetchone():
         try:
+            # Positions must be at least 30s old
             if (now - datetime.fromisoformat(row[0])).total_seconds() < 30:
                 return False
         except:
             pass
 
     current_spot = get_current_spot_price(symbol)
+    
+    # Check if we are on the winning side of the prediction market
     is_on_losing_side = True
     if current_spot > 0 and target_price:
         if side == "UP" and current_spot >= target_price:
             is_on_losing_side = False
         elif side == "DOWN" and current_spot <= target_price:
             is_on_losing_side = False
+    elif current_spot <= 0:
+        # If we can't verify spot price, default to HOLDING if PnL is not extremely bad
+        # or if it's a reversal to avoid accidental closes
+        if is_reversal or pnl_pct > -effective_stop_loss * 1.2:
+            log(f"⚠️ [{symbol}] Could not fetch spot price - HOLDING (PnL: {pnl_pct:.1f}%)")
+            return False
 
     if not is_on_losing_side:
         log(f"ℹ️ [{symbol}] PnL is bad ({pnl_pct:.1f}%) but on WINNING side - HOLDING")
