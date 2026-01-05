@@ -62,13 +62,9 @@ def _check_stop_loss(
     is_on_losing_side = True
     
     # Midpoint interpretation: 
-    # For UP: > 0.50 is winning, > 0.80 is strongly winning
-    # For DOWN: < 0.50 is winning, < 0.20 is strongly winning
-    if current_price > 0:
-        if side == "UP" and current_price >= 0.50:
-            is_on_losing_side = False
-        elif side == "DOWN" and current_price <= 0.50:
-            is_on_losing_side = False
+    # Regardless of side, if the token we hold is >= $0.50, we are on the favored (winning) side.
+    if current_price >= 0.50:
+        is_on_losing_side = False
             
     # FALLBACK: Binance Spot Price vs Window Start (Chainlink Proxy)
     # Only use this if the prediction market itself is extremely illiquid (midpoint near 0.5 but spot moved)
