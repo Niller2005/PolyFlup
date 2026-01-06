@@ -9,344 +9,39 @@ PolyFlup is an automated trading bot for 15-minute crypto prediction markets on 
 - **Frontend**: Svelte dashboard (`ui/`)
 - **Database**: SQLite (`trades.db`)
 
-## Helper Tools
+## Skills & Instructions
 
-The following tools are installed and available for system tasks:
-- **ripgrep (`rg`)**: Fast content search across the codebase.
-- **sqlite3**: CLI tool for inspecting and modifying the `trades.db` database.
+This project uses **OpenCode Skills** for detailed instructions. Agents should load these skills on-demand to understand specific parts of the system:
 
-## Build, Lint, and Test Commands
+- `python-bot-standards`: Coding standards and modular architecture for the Python backend.
+- `svelte-ui-standards`: Guidelines for the Svelte/Tailwind/shadcn-svelte frontend.
+- `database-sqlite`: SQLite connection management and migration system.
+- `polymarket-trading`: Trading strategies, terminology, and Polymarket API nuances.
+- `polyflup-ops`: Operational commands (Docker, uv, npm) and environment configuration.
+- `polyflup-history`: Chronological log of recent system improvements.
 
-### Python Backend
+## Quick Start (Core Commands)
 
+### Backend
 ```bash
-# Run the trading bot
-uv run polyflup.py
-
-# Run a specific test script
-uv run test_price_buffer.py
-
-# Install dependencies
-uv pip install -r requirements.txt
-
-# Alternative with uv sync (if pyproject.toml exists)
-uv sync
-
-# Check database
-uv run check_db.py
-
-# Database migration
-uv run migrate_db.py
+uv run polyflup.py      # Start trading bot
+uv run check_db.py      # Verify database integrity
 ```
 
-**Note**: No pytest configuration found. Test files are standalone scripts run directly with Python.
-
-### Svelte UI
-
+### Frontend
 ```bash
-# Install dependencies
-cd ui && npm install
-
-# Development mode (runs server + vite)
-npm run dev
-
-# Production build
-npm run build
-
-# Preview production build
-npm run preview
-
-# Start production server
-npm start
+cd ui && npm run dev    # Start dashboard development server
 ```
 
-### Docker
+### Logs
+- `logs/trades_2025.log`: Master audit log.
+- `logs/errors.log`: Dedicated error stack traces.
+- `logs/window_*.log`: Specific 15-minute window history.
 
-```bash
-# Build and run both bot and UI
-docker compose up -d --build
+## Important Mandates
 
-# View bot logs
-docker logs -f polyflup-bot
-
-# Stop containers
-docker compose down
-```
-
-## Code Style Guidelines
-
-### Python (Backend)
-
-#### Imports
-- Use absolute imports from `src.*`
-- Group imports: standard library → third-party → local
-- Example:
-  ```python
-  import time
-  from datetime import datetime
-  from eth_account import Account
-  from src.config.settings import MARKETS, PROXY_PK
-  from src.utils.logger import log
-  from src.data.database import init_database
-  ```
-
-#### Formatting
-- **Indentation**: 4 spaces
-- **Line length**: ~90 characters (see bot.py:276-282)
-- **Strings**: Double quotes preferred
-- **Docstrings**: Triple double-quotes with brief description
-  ```python
-  """Calculate confidence score and directional bias"""
-  ```
-
-#### Types
-- Type hints encouraged but not strictly enforced
-- Use type hints in function signatures where helpful:
-  ```python
-  def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
-  ```
-
-#### Naming Conventions
-- **Functions**: `snake_case` (e.g., `calculate_confidence`, `get_balance`)
-- **Classes**: `PascalCase` (if added)
-- **Constants**: `UPPER_SNAKE_CASE` (e.g., `MIN_EDGE`, `ADX_ENABLED`)
-- **Private functions**: Prefix with `_` (e.g., `_determine_trade_side`)
-- **Files/Modules**: `snake_case.py`
-
-#### Error Handling
-- Use try-except blocks with specific exceptions when possible
-- Always log errors with context:
-  ```python
-  try:
-      result = place_order(token_id, price, size)
-  except Exception as e:
-      log(f"[{symbol}] Order failed: {e}")
-      return
-  ```
-- Graceful degradation: return neutral/safe values on error
-- Send critical errors to Discord webhook via `send_discord()`
-
-#### Logging
-- Use the `log()` function from `src.utils.logger` for general messages.
-- **Window-Specific Logs**: The bot automatically creates a new log file for each 15-minute trading window (e.g., `logs/window_2026-01-06_15-45.log`).
-- **Master Log**: All logs are also mirrored to `logs/trades_2025.log` for a complete history.
-- **Use the `log_error()` function from `src.utils.logger` for all exceptions and failures.**
-  - `log_error(text, include_traceback=True)`: Captures full stack trace and writes to dedicated `logs/errors.log`.
-- Include context: `log(f"[{symbol}] message")`
-- **Always start log lines with relevant emojis** for visual scanning
-- Keep logs concise - only log significant events and state changes
-- Use verbose cycles (every 60s) for routine monitoring logs
-
-#### Strategy Nuances
-- **Trend Agreement Bonus**: A **1.1x multiplier** is applied to the final confidence if both Binance and Polymarket signals agree on the trend direction.
-- **Underdog Filter**: Any entry on a side with a price < $0.50 (the "underdog") requires a minimum of **40% confidence** (configurable via `LOSING_SIDE_MIN_CONFIDENCE`).
-- **Lead/Lag Bonus**: An experimental **1.2x multiplier** (or 0.8x penalty) is applied based on cross-exchange consistency (Lead/Lag relationship).
-- **Share Precision & Minimums**:
-  - **5.0 Shares**: Polymarket enforces a 5.0 share minimum for all limit orders. The bot checks `sell_size >= 5.0` before placing exit plans.
-  - **0.0001 Precision**: Local database size is synced to actual exchange balance using a strict **0.0001** threshold to prevent "Insufficient funds" errors on 6-decimal tokens.
-
-**Standard Emoji Guide:**
-  - 👀 Monitoring/watching positions
-  - 📈 Position with positive P&L
-  - 📉 Position with negative P&L / Exit plan
-  - 🛑 Stop loss triggered
-  - 🎯 Take profit / Exit plan filled
-  - ✅ Success / Order filled
-  - ❌ Error/Failure
-  - ⚠️ Warning
-  - 🔄 Reversal / Retry / Update
-  - 🔔 Notification
-  - 💪 Holding despite negative P&L (on winning side)
-  - ⏳ Waiting / Processing
-  - 📊 Position size/average price updates
-  - 💰 Money/Balance
-  - 🚀 Trade execution
-
-**Logging Best Practices:**
-- Always start log lines with relevant emojis and include the symbol and trade ID in brackets: `EMOJI [SYMBOL] #ID message`
-- For trade actions (Scale-in, Exit Plan, etc.), prepend the current position summary: `  EMOJI [SYMBOL] Trade #ID SIDE PnL% | Action message`
-- Use dynamic emojis (📈/📉) based on current PnL in log prefixes
-- Only log position details on verbose cycles (60s) and only when P&L is significant (>20% or <-30%)
-- Don't log routine order status checks (LIVE, DELAYED, UNMATCHED) unless there's an issue
-- Consolidate related information into single log lines (e.g., add `📋 Scale-in pending` or `📊 Scaled in` to status summary)
-- Use emojis consistently to make log scanning effortless
-- **Exit Plan Visibility**: Always show current status (Pending/Active) in verbose monitoring logs.
-
-**Action & Settlement Log Examples:**
-```text
-  📈 [XRP] Trade #154 UP PnL=+71.1% | 📈 SCALE IN triggered: price=$0.78, 119s left
-  📈 [XRP] Trade #154 UP PnL=+71.1% | ✅ SCALE IN order placed: 28.92 shares @ $0.78 (status: live)
-  📈 [XRP] Trade #154 UP PnL=+71.1% | ⏳ Exit plan pending (45s/60s)
-🎯 [BTC] EXIT PLAN SUCCESS: Trade #143 MATCHED at 0.99! (matched 30.58 shares)
-💰 [BTC] #143 UP: +4.89$ (+19.2%)
-🚀 [BTC] Trend Following: Confidence: 72.4% (UP) | #1087 UP $5.20 @ 0.5200
-🔄 [ETH] Contrarian Entry: Confidence: 5.2% (UP) | #1088 DOWN $3.50 @ 0.4500
-⚔️ 🚀 [XRP] Hedged Reversal (Trend): Confidence: 65.0% (DOWN) | #1089 DOWN $4.10 @ 0.7200
-⚔️ 🔄 [SOL] Hedged Reversal (Contrarian): Confidence: 4.5% (DOWN) | #1090 UP $2.80 @ 0.4800
-✅ [BTC] #154 UP PnL=+71.1% | ⏰ Exit plan active (120s) | ✅ SCORING
-
-============================================================
-🏁 WINDOW SUMMARY: 15:45 - 16:00
-   Total PnL: +12.45$ (+8.2%)
-   Trades:    2
-     - [BTC] UP: +15.20$ (+10.1%) | RESOLVED
-     - [ETH] DOWN: -2.75$ (-1.8%) | RESOLVED
-============================================================
-```
-
-
-#### Configuration
-- All config in `src/config/settings.py`
-- Load from environment variables with defaults
-- Validate critical settings (e.g., PROXY_PK must exist and start with "0x")
-- Use type conversion: `float()`, `int()`, `.upper() == "YES"`
-
-### JavaScript/Svelte (Frontend)
-
-#### Formatting (Biome)
-- **Indentation**: 2 spaces (enforced by biome.json)
-- **Style**: Space indent, recommended rules enabled
-- Ignore CSS files from formatting
-
-#### File Structure
-- Components in `ui/src/lib/components/`
-- UI components in `ui/src/lib/components/ui/`
-- Each component exports from `index.ts`
-- Stores in `ui/src/lib/stores/`
-
-#### Naming
-- **Components**: `PascalCase.svelte` (e.g., `App.svelte`)
-- **Utilities**: `camelCase.js` (e.g., `theme.js`)
-- **CSS classes**: Tailwind utility classes
-
-#### Svelte Patterns
-- Use reactive declarations: `$: winRate = ...`
-- Prefer `{#snippet}` for chart tooltips (Svelte 5 syntax)
-- Use `onMount` for initialization and intervals
-- Clean up intervals in return function
-
-#### API Integration
-- Fetch from `http://${hostname}:3001/api/stats`
-- Poll every 5 seconds for real-time updates
-- Handle loading and error states
-
-## Architecture Patterns
-
-### Backend Module Structure
-```
-src/
-├── config/         # Settings and environment variables
-├── data/           # Database and market data
-│   ├── market_data/ # Modular data fetching (Polymarket, Binance, Indicators)
-│   └── ...
-├── trading/        # Core trading logic
-│   ├── orders/      # Modular order management (Limit, Market, Batch)
-│   ├── position_manager/ # Modular position monitoring
-│   └── strategy.py  # Entry signals and confidence logic
-└── utils/          # Logging, web3 utilities, WebSocket manager
-```
-
-### Key Patterns
-1. **Separation of Concerns**: Each module has a clear responsibility
-2. **Database Connection**: Use `db_connection()` context manager
-   - **NEVER** call `conn.commit()` manually - handled by context manager
-   - Context manager automatically commits on success, rolls back on error
-   - **CRITICAL**: When calling functions that perform writes (like `execute_trade` or `save_trade`) from within an existing database transaction, **pass the active cursor**. This prevents "database is locked" deadlocks caused by nested connections.
-3. **Timing**: UTC timezone via `ZoneInfo('UTC')`
-4. **Position Monitoring**: High-frequency checks (10 second intervals)
-5. **Hedged Reversal**: Bot can hold both UP and DOWN positions simultaneously for the same window. Reversals don't close existing positions; the losing side is cleared via stop loss.
-6. **Midpoint Stop Loss**: Primary stop loss trigger is the midpoint price (default <= $0.30) rather than percentage-based PnL.
-7. **Trade Execution**: Validate before saving to database
-8. **Order Status**: Treat both `FILLED` and `MATCHED` statuses as successful executions in the position manager to ensure trades are settled promptly and redundant logging is avoided.
-
-### Data Flow
-```
-polyflup.py (main loop)
-  → trade_symbol()
-    → calculate_confidence() [strategy]
-    → place_order() [orders]
-    → save_trade() [database]
-  → check_open_positions() [position_manager]
-  → check_and_settle_trades() [settlement]
-```
-
-## Environment Variables
-
-Key settings (see `.env.example`):
-- `PROXY_PK`: Private key (required)
-- `BET_PERCENT`: Position size (default: 5.0)
-- `MIN_EDGE`: Minimum confidence (default: 0.565)
-- `ENABLE_STOP_LOSS`: YES/NO
-- `ENABLE_TAKE_PROFIT`: YES/NO
-- `ENABLE_REVERSAL`: YES/NO
-- `MARKETS`: Comma-separated symbols (e.g., "BTC,ETH,SOL,XRP")
-
-### Database Configuration
-- The bot uses local SQLite (`trades.db`) for all operations.
-- Data is stored in the project root.
-
-## Database Schema
-
-Main table: `trades`
-- Core fields: `id`, `timestamp`, `symbol`, `side`, `entry_price`, `size`
-- Settlement: `settled`, `final_outcome`, `exit_price`, `pnl_usd`, `roi_pct`
-- Metadata: `order_id`, `order_status`, `target_price`, `is_reversal`
-
-## Debugging & Monitoring
-
-### Local Logs
-For deep context on historical trades, strategy decisions, and execution details beyond what is available in the database, refer to the local log files:
-- **`logs/trades_2025.log`**: Contains verbose history of bot cycles, signal evaluations, order placements, and settlement details. Use this file when debugging unexpected bot behavior or auditing past trades.
-
-### Commands
-- **View real-time container logs**: `docker logs -f polyflup-bot`
-- **Inspect database**: `sqlite3 trades.db`
-- **Check DB integrity**: `uv run check_db.py`
-
-## Common Pitfalls
-
-1. **Don't** modify git config or run destructive commands
-2. **Don't** commit `.env` files (secrets)
-3. **Don't** skip validation before database inserts
-4. **Don't** call `conn.commit()` manually - the context manager handles it
-5. **Do** check order success before saving trades
-6. **Do** use context managers for database connections
-7. **Do** handle timezone conversions properly (always use UTC)
-8. **Do** log with appropriate context and symbols
-
-## Testing
-
-- Test scripts are standalone Python files (e.g., `test_price_buffer.py`)
-- Run directly: `uv run test_<name>.py`
-- No pytest framework currently in use
-- Test database operations with `uv run check_db.py`
-
-## Deployment
-
-- Production uses Docker Compose
-- Two containers: bot + UI
-- Database: Local SQLite only
-- UI serves on port 3001 (API + frontend)
-
-## Contributing
-
-When modifying code:
-1. Maintain existing patterns and style
-2. Add logging for new operations
-3. Update error handling appropriately
-4. Test with actual API if possible
-5. Consider Discord notifications for user-facing events
-6. Document complex trading logic in comments
-7. Provide "Before and After" Examples: When making visual changes (e.g., logging formatting, UI layouts) or significant logic refactors, provide a brief "before and after" comparison in your response to help the user visualize the impact. Ensure these are wrapped in code blocks (markdown triple backticks) to preserve exact formatting.
-
-## Documentation Reference
-
-For additional information about the codebase and recent improvements:
-
-- **instructions/SESSION_IMPROVEMENTS.md** - Full details on all improvements from latest session (bug fixes, features, API integrations)
-- **instructions/QUICK_REFERENCE.md** - Code examples and quick lookup for new features (batch orders, market orders, notifications, etc.)
-- **instructions/MIGRATIONS.md** - How to add database migrations (step-by-step guide with examples)
-- **instructions/DATABASE_BEST_PRACTICES.md** - Database connection patterns and best practices
-- **instructions/POLYMARKET.md** - Polymarket API documentation and reference
-- **instructions/SHADCN_SVELTE.md** - Shadcn-svelte component documentation and registry
-- **AGENTS.md** - This file - General coding standards and project overview
+1. **Database Safety**: ALWAYS use `db_connection()` context manager. NEVER call `conn.commit()` manually.
+2. **Deadlock Prevention**: Pass active cursors when calling write functions from within an existing transaction.
+3. **Logging**: Start log lines with relevant emojis (🚀, ✅, ❌, 👀) and include `[SYMBOL]` context.
+4. **Precision**: Use `0.0001` threshold for share balance comparisons.
+5. **Min Size**: Enforce 5.0 share minimum for all limit orders.
