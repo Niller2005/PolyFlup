@@ -9,8 +9,13 @@ load_dotenv()
 
 # Trading Configuration
 BET_PERCENT = float(os.getenv("BET_PERCENT", "5.0"))
-MIN_EDGE = float(os.getenv("MIN_EDGE", "0.35"))  # Lowered based on observed max confidence
-CONTRARIAN_THRESHOLD = float(os.getenv("CONTRARIAN_THRESHOLD", "0.10"))  # Threshold for flipping bias
+MIN_EDGE = float(
+    os.getenv("MIN_EDGE", "0.35")
+)  # Lowered based on observed max confidence
+CONTRARIAN_THRESHOLD = float(
+    os.getenv("CONTRARIAN_THRESHOLD", "0.10")
+)  # Threshold for flipping bias
+CONFIDENCE_SCALING_FACTOR = float(os.getenv("CONFIDENCE_SCALING_FACTOR", "5.0"))
 MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.15"))
 WINDOW_START_PRICE_BUFFER_PCT = float(
     os.getenv("WINDOW_START_PRICE_BUFFER_PCT", "0.05")

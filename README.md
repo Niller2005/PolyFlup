@@ -6,14 +6,12 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 
 ### 📊 Trading Strategy
 - **Multi-Source Signal Integration**: Combines Polymarket order book data with real-time Binance market data to identify true mispricings
-- **Edge Calculation**: Weighted combination of signals (100% total):
-  - **Base Signals (60%)**: Polymarket price (40%), order book imbalance (20%)
-  - **Binance Integration (40%)**: Price momentum (15%), order flow (10%), cross-exchange divergence (10%), volume-weighted momentum (5%)
-- **Advanced Binance Strategy**:
-  - **Price Momentum**: Velocity, acceleration, and RSI analysis over 15-minute lookback
-  - **Order Flow**: Buy/sell pressure from Binance taker volume
-  - **Divergence Detection**: Identifies when Polymarket pricing differs from Binance trends
-  - **Volume-Weighted Metrics**: VWAP distance with volume quality filtering
+- **Edge Calculation**: Directional voting system where external Binance signals validate Polymarket pricing (100% total weight):
+  - **Price Momentum (30%)**: Velocity, acceleration, and RSI analysis over 15-minute lookback
+  - **Polymarket Momentum (20%)**: Internal price action confirmation on the CLOB
+  - **Order Flow (20%)**: Buy/sell pressure from Binance taker volume
+  - **Cross-Exchange Divergence (20%)**: Detects when Polymarket pricing differs from Binance trends
+  - **Volume-Weighted Momentum (10%)**: VWAP distance with volume quality filtering
 - **Dynamic Position Sizing**: Confidence-based scaling with portfolio exposure limits
 
 > 📖 For detailed strategy logic and signal breakdowns, see [docs/STRATEGY.md](docs/STRATEGY.md)
@@ -27,6 +25,14 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 - **🔄 Auto Reversal**: Automatically flips position with target price tracking on stop loss
 - **📈 Scale In**: Adds to winning positions near expiry (70-90% probability, configurable multiplier)
 - **⚡ Real-Time Monitoring**: High-frequency position checking with order status tracking
+- **🛡️ Self-Healing Logic**: Automatically force-settles "ghost" trades if price data is unavailable for 3+ cycles
+
+### 🚀 Recent Improvements (Jan 2026)
+- **Modular Backend**: Fully refactored `src/trading/orders` and `src/data/market_data` for better maintainability.
+- **WebSocket Integration**: Near-instant P&L and order fill updates via Polymarket's real-time sockets.
+- **Intelligent Position Sync**: Startup logic verifies market resolution and prevents re-adopting settled positions.
+- **Silent Error Handling**: Suppressed 404/Not Found errors during market transitions for cleaner logs.
+- **Low-Balance Protection**: Skips evaluation if balance is < 1.0 USDC to avoid API failures.
 
 > 💡 **Tip**: See [docs/RISK_PROFILES.md](docs/RISK_PROFILES.md) for pre-configured profiles (Conservative, Balanced, Aggressive, Ultra Aggressive)
 
@@ -62,21 +68,21 @@ Key settings in `.env` (Balanced profile shown):
 ```env
 # Trading & Position Sizing
 BET_PERCENT=5.0                      # Base position size (% of balance)
-MIN_EDGE=0.565                       # Minimum edge to enter (56.5%)
+MIN_EDGE=0.35                        # Minimum confidence to enter (35%)
 MAX_SPREAD=0.15                      # Max allowed spread (15%)
 CONFIDENCE_SCALING_FACTOR=5.0        # Position scaling multiplier (higher = more aggressive on strong signals)
 
 # Binance Advanced Strategy
-ENABLE_MOMENTUM_FILTER=YES           # Price velocity, acceleration, RSI (35% weight)
-ENABLE_ORDER_FLOW=YES                # Buy/sell pressure analysis (25% weight)
-ENABLE_DIVERGENCE=YES                # Cross-exchange mismatch detection (25% weight)
+ENABLE_MOMENTUM_FILTER=YES           # Price velocity, acceleration, RSI (30% weight)
+ENABLE_ORDER_FLOW=YES                # Buy/sell pressure analysis (20% weight)
+ENABLE_DIVERGENCE=YES                # Cross-exchange mismatch detection (20% weight)
 ENABLE_VWM=YES                       # Volume-weighted momentum (10% weight)
 MOMENTUM_LOOKBACK_MINUTES=15         # Momentum analysis window
 ADX=NO                               # Optional ADX trend strength filter (15% weight if enabled)
 
 # Risk Management
 ENABLE_STOP_LOSS=YES                 # Stop loss + breakeven protection
-STOP_LOSS_PERCENT=50.0               # Exit at -50% loss (validated against spot price)
+STOP_LOSS_PERCENT=40.0               # Exit at -40% loss (validated against spot price)
 ENABLE_TAKE_PROFIT=NO                # Let winners run (breakeven protection active)
 TAKE_PROFIT_PERCENT=80.0             # Take profit level (if enabled)
 ENABLE_REVERSAL=NO                   # Reverse position on stop loss

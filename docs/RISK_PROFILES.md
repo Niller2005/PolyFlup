@@ -10,9 +10,9 @@ Choose the risk profile that matches your trading style and account size. Each p
 | Setting | Value | Rationale |
 |---------|-------|-----------|
 | `BET_PERCENT` | 3.0% | Smaller position sizes preserve capital |
-| `MIN_EDGE` | 0.58 | Higher threshold = fewer, higher quality trades |
+| `MIN_EDGE` | 0.40 | Higher threshold = fewer, higher quality trades |
 | `MAX_SPREAD` | 0.12 | Only enter liquid markets with tight spreads |
-| `CONFIDENCE_SCALING_FACTOR` | 3.0 | Moderate scaling (max 2.4x base bet) |
+| `CONFIDENCE_SCALING_FACTOR` | 3.0 | Moderate scaling (max 3x base bet) |
 | `STOP_LOSS_PERCENT` | 40% | Tighter stop loss to limit losses |
 | `ENABLE_TAKE_PROFIT` | YES | Lock in profits at 60% gain |
 | `TAKE_PROFIT_PERCENT` | 60% | Conservative profit target |
@@ -34,10 +34,10 @@ Choose the risk profile that matches your trading style and account size. Each p
 | Setting | Value | Rationale |
 |---------|-------|-----------|
 | `BET_PERCENT` | 5.0% | Standard Kelly fraction for most strategies |
-| `MIN_EDGE` | 0.565 | Balanced threshold for good opportunities |
+| `MIN_EDGE` | 0.35 | Balanced threshold for good opportunities |
 | `MAX_SPREAD` | 0.15 | Accept reasonable spreads |
-| `CONFIDENCE_SCALING_FACTOR` | 5.0 | Standard scaling (max 3x base bet) |
-| `STOP_LOSS_PERCENT` | 50% | Standard stop loss with breakeven protection |
+| `CONFIDENCE_SCALING_FACTOR` | 5.0 | Standard scaling (max 5x base bet) |
+| `STOP_LOSS_PERCENT` | 40% | Standard stop loss with breakeven protection |
 | `ENABLE_TAKE_PROFIT` | NO | Let winners run (breakeven protection active) |
 | `TAKE_PROFIT_PERCENT` | 80% | Not used (take profit disabled) |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
@@ -58,9 +58,9 @@ Choose the risk profile that matches your trading style and account size. Each p
 | Setting | Value | Rationale |
 |---------|-------|-----------|
 | `BET_PERCENT` | 8.0% | Larger base positions for faster growth |
-| `MIN_EDGE` | 0.55 | Lower threshold = more trades, more action |
+| `MIN_EDGE` | 0.32 | Lower threshold = more trades, more action |
 | `MAX_SPREAD` | 0.18 | Accept wider spreads for more opportunities |
-| `CONFIDENCE_SCALING_FACTOR` | 7.0 | Aggressive scaling (max 4.2x base bet) |
+| `CONFIDENCE_SCALING_FACTOR` | 7.0 | Aggressive scaling (max 7x base bet) |
 | `STOP_LOSS_PERCENT` | 60% | Wider stop loss to avoid noise |
 | `ENABLE_TAKE_PROFIT` | NO | Let all winners run |
 | `TAKE_PROFIT_PERCENT` | 100% | Not used |
@@ -82,9 +82,9 @@ Choose the risk profile that matches your trading style and account size. Each p
 | Setting | Value | Rationale |
 |---------|-------|-----------|
 | `BET_PERCENT` | 12.0% | Maximum position sizing for explosive growth |
-| `MIN_EDGE` | 0.54 | Lowest threshold = maximum trade frequency |
+| `MIN_EDGE` | 0.30 | Lowest threshold = maximum trade frequency |
 | `MAX_SPREAD` | 0.20 | Enter almost any liquid market |
-| `CONFIDENCE_SCALING_FACTOR` | 10.0 | Extreme scaling (max 6x base bet) |
+| `CONFIDENCE_SCALING_FACTOR` | 10.0 | Extreme scaling (max 10x base bet) |
 | `STOP_LOSS_PERCENT` | 70% | Very wide stop loss |
 | `ENABLE_TAKE_PROFIT` | NO | Never cap upside |
 | `TAKE_PROFIT_PERCENT` | 150% | Not used |

@@ -345,6 +345,10 @@ print(f"Cancelled {len(result['canceled'])} orders")
 **Cause:** New window just started, order book is empty (warm-up phase)  
 **Solution:** Bot now retries evaluation every 10s up to 3 times when it detects zero liquidity.
 
+### "Zombie position stuck in loop (Price Unavailable)"
+**Cause:** Market is closed or illiquid, API cannot return midpoint price.  
+**Solution:** Bot now automatically force-settles trades after 3 consecutive failed price checks to clear the queue.
+
 ---
 
 ## Function Reference

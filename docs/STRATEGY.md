@@ -21,17 +21,35 @@ The strategy uses **directional scoring** where signals vote for UP or DOWN with
 
 ```
 Signal Weights (ADX Disabled, default):
+├── Price Momentum (30%) - Velocity, acceleration, RSI
+├── Polymarket Momentum (20%) - Internal price confirmation
+├── Order Flow (20%) - Buy/sell pressure from volume
+├── Cross-Exchange Divergence (20%) - Polymarket vs Binance trend mismatch
+└── Volume-Weighted Momentum (10%) - VWAP distance & quality
+
+Signal Weights (ADX Enabled):
+├── Price Momentum (25%) - Velocity, acceleration, RSI
+├── Order Flow (15%) - Buy/sell pressure from volume
+├── Cross-Exchange Divergence (20%) - Polymarket vs Binance trend mismatch
+├── Volume-Weighted Momentum (10%) - VWAP distance & quality
+├── ADX Trend Strength (15%) - Trend confirmation
+└── Polymarket Momentum (15%) - Internal price confirmation
+```
+
+Signal Weights (ADX Disabled, default):
 ├── Price Momentum (35%) - Velocity, acceleration, RSI
 ├── Order Flow (25%) - Buy/sell pressure from volume
 ├── Cross-Exchange Divergence (25%) - Polymarket vs Binance trend mismatch
-└── Volume-Weighted Momentum (15%) - VWAP distance & quality
+├── Volume-Weighted Momentum (10%) - VWAP distance & quality
+└── Polymarket-Native Momentum (5%) - Internal price confirmation
 
 Signal Weights (ADX Enabled):
-├── Price Momentum (30%) - Velocity, acceleration, RSI
+├── Price Momentum (25%) - Velocity, acceleration, RSI
 ├── Order Flow (20%) - Buy/sell pressure from volume
 ├── Cross-Exchange Divergence (25%) - Polymarket vs Binance trend mismatch
 ├── Volume-Weighted Momentum (10%) - VWAP distance & quality
-└── ADX Trend Strength (15%) - Trend confirmation
+├── ADX Trend Strength (15%) - Trend confirmation
+└── Polymarket-Native Momentum (5%) - Internal price confirmation
 ```
 
 **Note**: The original documentation's "Base Signals (60%)" approach was replaced with a directional voting system where each signal contributes its strength weighted by confidence.
@@ -127,7 +145,7 @@ Signal contributes: score × weight × direction
 
 ---
 
-## 4. Volume-Weighted Momentum (15% weight, or 10% with ADX)
+## 4. Volume-Weighted Momentum (10% weight, constant)
 
 **Source:** Binance VWAP analysis
 
@@ -145,16 +163,32 @@ direction = "UP" if vwap_distance > 0 else "DOWN"
 Signal contributes: score × weight × direction
 ```
 
-**Example:**
-- BTC price 0.3% above VWAP
-- Volume quality: 0.60 (moderate confirmation)
-- Direction: UP
-- Contribution: 0.60 × 0.15 = 0.09 toward UP side
-- **Signal:** Volume-confirmed upward momentum → Vote for UP
+---
+
+## 5. Polymarket-Native Momentum (20% weight, or 15% with ADX)
+
+**Source:** Polymarket CLOB 1-minute price history
+
+**Metrics:**
+- **Internal Velocity**: % price change on Polymarket over last few minutes
+- **Internal Strength**: Confidence based on internal price action consistency
+- **Direction**: UP or DOWN based on token price movement
+
+**Logic:**
+```
+score = pm_momentum.strength (0-1)
+direction = pm_momentum.direction
+
+Signal contributes: score × weight × direction
+```
+
+### 🧠 Lead/Lag Indicator (Experimental)
+If Binance momentum and Polymarket momentum agree on the direction, the strategy applies a **1.2x multiplier** to the final confidence. If they diverge, it applies a **0.8x penalty**, acting as a filter for cross-exchange noise.
 
 ---
 
-## 5. ADX Trend Strength (15% weight, optional)
+## 6. ADX Trend Strength (15% weight, optional)
+
 
 **Source:** Binance ADX indicator (configurable period and interval)
 

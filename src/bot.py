@@ -18,6 +18,7 @@ from src.config.settings import (
     ADX_PERIOD,
     ADX_INTERVAL,
     BET_PERCENT,
+    CONFIDENCE_SCALING_FACTOR,
     ENABLE_STOP_LOSS,
     STOP_LOSS_PERCENT,
     ENABLE_TAKE_PROFIT,
@@ -146,8 +147,13 @@ def _calculate_bet_size(
 ) -> tuple[float, float]:
     """Calculate position size and effective bet amount"""
     base_bet = balance * (BET_PERCENT / 100.0)
-    confidence_multiplier = 0.5 + (sizing_confidence * 3.5)
+    # Scaled bet based on confidence
+    confidence_multiplier = sizing_confidence * CONFIDENCE_SCALING_FACTOR
     target_bet = base_bet * confidence_multiplier
+
+    # Ensure at least some minimum multiplier if confidence is very low but valid
+    if target_bet < base_bet * 0.5:
+        target_bet = base_bet * 0.5
 
     size = round(target_bet / price, 4)
 
