@@ -151,12 +151,14 @@ def _check_exit_plan(
                     log(
                         f"   🔧 [{symbol}] #{trade_id} Exit plan size mismatch: {o_size} != {size}. Repairing..."
                     )
-                    if cancel_order(limit_sell_id):
-                        c.execute(
-                            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
-                            (trade_id,),
-                        )
-                        _last_exit_attempt.pop(trade_id, None)  # Retry immediately
+                    # Clear from DB immediately to allow retry in next cycle, cancel fire-and-forget
+                    cancel_order(limit_sell_id)
+                    c.execute(
+                        "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                        (trade_id,),
+                    )
+                    _last_exit_attempt.pop(trade_id, None)  # Retry immediately
+                    return  # Exit early to avoid further checks on cancelled order
             elif o_status in ["CANCELED", "EXPIRED"]:
                 log(
                     f"   ⚠️ [{symbol}] #{trade_id} Exit plan order was {o_status}. Clearing from DB to allow retry."

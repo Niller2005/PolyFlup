@@ -139,10 +139,7 @@ def check_open_positions(verbose=True, check_orders=False):
                                 pnl_val_f = (ex_p * sz_m) - bet
                                 roi_val_f = (pnl_val_f / bet) * 100 if bet > 0 else 0
                                 log(
-                                    f"🎯 [{sym}] EXIT SUCCESS: Trade #{tid} MATCHED at {ex_p}! (size: {sz_m:.2f})"
-                                )
-                                log(
-                                    f"💰 [{sym}] #{tid} {side}: {pnl_val_f:+.2f}$ ({roi_val_f:+.1f}%)"
+                                    f"💰 [{sym}] #{tid} {side} EXIT SUCCESS: MATCHED at {ex_p}! (size: {sz_m:.2f}) | {pnl_val_f:+.2f}$ ({roi_val_f:+.1f}%)"
                                 )
                                 # CANCEL ANY PENDING SCALE-IN ORDER
                                 if sc_id:
