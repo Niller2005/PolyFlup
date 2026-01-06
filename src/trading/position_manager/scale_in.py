@@ -8,7 +8,7 @@ from src.config.settings import (
     SCALE_IN_MULTIPLIER,
 )
 from src.utils.logger import log
-from src.trading.orders import get_order, place_order
+from src.trading.orders import get_order, place_order, place_market_order
 from .exit_plan import _update_exit_plan_after_scale_in
 
 from src.data.market_data import get_current_spot_price
@@ -35,8 +35,9 @@ def _check_scale_in(
 ):
     if not ENABLE_SCALE_IN:
         return
-    if scale_in_id and check_orders:
+    if scale_in_id:
         try:
+            # Check status every cycle when an order is pending to ensure fast exit plan updates
             o_data = get_order(scale_in_id)
             if o_data and o_data.get("status", "").upper() in ["FILLED", "MATCHED"]:
                 s_price = float(o_data.get("price", current_price))
@@ -52,6 +53,9 @@ def _check_scale_in(
                     c.execute(
                         "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
                         (new_size, new_bet, new_bet / new_size, trade_id),
+                    )
+                    log(
+                        f"📈 [{symbol}] #{trade_id} Scale-in filled (delayed): +{s_matched:.2f} shares"
                     )
                     _update_exit_plan_after_scale_in(
                         symbol, trade_id, token_id, new_size, l_sell_id, c, conn
@@ -101,18 +105,38 @@ def _check_scale_in(
                 return
 
     s_size = size * SCALE_IN_MULTIPLIER
-    s_price = round(max(0.01, min(0.99, current_price)), 2)
     log(
-        f"📈 [{symbol}] Trade #{trade_id} {side} | 📈 SCALE IN triggered: price=${s_price:.2f}, {t_left:.0f}s left"
+        f"📈 [{symbol}] Trade #{trade_id} {side} | 📈 SCALE IN triggered (Market Order): size={s_size:.2f}, {t_left:.0f}s left"
     )
-    res = place_order(token_id, s_price, s_size)
+
+    # Use MARKET order for scale-in to ensure immediate fill and exit plan update
+    res = place_market_order(token_id, s_size, side="BUY", order_type="FAK")
+
     if res["success"]:
-        if res["status"].upper() in ["FILLED", "MATCHED"]:
+        # Market orders fill immediately (FAK fills what it can)
+        # We need to get the actual filled details
+        oid = res.get("order_id")
+        actual_s_size = s_size
+        actual_s_price = current_price
+
+        if oid:
+            try:
+                o_data = get_order(oid)
+                if o_data:
+                    actual_s_size = float(o_data.get("size_matched", s_size))
+                    actual_s_price = float(o_data.get("price", current_price))
+            except:
+                pass
+
+        if actual_s_size > 0:
             log(
-                f"📈 [{symbol}] Trade #{trade_id} {side} | ✅ SCALE IN order FILLED: {s_size:.2f} shares @ ${s_price:.2f}"
+                f"📈 [{symbol}] Trade #{trade_id} {side} | ✅ SCALE IN Market order filled: {actual_s_size:.2f} shares @ ${actual_s_price:.4f}"
             )
-            new_size, new_bet = size + s_size, bet + (s_size * s_price)
-            # Fetch existing exit plan order ID to update it
+            new_size, new_bet = (
+                size + actual_s_size,
+                bet + (actual_s_size * actual_s_price),
+            )
+
             c.execute(
                 "SELECT limit_sell_order_id FROM trades WHERE id = ?",
                 (trade_id,),
@@ -124,15 +148,16 @@ def _check_scale_in(
                 "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
                 (new_size, new_bet, new_bet / new_size, trade_id),
             )
+
             # CRITICAL: Update exit plan to cover the new total size
             _update_exit_plan_after_scale_in(
                 symbol, trade_id, token_id, new_size, l_sell_id, c, conn
             )
         else:
             log(
-                f"📈 [{symbol}] Trade #{trade_id} {side} | ✅ SCALE IN order placed: {s_size:.2f} shares @ ${s_price:.2f} (status: {res['status']})"
+                f"📈 [{symbol}] Trade #{trade_id} {side} | ⚠️ SCALE IN Market order filled 0 shares."
             )
-            c.execute(
-                "UPDATE trades SET scale_in_order_id = ? WHERE id = ?",
-                (res["order_id"], trade_id),
-            )
+    else:
+        log(
+            f"📈 [{symbol}] Trade #{trade_id} {side} | ❌ SCALE IN Market order failed: {res.get('error')}"
+        )

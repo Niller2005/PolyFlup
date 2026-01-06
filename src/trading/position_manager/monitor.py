@@ -122,15 +122,25 @@ def check_open_positions(verbose=True, check_orders=False):
                         )
                         continue
 
-                    if check_orders and l_sell:
+                    if (
+                        check_orders or b_status == "EXIT_PLAN_PENDING_SETTLEMENT"
+                    ) and l_sell:
                         o_data = get_order(l_sell)
                         if o_data:
                             o_status = o_data.get("status", "").upper()
-                            if o_status in ["FILLED", "MATCHED"]:
+                            if (
+                                o_status in ["FILLED", "MATCHED"]
+                                or b_status == "EXIT_PLAN_PENDING_SETTLEMENT"
+                            ):
                                 ex_p = float(o_data.get("price", EXIT_PRICE_TARGET))
                                 sz_m = float(o_data.get("size_matched", size))
+                                if sz_m == 0:
+                                    sz_m = size  # Fallback if size_matched is missing
                                 pnl_val_f = (ex_p * sz_m) - bet
                                 roi_val_f = (pnl_val_f / bet) * 100 if bet > 0 else 0
+                                log(
+                                    f"🎯 [{sym}] EXIT SUCCESS: Trade #{tid} MATCHED at {ex_p}! (size: {sz_m:.2f})"
+                                )
                                 log(
                                     f"💰 [{sym}] #{tid} {side}: {pnl_val_f:+.2f}$ ({roi_val_f:+.1f}%)"
                                 )

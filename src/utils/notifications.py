@@ -5,9 +5,9 @@ from typing import List, Dict
 from src.utils.logger import log, send_discord
 from src.trading.orders import get_notifications, drop_notifications, SELL
 from src.data.db_connection import db_connection
-
-
-from src.utils.websocket_manager import ws_manager
+from src.trading.position_manager.exit_plan import _update_exit_plan_after_scale_in
+from src.trading.position_manager.shared import _position_check_lock
+from .websocket_manager import ws_manager
 
 
 # Notification type constants
@@ -90,82 +90,105 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
         if not order_id:
             return  # Skip if no order ID
 
-        # Update database if this is a tracked order
-        with db_connection() as conn:
-            c = conn.cursor()
+        # Use the position check lock to prevent race conditions with monitor.py
+        with _position_check_lock:
+            # Update database if this is a tracked order
+            with db_connection() as conn:
+                c = conn.cursor()
 
-            # Check if this is a buy order
-            c.execute(
-                "SELECT id, symbol, side, size, entry_price FROM trades WHERE order_id = ? AND settled = 0",
-                (order_id,),
-            )
-            row = c.fetchone()
-
-            if row:
-                trade_id, symbol, trade_side, db_size, db_price = row
-
-                # Update price/size if provided in notification
-                new_price = float(fill_price) if fill_price else db_price
-                new_size = float(fill_size) if fill_size else db_size
-
-                log(
-                    f"🔔 [{symbol}] #{trade_id} Buy filled: {trade_side} {new_size:.2f} @ ${new_price:.4f}"
-                )
-
+                # Check if this is a buy order
                 c.execute(
-                    "UPDATE trades SET order_status = 'FILLED', entry_price = ?, size = ?, bet_usd = ? * ? WHERE id = ?",
-                    (new_price, new_size, new_price, new_size, trade_id),
+                    "SELECT id, symbol, side, size, entry_price FROM trades WHERE order_id = ? AND settled = 0",
+                    (order_id,),
                 )
-                return  # Found and logged, done
+                row = c.fetchone()
 
-            # Check if this is a limit sell order (exit plan)
-            c.execute(
-                "SELECT id, symbol, side, size FROM trades WHERE limit_sell_order_id = ? AND settled = 0",
-                (order_id,),
-            )
-            row = c.fetchone()
+                if row:
+                    trade_id, symbol, trade_side, db_size, db_price = row
 
-            if row:
-                trade_id, symbol, trade_side, size = row
-                log(
-                    f"🎯 [{symbol}] Exit filled: #{trade_id} - will be settled on next position check"
-                )
-                # Mark order status so position manager knows to check it
-                c.execute(
-                    "UPDATE trades SET order_status = 'EXIT_PLAN_PENDING_SETTLEMENT' WHERE id = ?",
-                    (trade_id,),
-                )
-                return
+                    # Update price/size if provided in notification
+                    new_price = float(fill_price) if fill_price else db_price
+                    new_size = float(fill_size) if fill_size else db_size
 
-            # Check if this is a scale-in order
-            c.execute(
-                "SELECT id, symbol, side, size, entry_price, bet_usd FROM trades WHERE scale_in_order_id = ? AND settled = 0",
-                (order_id,),
-            )
-            row = c.fetchone()
-
-            if row:
-                trade_id, symbol, trade_side, db_size, db_price, db_bet = row
-                new_scale_price = float(fill_price) if fill_price else db_price
-                new_scale_size = float(fill_size) if fill_size else 0
-
-                if new_scale_size > 0:
                     log(
-                        f"📈 [{symbol}] Scale-in filled: #{trade_id} (+{new_scale_size:.2f} @ ${new_scale_price:.4f})"
+                        f"🔔 [{symbol}] #{trade_id} Buy filled: {trade_side} {new_size:.2f} @ ${new_price:.4f}"
                     )
-
-                    # Immediate update of averages
-                    new_total_size = db_size + new_scale_size
-                    new_total_bet = db_bet + (new_scale_size * new_scale_price)
-                    new_avg_price = new_total_bet / new_total_size
 
                     c.execute(
-                        "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
-                        (new_total_size, new_total_bet, new_avg_price, trade_id),
+                        "UPDATE trades SET order_status = 'FILLED', entry_price = ?, size = ?, bet_usd = ? * ? WHERE id = ?",
+                        (new_price, new_size, new_price, new_size, trade_id),
                     )
-                return
+                    return  # Found and logged, done
 
-            # Order not tracked in our database - skip logging (likely old or other trader's order)
+                # Check if this is a limit sell order (exit plan)
+                c.execute(
+                    "SELECT id, symbol, side, size FROM trades WHERE limit_sell_order_id = ? AND settled = 0",
+                    (order_id,),
+                )
+                row = c.fetchone()
+
+                if row:
+                    trade_id, symbol, trade_side, size = row
+                    log(
+                        f"🎯 [{symbol}] Exit filled: #{trade_id} - will be settled on next position check"
+                    )
+                    # Mark order status so position manager knows to check it
+                    c.execute(
+                        "UPDATE trades SET order_status = 'EXIT_PLAN_PENDING_SETTLEMENT' WHERE id = ?",
+                        (trade_id,),
+                    )
+                    return
+
+                # Check if this is a scale-in order
+                c.execute(
+                    "SELECT id, symbol, side, size, entry_price, bet_usd, token_id, limit_sell_order_id FROM trades WHERE scale_in_order_id = ? AND settled = 0",
+                    (order_id,),
+                )
+                row = c.fetchone()
+
+                if row:
+                    (
+                        trade_id,
+                        symbol,
+                        trade_side,
+                        db_size,
+                        db_price,
+                        db_bet,
+                        token_id,
+                        l_sell_id,
+                    ) = row
+                    new_scale_price = float(fill_price) if fill_price else db_price
+                    new_scale_size = float(fill_size) if fill_size else 0
+
+                    if new_scale_size > 0:
+                        log(
+                            f"📈 [{symbol}] Scale-in filled: #{trade_id} (+{new_scale_size:.2f} @ ${new_scale_price:.4f})"
+                        )
+
+                        # Immediate update of averages
+                        new_total_size = db_size + new_scale_size
+                        new_total_bet = db_bet + (new_scale_size * new_scale_price)
+                        new_avg_price = new_total_bet / new_total_size
+
+                        c.execute(
+                            "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
+                            (new_total_size, new_total_bet, new_avg_price, trade_id),
+                        )
+
+                        # CRITICAL: Update exit plan to cover the new total size
+                        if l_sell_id:
+                            _update_exit_plan_after_scale_in(
+                                symbol,
+                                trade_id,
+                                token_id,
+                                new_total_size,
+                                l_sell_id,
+                                c,
+                                conn,
+                            )
+                    return
+
+                # Order not tracked in our database - skip logging (likely old or other trader's order)
 
     except Exception as e:
         log(f"⚠️ Error handling order fill notification: {e}")
@@ -179,18 +202,20 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
         if not order_id:
             return
 
-        # Update database
-        with db_connection() as conn:
-            c = conn.cursor()
+        # Use the position check lock to prevent race conditions with monitor.py
+        with _position_check_lock:
+            # Update database
+            with db_connection() as conn:
+                c = conn.cursor()
 
-            # Check if this is a tracked order
-            c.execute(
-                "SELECT id, symbol, side FROM trades WHERE order_id = ? AND settled = 0",
-                (order_id,),
-            )
-            row = c.fetchone()
+                # Check if this is a tracked order
+                c.execute(
+                    "SELECT id, symbol, side FROM trades WHERE order_id = ? AND settled = 0",
+                    (order_id,),
+                )
+                row = c.fetchone()
 
-            # Don't log cancellations - position manager already logs them if needed
+                # Don't log cancellations - position manager already logs them if needed
 
     except Exception as e:
         log(f"⚠️ Error handling order cancellation notification: {e}")
