@@ -5,7 +5,6 @@ from typing import List, Dict
 from src.utils.logger import log, send_discord
 from src.trading.orders import get_notifications, drop_notifications, SELL
 from src.data.db_connection import db_connection
-from src.trading.position_manager.exit_plan import _update_exit_plan_after_scale_in
 from src.trading.position_manager.shared import _position_check_lock
 from .websocket_manager import ws_manager
 
@@ -174,18 +173,6 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                             "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
                             (new_total_size, new_total_bet, new_avg_price, trade_id),
                         )
-
-                        # CRITICAL: Update exit plan to cover the new total size
-                        if l_sell_id:
-                            _update_exit_plan_after_scale_in(
-                                symbol,
-                                trade_id,
-                                token_id,
-                                new_total_size,
-                                l_sell_id,
-                                c,
-                                conn,
-                            )
                     return
 
                 # Order not tracked in our database - skip logging (likely old or other trader's order)

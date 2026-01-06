@@ -9,7 +9,6 @@ from src.config.settings import (
 )
 from src.utils.logger import log
 from src.trading.orders import get_order, place_order, place_market_order
-
 from src.data.market_data import get_current_spot_price
 
 
@@ -43,12 +42,6 @@ def _check_scale_in(
                 s_matched = float(o_data.get("size_matched", 0))
                 if s_matched > 0:
                     new_size, new_bet = size + s_matched, bet + (s_matched * s_price)
-                    c.execute(
-                        "SELECT limit_sell_order_id FROM trades WHERE id = ?",
-                        (trade_id,),
-                    )
-                    ls_row = c.fetchone()
-                    l_sell_id = ls_row[0] if ls_row else None
                     c.execute(
                         "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
                         (new_size, new_bet, new_bet / new_size, trade_id),
@@ -132,13 +125,6 @@ def _check_scale_in(
                 size + actual_s_size,
                 bet + (actual_s_size * actual_s_price),
             )
-
-            c.execute(
-                "SELECT limit_sell_order_id FROM trades WHERE id = ?",
-                (trade_id,),
-            )
-            ls_row = c.fetchone()
-            l_sell_id = ls_row[0] if ls_row else None
 
             c.execute(
                 "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
