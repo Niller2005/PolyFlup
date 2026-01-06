@@ -87,20 +87,20 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         if momentum["acceleration"] < 0 and momentum_dir == "DOWN":
             momentum_score *= 1.2
 
-    # 2. Order Flow (Binance) - Weight: 0.25
+    # 2. Order Flow (Binance) - Weight: 0.15
     flow_score = 0.0
     flow_dir = "NEUTRAL"
     order_flow = get_order_flow_analysis(symbol)
-    flow_score = abs(order_flow["buy_pressure"] - 0.5) * 2.0  # 0 to 1
+    # Scale: 0.55 or 0.45 = 1.0 strength (aggressive flow signal)
+    flow_score = min(abs(order_flow["buy_pressure"] - 0.5) * 10.0, 1.0)
     flow_dir = "UP" if order_flow["buy_pressure"] > 0.5 else "DOWN"
 
-    # 3. Divergence (Poly vs Binance) - Weight: 0.25
+    # 3. Divergence (Poly vs Binance) - Weight: 0.15
     divergence_score = 0.0
     divergence_dir = "NEUTRAL"
     divergence = get_cross_exchange_divergence(symbol, p_up)
-    divergence_score = min(
-        abs(divergence["divergence"]) * 5.0, 1.0
-    )  # Scale 0.2 div to 1.0 score
+    # Scale: 0.1 divergence = 1.0 score
+    divergence_score = min(abs(divergence["divergence"]) * 10.0, 1.0)
     divergence_dir = (
         "UP"
         if divergence["opportunity"] == "BUY_UP"
@@ -158,11 +158,11 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
 
     # Adjust weights to include PM momentum
     adx_weight = 0.15 if ADX_ENABLED else 0.0
-    mom_weight = 0.25 if ADX_ENABLED else 0.30
-    pm_mom_weight = 0.15 if ADX_ENABLED else 0.20
-    flow_weight = 0.15 if ADX_ENABLED else 0.20
-    div_weight = 0.20 if ADX_ENABLED else 0.20
-    vwm_weight = 0.10 if ADX_ENABLED else 0.10
+    mom_weight = 0.35 if ADX_ENABLED else 0.40
+    pm_mom_weight = 0.20 if ADX_ENABLED else 0.25
+    flow_weight = 0.10 if ADX_ENABLED else 0.10
+    div_weight = 0.15 if ADX_ENABLED else 0.15
+    vwm_weight = 0.05 if ADX_ENABLED else 0.10
 
     # Apply weights and directions
     for score, direction, weight in [
@@ -183,13 +183,17 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         bias = "UP"
         # Confirmation bonus: if Binance and PM both agree on direction
         if momentum_dir == pm_mom_dir and momentum_dir == "UP":
-            up_total *= 1.1
-        confidence = (up_total - (down_total * 0.5)) * lead_lag_bonus
+            up_total *= 1.2
+
+        # Bold scaling: 0.4 score = 60% confidence
+        confidence = (up_total - (down_total * 0.1)) * lead_lag_bonus * 1.5
     elif down_total > up_total:
         bias = "DOWN"
         if momentum_dir == pm_mom_dir and momentum_dir == "DOWN":
-            down_total *= 1.1
-        confidence = (down_total - (up_total * 0.5)) * lead_lag_bonus
+            down_total *= 1.2
+
+        confidence = (down_total - (up_total * 0.1)) * lead_lag_bonus * 1.5
+
     else:
         bias = "NEUTRAL"
         confidence = 0.0

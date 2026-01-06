@@ -5,6 +5,7 @@ from typing import Any
 from src.config.settings import BINANCE_FUNDING_MAP, ADX_INTERVAL, ADX_PERIOD
 from .binance import _create_klines_dataframe
 
+
 def get_adx_from_binance(symbol: str) -> float:
     """Calculate ADX for symbol/USDT pair"""
     try:
@@ -28,6 +29,7 @@ def get_adx_from_binance(symbol: str) -> float:
         return float(adx_indicator.adx().iloc[-1])
     except:
         return -1.0
+
 
 def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
     """Calculate price momentum from Binance spot data"""
@@ -69,9 +71,12 @@ def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
             "velocity": vel,
             "acceleration": 0.0,
             "rsi": rsi,
-            "direction": "UP" if vel > 0 else "DOWN" if vel < 0 else "NEUTRAL",
-            "strength": min(abs(vel) / 2.0, 1.0),
+            "direction": "UP" if vel > 0.01 else "DOWN" if vel < -0.01 else "NEUTRAL",
+            "strength": min(
+                abs(vel) / 0.2, 1.0
+            ),  # 0.2% move = 1.0 strength (was 2.0% initially, then 0.5%)
         }
+
     except:
         return {
             "velocity": 0.0,
@@ -80,6 +85,7 @@ def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
             "direction": "NEUTRAL",
             "strength": 0.0,
         }
+
 
 def get_volume_weighted_momentum(symbol: str) -> dict:
     """Calculate volume-weighted indicators"""
@@ -107,10 +113,16 @@ def get_volume_weighted_momentum(symbol: str) -> dict:
         )
         tp = (h + l + c) / 3
         vwap = (tp * v).sum() / v.sum() if v.sum() > 0 else c.iloc[-1]
+        vwap_dist = ((c.iloc[-1] - vwap) / vwap) * 100.0
+
+        # Calculate momentum quality based on VWAP distance and price trend
+        # If price is above VWAP and rising, quality is high.
+        momentum_quality = min(abs(vwap_dist) * 5.0, 1.0)  # 0.2% distance = 1.0 quality
+
         return {
-            "vwap_distance": ((c.iloc[-1] - vwap) / vwap) * 100.0,
+            "vwap_distance": vwap_dist,
             "volume_trend": "STABLE",
-            "momentum_quality": 0.0,
+            "momentum_quality": momentum_quality,
         }
     except:
         return {"vwap_distance": 0.0, "volume_trend": "STABLE", "momentum_quality": 0.0}

@@ -5,6 +5,7 @@ from typing import Any
 from src.config.settings import BINANCE_FUNDING_MAP
 from .binance import _create_klines_dataframe
 
+
 def get_order_flow_analysis(symbol: str) -> dict:
     """Analyze Binance order flow"""
     pair = BINANCE_FUNDING_MAP.get(symbol.upper())
@@ -50,6 +51,7 @@ def get_order_flow_analysis(symbol: str) -> dict:
             "trade_intensity": 0.0,
         }
 
+
 def get_cross_exchange_divergence(symbol: str, polymarket_p_up: float) -> dict:
     """Compare Polymarket vs Binance movement"""
     pair = BINANCE_FUNDING_MAP.get(symbol.upper())
@@ -76,26 +78,33 @@ def get_cross_exchange_divergence(symbol: str, polymarket_p_up: float) -> dict:
             }
         close, open_p = pd.to_numeric(df["close"]), pd.to_numeric(df["open"])
         p_chg = ((close.iloc[-1] - open_p.iloc[0]) / open_p.iloc[0]) * 100.0
-        b_p_up = 0.5 + (0.05 if p_chg > 0.5 else -0.05 if p_chg < -0.5 else 0)
+
+        # More aggressive probability mapping: 1% spot move = 20% prob move
+        b_p_up = 0.5 + (p_chg / 5.0)
+        b_p_up = max(0.01, min(0.99, b_p_up))
+
         div = polymarket_p_up - b_p_up
+
         return {
             "binance_direction": "UP"
-            if p_chg > 0.5
+            if p_chg > 0.05
             else "DOWN"
-            if p_chg < -0.5
+            if p_chg < -0.05
             else "NEUTRAL",
             "polymarket_direction": "UP"
-            if polymarket_p_up > 0.55
+            if polymarket_p_up > 0.52
             else "DOWN"
-            if polymarket_p_up < 0.45
+            if polymarket_p_up < 0.48
             else "NEUTRAL",
             "divergence": div,
             "opportunity": "BUY_UP"
-            if div < -0.1
+            if div < -0.05
             else "BUY_DOWN"
-            if div > 0.1
+            if div > 0.05
             else "NEUTRAL",
+            "binance_price": float(close.iloc[-1]),
         }
+
     except:
         return {
             "binance_direction": "NEUTRAL",
