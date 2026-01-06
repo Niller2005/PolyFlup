@@ -10,6 +10,7 @@ from .constants import SELL
 from .market import place_market_order
 from .limit import place_limit_order
 
+
 def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
     """Get balance and allowance"""
     try:
@@ -35,6 +36,7 @@ def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
         log(f"⚠️ Error getting balance/allowance: {e}")
         return None
 
+
 def get_current_positions(user_address: str) -> List[dict]:
     """Get current positions for a user from Data API"""
     try:
@@ -44,31 +46,32 @@ def get_current_positions(user_address: str) -> List[dict]:
 
         url = f"{DATA_API_BASE}/positions?user={user_address}"
         log(f"   🔍 Fetching positions from Data API for {user_address[:10]}...")
-        
+
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        
+
         positions = []
         if isinstance(data, list):
             positions = data
         elif isinstance(data, dict):
             positions = data.get("positions", [])
-            
+
         valid_positions = []
         for p in positions:
             try:
                 size = float(p.get("size", 0))
-                if size > 0.001: # Filter out dust
+                if size > 0.001:  # Filter out dust
                     valid_positions.append(p)
             except:
                 continue
-                
+
         log(f"   ✅ Data API returned {len(valid_positions)} active positions")
         return valid_positions
     except Exception as e:
         log(f"⚠️ Error getting positions from Data API: {e}")
         return []
+
 
 def get_closed_positions(user: str, limit: int = 100) -> List[dict]:
     """Get closed positions for a user from Data API"""
@@ -76,7 +79,7 @@ def get_closed_positions(user: str, limit: int = 100) -> List[dict]:
         url = f"{DATA_API_BASE}/closed-positions?user={user}"
         if limit:
             url += f"&limit={limit}"
-            
+
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
@@ -87,6 +90,7 @@ def get_closed_positions(user: str, limit: int = 100) -> List[dict]:
         log(f"⚠️ Error getting closed positions: {e}")
         return []
 
+
 def sell_position(
     token_id: str,
     size: float,
@@ -96,17 +100,24 @@ def sell_position(
 ) -> dict:
     retry_delays = [2, 3, 5]
     import time
+
     remaining_size = size
-    
+
     for attempt in range(max_retries):
         try:
             if attempt > 0:
                 # Before retry, check actual balance to see what's left
                 balance_info = get_balance_allowance(token_id)
-                remaining_size = balance_info.get("balance", 0) if balance_info else remaining_size
+                remaining_size = (
+                    balance_info.get("balance", 0) if balance_info else remaining_size
+                )
                 if remaining_size < 0.1:
-                    return {"success": True, "sold": size - remaining_size, "status": "FILLED"}
-                
+                    return {
+                        "success": True,
+                        "sold": size - remaining_size,
+                        "status": "FILLED",
+                    }
+
                 log(
                     f"🔄 Retry {attempt} selling {remaining_size:.2f} shares... waiting {retry_delays[attempt - 1]}s"
                 )
@@ -134,6 +145,18 @@ def sell_position(
             if result["success"]:
                 # Check if it was a full fill
                 matched = float(result.get("size_matched", 0))
+
+                # If size_matched is missing but we have an order ID, fetch it
+                if matched == 0 and result.get("order_id"):
+                    try:
+                        from .management import get_order
+
+                        o_info = get_order(result["order_id"])
+                        if o_info:
+                            matched = float(o_info.get("size_matched", 0))
+                    except:
+                        pass
+
                 if matched >= remaining_size * 0.99:
                     return {
                         "success": True,
@@ -144,7 +167,9 @@ def sell_position(
                     }
                 else:
                     # Partial fill - allow loop to retry with remaining
-                    log(f"   ⚠️ Partial sell fill: {matched:.2f}/{remaining_size:.2f} matched.")
+                    log(
+                        f"   ⚠️ Partial sell fill: {matched:.2f}/{remaining_size:.2f} matched."
+                    )
                     continue
 
             err = result.get("error", "").lower()

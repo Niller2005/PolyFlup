@@ -95,21 +95,36 @@ def _check_stop_loss(
     if is_reversal:
         outcome = "REVERSAL_STOP_LOSS"
 
-    log(
-        f"🛑 [{symbol}] #{trade_id} {outcome}: Midpoint ${current_price:.2f} <= ${STOP_LOSS_PRICE:.2f} trigger"
-    )
-
     # Robust size check: fetch actual balance to ensure we sell everything
+    # This prevents "Insufficient funds" loops if size is out of sync
     try:
         balance_info = get_balance_allowance(token_id)
         actual_balance = balance_info.get("balance", 0) if balance_info else 0
-        if actual_balance > 0 and abs(actual_balance - size) > 0.01:
+        if actual_balance < 0.1:
+            log(
+                f"   ⚠️ [{symbol}] #{trade_id} Stop Loss: Balance is 0 or near 0. Settling as ghost trade."
+            )
+            c.execute(
+                "UPDATE trades SET settled=1, final_outcome='STOP_LOSS_GHOST_FILL', scale_in_order_id=NULL WHERE id=?",
+                (trade_id,),
+            )
+            return True
+
+        if abs(actual_balance - size) > 0.01:
             log(
                 f"   📊 [{symbol}] #{trade_id} Sync: Database size {size:.2f} != actual balance {actual_balance:.2f} - Updating sell size."
             )
             size = actual_balance
+            c.execute(
+                "UPDATE trades SET size = ? WHERE id = ?",
+                (size, trade_id),
+            )
     except Exception as e:
         log(f"   ⚠️ [{symbol}] Could not verify balance before sell: {e}")
+
+    log(
+        f"🛑 [{symbol}] #{trade_id} {outcome}: Midpoint ${current_price:.2f} <= ${STOP_LOSS_PRICE:.2f} trigger"
+    )
 
     # CANCEL ANY PENDING ORDERS
     if limit_sell_order_id:

@@ -236,6 +236,12 @@ def _prepare_trade_params(
 
     # NEW: Check if we already have a trade for THIS SIDE in this window
     window_start, window_end = get_window_times(symbol)
+
+    # Check if ANY trade exists for this window
+    other_side_exists = False
+    if has_trade_for_window(symbol, window_start.isoformat()):
+        other_side_exists = True
+
     if has_side_for_window(symbol, window_start.isoformat(), side):
         if verbose:
             log(
@@ -246,10 +252,14 @@ def _prepare_trade_params(
         return None
 
     if actual_side == bias:
-        log(f"[{symbol}] ✅ Trend Following: {bias} (Confidence: {confidence:.1%})")
+        entry_type = "HEDGED REVERSAL" if other_side_exists else "Trend Following"
+        log(f"[{symbol}] ✅ {entry_type}: {bias} (Confidence: {confidence:.1%})")
     else:
+        entry_type = (
+            "HEDGED REVERSAL (Contrarian)" if other_side_exists else "Contrarian Entry"
+        )
         log(
-            f"[{symbol}] 🔄 Contrarian Entry: {actual_side} (Bias flipping from {bias} @ {confidence:.1%})"
+            f"[{symbol}] 🔄 {entry_type}: {actual_side} (Bias flipping from {bias} @ {confidence:.1%})"
         )
 
     # Check lateness
