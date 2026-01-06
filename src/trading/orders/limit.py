@@ -31,6 +31,7 @@ def place_limit_order(
         return {"success": False, "status": "VALIDATION_ERROR", "error": err}
 
     # Extract enum value to avoid Literal vs Enum issues in type checker
+    otype: Any
     if order_type.upper() == "FOK":
         otype = OrderType.FOK
     elif order_type.upper() == "FAK":
@@ -48,7 +49,7 @@ def place_limit_order(
         if otype == OrderType.GTD and expiration:
             oa.expiration = expiration
         signed = client.create_order(oa)
-        return client.post_order(signed, otype)
+        return client.post_order(signed, otype)  # type: ignore
 
     try:
         resp: Any = _execute_with_retry(_place)
@@ -73,7 +74,10 @@ def place_limit_order(
         except:
             pass
         if not (silent_on_balance_error and "balance" in str(e).lower()):
-            log_error(f"{side} Order error: {emsg}")
+            if "Insufficient funds" in emsg and side == "SELL":
+                log(f"   ⚠️ {side} Order: {emsg} (likely already filled or locked)")
+            else:
+                log_error(f"{side} Order error: {emsg}")
         return {
             "success": bool(oid),
             "status": "ERROR" if not oid else "UNKNOWN",
@@ -123,7 +127,7 @@ def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
                 side=op.get("side", BUY),
             )
             signed = client.create_order(oa)
-            batch.append(PostOrdersArgs(order=signed, orderType=OrderType.GTC))
+            batch.append(PostOrdersArgs(order=signed, orderType=OrderType.GTC))  # type: ignore
         responses: Any = client.post_orders(batch)
         for r in responses:
             if isinstance(r, dict):

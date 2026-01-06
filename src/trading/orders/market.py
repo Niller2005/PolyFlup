@@ -38,5 +38,14 @@ def place_market_order(
     except Exception as e:
         emsg = _parse_api_error(str(e))
         if not silent_on_error:
-            log_error(f"{side} Market Order error: {emsg}")
+            if "Insufficient funds" in emsg and side == "SELL":
+                log(
+                    f"   ⚠️ {side} Market Order: {emsg} (likely already filled or locked)"
+                )
+            elif "no orders found to match" in emsg.lower():
+                log(
+                    f"   ⚠️ {side} Market Order: No liquidity found to match (FAK order killed)"
+                )
+            else:
+                log_error(f"{side} Market Order error: {emsg}")
         return {"success": False, "status": "ERROR", "order_id": None, "error": emsg}
