@@ -84,13 +84,13 @@ from src.utils.websocket_manager import ws_manager
 def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
     """
     Determine actual trading side and confidence for sizing.
-    Tiered logic: 
+    Tiered logic:
     - High Confidence: Follow Trend
     - Low Confidence: Contrarian (expect flip)
     - Medium: Wait (Neutral)
     """
     from src.config.settings import MIN_EDGE, CONTRARIAN_THRESHOLD
-    
+
     if confidence >= MIN_EDGE:
         # Strong trend confirmed
         actual_side = bias
@@ -98,7 +98,7 @@ def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
     elif confidence <= CONTRARIAN_THRESHOLD:
         # Very low confidence - high chance of side flipping (Contrarian)
         actual_side = "DOWN" if bias == "UP" else "UP"
-        sizing_confidence = 0.25 # Fixed lower sizing for contrarian plays
+        sizing_confidence = 0.25  # Fixed lower sizing for contrarian plays
     else:
         # "No man's land" - wait for higher confidence or clear flip
         actual_side = "NEUTRAL"
@@ -198,8 +198,10 @@ def _prepare_trade_params(
             if confidence == 0 and bias == "NEUTRAL":
                 log(f"[{symbol}] ⚪ Neutral / No Signal")
             else:
-                log(f"[{symbol}] ⏳ WAIT ZONE: {bias} ({confidence:.1%}) | {CONTRARIAN_THRESHOLD} < x < {MIN_EDGE}")
-            
+                log(
+                    f"[{symbol}] ⏳ WAIT ZONE: {bias} ({confidence:.1%}) | {CONTRARIAN_THRESHOLD} < x < {MIN_EDGE}"
+                )
+
             if add_spacing:
                 log("")
         return
@@ -321,7 +323,9 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
     Execute trading logic for a symbol (single order)
     Returns the number of successful trades placed (0 or 1).
     """
-    trade_params = _prepare_trade_params(symbol, balance, add_spacing=True, verbose=verbose)
+    trade_params = _prepare_trade_params(
+        symbol, balance, add_spacing=True, verbose=verbose
+    )
 
     if not trade_params:
         return 0
@@ -339,7 +343,7 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
     actual_size = trade_params["size"]
     actual_price = trade_params["price"]
     actual_status = result["status"]
-    
+
     # If already matched, try to get the actual execution details immediately
     if actual_status.upper() in ["FILLED", "MATCHED"]:
         try:
@@ -354,7 +358,9 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
                     # Recalculate bet_usd based on actual fill
                     trade_params["bet_usd"] = actual_size * actual_price
         except Exception as e:
-            log(f"⚠️ [{trade_params['symbol']}] Could not sync execution details immediately: {e}")
+            log(
+                f"⚠️ [{trade_params['symbol']}] Could not sync execution details immediately: {e}"
+            )
 
     send_discord(
         f"**[{trade_params['symbol']}] {trade_params['side']} ${trade_params['bet_usd']:.2f}** | Confidence {trade_params['confidence']:.1%} | Price {actual_price:.4f}"
@@ -395,7 +401,7 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
 def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> int:
     """
     Execute trading logic for multiple symbols using batch orders
-    Returns the number of successful trades placed. 
+    Returns the number of successful trades placed.
     Returns -1 if all markets were skipped specifically due to spread == 1.0 (empty book).
     """
     # 1. Bulk get tokens and check spreads to pre-filter
@@ -407,7 +413,7 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         if up_id and down_id:
             market_tokens[symbol] = (up_id, down_id)
             all_token_ids.extend([up_id, down_id])
-    
+
     # Register all tokens at once with WebSocket manager
     if all_token_ids:
         ws_manager.subscribe_to_prices(all_token_ids)
@@ -440,7 +446,9 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         if up_spread >= 1.0 or down_spread >= 1.0:
             # Spread of 1.0 means NO orders on one side - typical at window start
             if verbose:
-                log(f"[{symbol}] ⏳ No liquidity yet (Spread: 1.0). Waiting for market makers...")
+                log(
+                    f"[{symbol}] ⏳ No liquidity yet (Spread: 1.0). Waiting for market makers..."
+                )
             skipped_due_to_empty_book += 1
             continue
 
@@ -453,14 +461,18 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         valid_symbols.append(symbol)
 
     if not valid_symbols:
-        if skipped_due_to_empty_book > 0 and skipped_due_to_empty_book == len(market_tokens):
+        if skipped_due_to_empty_book > 0 and skipped_due_to_empty_book == len(
+            market_tokens
+        ):
             return -1
         return 0
 
     # 2. Prepare trades for remaining symbols
     trade_params_list = []
     for i, symbol in enumerate(valid_symbols):
-        params = _prepare_trade_params(symbol, balance, add_spacing=False, verbose=verbose)
+        params = _prepare_trade_params(
+            symbol, balance, add_spacing=False, verbose=verbose
+        )
         if params:
             trade_params_list.append(params)
 
@@ -490,11 +502,11 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         if i < len(trade_params_list) and result["success"]:
             placed_count += 1
             p = trade_params_list[i]
-            
+
             actual_size = p["size"]
             actual_price = p["price"]
             actual_status = result["status"]
-            
+
             # Sync execution details for matched orders
             if actual_status.upper() in ["FILLED", "MATCHED"]:
                 try:
@@ -507,7 +519,8 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                             if pr_m > 0:
                                 actual_price = pr_m
                             p["bet_usd"] = actual_size * actual_price
-                except: pass
+                except:
+                    pass
 
             send_discord(
                 f"**[{p['symbol']}] {p['side']} ${p['bet_usd']:.2f}** | Confidence {p['confidence']:.1%} | Price {actual_price:.4f}"
@@ -586,7 +599,7 @@ def main():
     last_exit_stats_log = time.time()
     last_entry_check = 0  # To control entry evaluation frequency
     last_settle_check = time.time()
-    
+
     log("🏁 Bot initialized. Entering continuous monitoring loop...")
 
     while True:
@@ -608,22 +621,39 @@ def main():
             if now_ts - last_entry_check >= 20:
                 last_entry_check = now_ts
                 current_balance = get_balance(addr)
-                
+
                 eligible_markets = []
                 for m in MARKETS:
                     w_start_et, _ = get_window_times(m)
                     lateness = (now_et - w_start_et).total_seconds()
-                    
+
                     if 0 <= lateness <= MAX_ENTRY_LATENESS_SEC:
                         if not has_trade_for_window(m, w_start_et.isoformat()):
                             eligible_markets.append(m)
 
                 if eligible_markets:
-                    # Use batch orders if multiple eligible
-                    if len(eligible_markets) > 1:
-                        trade_symbols_batch(eligible_markets, current_balance, verbose=is_verbose_cycle)
+                    current_balance = get_balance(addr)
+
+                    # Prevent trading with extremely low balance to avoid API errors
+                    if current_balance < 1.0:
+                        if is_verbose_cycle:
+                            log(
+                                f"💰 Balance too low ({current_balance:.2f} USDC). Skipping trade evaluation."
+                            )
                     else:
-                        trade_symbol(eligible_markets[0], current_balance, verbose=is_verbose_cycle)
+                        # Use batch orders if multiple eligible
+                        if len(eligible_markets) > 1:
+                            trade_symbols_batch(
+                                eligible_markets,
+                                current_balance,
+                                verbose=is_verbose_cycle,
+                            )
+                        else:
+                            trade_symbol(
+                                eligible_markets[0],
+                                current_balance,
+                                verbose=is_verbose_cycle,
+                            )
 
             # 3. Process Notifications and Settle Trades (Every 30-60 seconds)
             if is_order_check_cycle:
@@ -641,7 +671,7 @@ def main():
                 if now_ts - last_exit_stats_log >= 900:
                     exit_stats = get_exit_plan_stats()
                     last_exit_stats_log = now_ts
-                
+
                 # Performance report every ~4 hours
                 if int(now_ts) % 14400 < 60:
                     generate_statistics()

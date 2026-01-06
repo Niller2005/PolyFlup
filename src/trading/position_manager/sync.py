@@ -8,6 +8,8 @@ from src.trading.orders import get_current_positions
 from src.utils.websocket_manager import ws_manager
 from src.data.market_data import get_token_ids, get_window_times, get_current_slug
 from src.data.database import save_trade
+from src.trading.settlement import get_market_resolution
+
 
 def sync_positions_with_exchange(user_address: str):
     """
@@ -25,7 +27,12 @@ def sync_positions_with_exchange(user_address: str):
         pos_map = {}
         for p in exchange_positions:
             # Data API uses 'asset', Gamma might use 'asset_id' or 'token_id'
-            aid = p.get("asset") or p.get("asset_id") or p.get("assetId") or p.get("token_id")
+            aid = (
+                p.get("asset")
+                or p.get("asset_id")
+                or p.get("assetId")
+                or p.get("token_id")
+            )
             if aid:
                 aid_str = str(aid).strip().lower()
                 norm_aid = aid_str
@@ -33,7 +40,8 @@ def sync_positions_with_exchange(user_address: str):
                 if aid_str.startswith("0x"):
                     try:
                         norm_aid = str(int(aid_str, 16))
-                    except: pass
+                    except:
+                        pass
                 pos_map[norm_aid] = p
 
         with db_connection() as conn:
@@ -46,9 +54,22 @@ def sync_positions_with_exchange(user_address: str):
             )
             db_trades = c.fetchall()
 
-            # Track which exchange positions were matched to DB trades
+            # Get all traded token IDs from DB to avoid re-adopting settled ones
+            c.execute("SELECT DISTINCT token_id FROM trades")
+            all_tracked_token_ids = set()
+            for (tid,) in c.fetchall():
+                if tid:
+                    tid_raw = str(tid).strip().lower()
+                    tid_str = tid_raw
+                    if tid_raw.startswith("0x"):
+                        try:
+                            tid_str = str(int(tid_raw, 16))
+                        except:
+                            pass
+                    all_tracked_token_ids.add(tid_str)
+
+            # Track which exchange positions were matched to DB trades (for open ones)
             matched_exchange_ids = set()
-            db_token_ids = set()
 
             for trade_id, symbol, side, db_size, token_id, db_entry in db_trades:
                 # Normalize DB token_id to decimal string
@@ -57,18 +78,18 @@ def sync_positions_with_exchange(user_address: str):
                 if tid_raw.startswith("0x"):
                     try:
                         tid_str = str(int(tid_raw, 16))
-                    except: pass
-                
-                if tid_str:
-                    db_token_ids.add(tid_str)
-                
-                # Check match in pos_map (which is also indexed by decimal string)
+                    except:
+                        pass
+
+                # Check match in pos_map
                 if tid_str and tid_str in pos_map:
                     pos = pos_map[tid_str]
                     matched_exchange_ids.add(tid_str)
-                    
+
                     actual_size = float(pos.get("size", 0))
-                    actual_price = float(pos.get("avg_price") or pos.get("avgPrice") or db_entry)
+                    actual_price = float(
+                        pos.get("avg_price") or pos.get("avgPrice") or db_entry
+                    )
 
                     # Check for significant size mismatch
                     if abs(actual_size - db_size) > 0.001:
@@ -111,41 +132,65 @@ def sync_positions_with_exchange(user_address: str):
 
             # 3. Check for untracked positions
             for t_id_str, p_data in pos_map.items():
-                if t_id_str and t_id_str not in db_token_ids:
+                if t_id_str and t_id_str not in all_tracked_token_ids:
                     size = float(p_data.get("size", 0))
                     if size < 0.001:
                         continue
-                        
-                    log(f"   ⚠️ Found UNTRACKED position: {size} shares of {t_id_str[:10]}...")
-                    
+
                     try:
-                        avg_price = float(p_data.get("avg_price") or p_data.get("avgPrice") or 0.5)
-                        symbol = p_data.get("symbol") or p_data.get("market") or p_data.get("title") or "ADOPTED"
-                        slug = p_data.get("slug") or p_data.get("market_slug") or "adopted-market"
+                        avg_price = float(
+                            p_data.get("avg_price") or p_data.get("avgPrice") or 0.5
+                        )
+                        symbol = (
+                            p_data.get("symbol")
+                            or p_data.get("market")
+                            or p_data.get("title")
+                            or "ADOPTED"
+                        )
+                        slug = (
+                            p_data.get("slug")
+                            or p_data.get("market_slug")
+                            or "adopted-market"
+                        )
                         side = p_data.get("outcome", "UNKNOWN").upper()
-                        
-                        log(f"   📥 Adopting untracked position: {symbol} ({side}) {size} shares @ ${avg_price}")
-                        
+
+                        # Check if already resolved before adopting
+                        is_resolved, _ = get_market_resolution(slug)
+                        if is_resolved:
+                            log(
+                                f"   ℹ Skipping already resolved untracked position: {symbol} ({side})"
+                            )
+                            # Add to all_tracked_token_ids so we don't check Gamma again this run
+                            all_tracked_token_ids.add(t_id_str)
+                            continue
+
+                        log(
+                            f"   ⚠️ Found UNTRACKED position: {size} shares of {t_id_str[:10]}..."
+                        )
+                        log(
+                            f"   📥 Adopting untracked position: {symbol} ({side}) {size} shares @ ${avg_price}"
+                        )
+
                         c.execute(
                             """INSERT INTO trades (
                                 symbol, slug, token_id, side, entry_price, size, bet_usd, 
                                 timestamp, window_start, window_end, settled, order_status, final_outcome
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (
-                                symbol, 
-                                slug, 
-                                t_id_str, 
-                                side, 
-                                avg_price, 
-                                size, 
+                                symbol,
+                                slug,
+                                t_id_str,
+                                side,
+                                avg_price,
+                                size,
                                 size * avg_price,
                                 now.isoformat(),
                                 now.isoformat(),
                                 (now + timedelta(minutes=15)).isoformat(),
                                 0,
                                 "FILLED",
-                                "ADOPTED"
-                            )
+                                "ADOPTED",
+                            ),
                         )
                     except Exception as e:
                         log(f"   ❌ Failed to adopt position: {e}")
