@@ -14,6 +14,7 @@ from src.config.settings import (
     ENABLE_BFXD,
 )
 from src.utils.logger import log
+from src.trading.orders.utils import is_404_error
 from src.data.market_data import (
     get_funding_bias,
     get_fear_greed,
@@ -47,7 +48,8 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
             bids = getattr(book, "bids", []) or []
             asks = getattr(book, "asks", []) or []
     except Exception as e:
-        log(f"[{symbol}] Order book error: {e}")
+        if not is_404_error(e):
+            log(f"[{symbol}] Order book error: {e}")
         return 0.0, "NEUTRAL", 0.5, None, None, {}
 
     if not bids or not asks:

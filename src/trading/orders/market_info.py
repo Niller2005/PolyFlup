@@ -5,14 +5,9 @@ from typing import List, Dict, Optional, Any
 from py_clob_client.clob_types import BookParams, TradeParams
 from src.utils.logger import log
 from .client import client
+from .utils import is_404_error
 
 _last_midpoint_error_time = 0
-
-
-def _is_404_error(e: Exception) -> bool:
-    """Check if the exception is a 404/No Orderbook error"""
-    err_str = str(e).lower()
-    return "404" in err_str or "no orderbook" in err_str or "not found" in err_str
 
 
 def get_multiple_market_prices(token_ids: List[str]) -> Dict[str, float]:
@@ -45,7 +40,7 @@ def get_multiple_market_prices(token_ids: List[str]) -> Dict[str, float]:
                     result[str(tid)] = float(mid)
         return result
     except Exception as e:
-        if _is_404_error(e):
+        if is_404_error(e):
             return {}
 
         now = time.time()
@@ -69,7 +64,7 @@ def get_midpoint(token_id: str) -> Optional[float]:
                 return float(val)
         return None
     except Exception as e:
-        if not _is_404_error(e):
+        if not is_404_error(e):
             log(f"⚠️ Error getting midpoint for {token_id[:10]}...: {e}")
         return None
 
@@ -86,7 +81,7 @@ def get_tick_size(token_id: str) -> float:
     except Exception as e:
         from .constants import MIN_TICK_SIZE
 
-        if not _is_404_error(e):
+        if not is_404_error(e):
             log(f"⚠️ Error getting tick size for {token_id[:10]}...: {e}")
         return MIN_TICK_SIZE
 
@@ -105,7 +100,7 @@ def get_spread(token_id: str) -> Optional[float]:
                 return float(val)
         return None
     except Exception as e:
-        if not _is_404_error(e):
+        if not is_404_error(e):
             log(f"⚠️ Error getting spread for {token_id[:10]}...: {e}")
         return None
 
@@ -138,7 +133,7 @@ def get_bulk_spreads(token_ids: List[str]) -> Dict[str, float]:
                     result[str(tid)] = float(spread)
         return result
     except Exception as e:
-        if not _is_404_error(e):
+        if not is_404_error(e):
             log(f"⚠️ Error getting bulk spreads: {e}")
         return {}
 

@@ -101,6 +101,12 @@ def _should_retry(error_str: str) -> bool:
     )
 
 
+def is_404_error(e: Exception) -> bool:
+    """Check if the exception is a 404/No Orderbook error"""
+    err_str = str(e).lower()
+    return "404" in err_str or "no orderbook" in err_str or "not found" in err_str
+
+
 def _execute_with_retry(func, *args, **kwargs):
     last_err = None
     for attempt in range(MAX_RETRIES):
