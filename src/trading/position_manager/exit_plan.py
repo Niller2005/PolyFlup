@@ -110,7 +110,7 @@ def _check_exit_plan(
                             f"   ⚠️ [{symbol}] #{trade_id} has 0 balance after 5m. Settling as ghost trade."
                         )
                         c.execute(
-                            "UPDATE trades SET settled=1, final_outcome='GHOST_TRADE_ZERO_BAL' WHERE id=?",
+                            "UPDATE trades SET settled=1, final_outcome='GHOST_TRADE_ZERO_BAL', pnl_usd=0.0, roi_pct=0.0 WHERE id=?",
                             (trade_id,),
                         )
                         return

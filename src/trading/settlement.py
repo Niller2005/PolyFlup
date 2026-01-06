@@ -296,8 +296,8 @@ def check_and_settle_trades():
                         if not window_trades:
                             continue
 
-                        win_pnl = sum(t[2] for t in window_trades)
-                        win_bet = sum(t[5] for t in window_trades)
+                        win_pnl = sum((t[2] or 0.0) for t in window_trades)
+                        win_bet = sum((t[5] or 0.0) for t in window_trades)
                         win_roi = (win_pnl / win_bet * 100) if win_bet > 0 else 0
 
                         # Format window range
@@ -319,6 +319,8 @@ def check_and_settle_trades():
                         log(f"   Total PnL: {win_pnl:+.2f}$ ({win_roi:+.1f}%)")
                         log(f"   Trades:    {len(window_trades)}")
                         for sym, side, pnl, roi, outcome, bet in window_trades:
+                            pnl = pnl or 0.0
+                            roi = roi or 0.0
                             log(
                                 f"     - [{sym}] {side}: {pnl:+.2f}$ ({roi:+.1f}%) | {outcome}"
                             )

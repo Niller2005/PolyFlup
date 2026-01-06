@@ -104,7 +104,7 @@ def sync_positions_with_exchange(user_address: str):
                                 f"   ⚠️ [{symbol}] #{trade_id} exists in DB but not on exchange (size 0). Marking as settled/unfilled."
                             )
                             c.execute(
-                                "UPDATE trades SET settled = 1, final_outcome = 'SYNC_MISSING' WHERE id = ?",
+                                "UPDATE trades SET settled = 1, final_outcome = 'SYNC_MISSING', pnl_usd = 0.0, roi_pct = 0.0 WHERE id = ?",
                                 (trade_id,),
                             )
 

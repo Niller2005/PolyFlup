@@ -296,7 +296,7 @@ def _check_stop_loss(
                 f"   ⚠️ [{symbol}] #{trade_id} Stop Loss: Balance is 0 or near 0. Settling as ghost trade."
             )
             c.execute(
-                "UPDATE trades SET settled=1, final_outcome='STOP_LOSS_GHOST_FILL', scale_in_order_id=NULL WHERE id=?",
+                "UPDATE trades SET settled=1, final_outcome='STOP_LOSS_GHOST_FILL', scale_in_order_id=NULL, pnl_usd=0.0, roi_pct=0.0 WHERE id=?",
                 (trade_id,),
             )
             return True
@@ -325,8 +325,8 @@ def _check_stop_loss(
                 f"   ℹ️ [{symbol}] #{trade_id} Stop loss skipped: Exit plan already filled."
             )
             c.execute(
-                "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1 WHERE id=?",
-                (trade_id,),
+                "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1, pnl_usd=?, roi_pct=? WHERE id=?",
+                (pnl_usd, pnl_pct, trade_id),
             )
             return True
 
@@ -355,7 +355,7 @@ def _check_stop_loss(
                 )
                 return False
             c.execute(
-                "UPDATE trades SET settled=1, final_outcome='UNFILLED_NO_BALANCE', scale_in_order_id=NULL WHERE id=?",
+                "UPDATE trades SET settled=1, final_outcome='UNFILLED_NO_BALANCE', scale_in_order_id=NULL, pnl_usd=0.0, roi_pct=0.0 WHERE id=?",
                 (trade_id,),
             )
             return True
