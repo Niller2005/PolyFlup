@@ -577,12 +577,25 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
 
 def main():
     """Main bot loop"""
-    log("🚀 Starting PolyFlup Trading Bot (Modular Version)...")
+    setup_api_creds()
+    init_database()
+
+    # Set initial log window if markets are defined
+    if MARKETS:
+        try:
+            w_start, w_end = get_window_times(MARKETS[0])
+            set_log_window(w_start.isoformat())
+            range_str = format_window_range(w_start, w_end)
+            log(f"🚀 Starting PolyFlup Trading Bot | Window: {range_str}")
+        except Exception as e:
+            log(f"🚀 Starting PolyFlup Trading Bot (Modular Version)...")
+            log_error(f"Error setting initial log window: {e}")
+    else:
+        log("🚀 Starting PolyFlup Trading Bot (Modular Version)...")
+
     log(
         f"📊 ADX System: {'INTEGRATED' if ADX_ENABLED else 'DISABLED'} (period={ADX_PERIOD}, interval={ADX_INTERVAL})"
     )
-    setup_api_creds()
-    init_database()
 
     ws_manager.start()
     init_ws_callbacks()
@@ -615,7 +628,14 @@ def main():
     last_settle_check = time.time()
 
     log("🏁 Bot initialized. Entering continuous monitoring loop...")
+
+    # Initialize with current window so we don't log a duplicate "NEW WINDOW" immediately
     last_window_logged = None
+    if MARKETS:
+        try:
+            last_window_logged, _ = get_window_times(MARKETS[0])
+        except:
+            pass
 
     while True:
         try:

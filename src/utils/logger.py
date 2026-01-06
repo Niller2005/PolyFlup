@@ -20,9 +20,23 @@ def set_log_window(window_id: str = "") -> None:
     else:
         # Create a filename from window_id, e.g., 2026-01-06_15-45
         # If window_id is like '2026-01-06 15:45:00', it will be '2026-01-06_15-45'
+        # We replace T, spaces and colons with underscores/dashes for filesystem safety
         safe_id = window_id.replace(" ", "_").replace(":", "-").replace("T", "_")
+
+        # Remove any timezone offset or microseconds to keep filename clean and stable
+        # Handles both +00:00 and -05:00 formats
         if "+" in safe_id:
             safe_id = safe_id.split("+")[0]
+        elif "-" in safe_id and len(safe_id.split("-")) > 3:
+            # Only split on the last dash if it looks like an offset (e.g. 2026-01-06_13-15-00-05-00)
+            # A better way is to split on the last 3-4 characters if they match an offset pattern,
+            # but let's just use a more surgical approach.
+            parts = safe_id.split("-")
+            # Reconstruct date (first 3 parts) and time (next 3 parts)
+            # window_2026-01-06_13-15-00-05-00
+            if len(parts) >= 6:
+                safe_id = "-".join(parts[:5])  # 2026-01-06_13-15-00
+
         _current_log_file = os.path.join(BASE_DIR, "logs", f"window_{safe_id}.log")
 
 
