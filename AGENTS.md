@@ -267,6 +267,17 @@ Main table: `trades`
 - Settlement: `settled`, `final_outcome`, `exit_price`, `pnl_usd`, `roi_pct`
 - Metadata: `order_id`, `order_status`, `target_price`, `is_reversal`
 
+## Debugging & Monitoring
+
+### Local Logs
+For deep context on historical trades, strategy decisions, and execution details beyond what is available in the database, refer to the local log files:
+- **`logs/trades_2025.log`**: Contains verbose history of bot cycles, signal evaluations, order placements, and settlement details. Use this file when debugging unexpected bot behavior or auditing past trades.
+
+### Commands
+- **View real-time container logs**: `docker logs -f polyflup-bot`
+- **Inspect database**: `sqlite3 trades.db`
+- **Check DB integrity**: `uv run check_db.py`
+
 ## Common Pitfalls
 
 1. **Don't** modify git config or run destructive commands
