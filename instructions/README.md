@@ -8,6 +8,9 @@ This folder contains internal documentation and instructions for PolyFlup develo
 - **SESSION_IMPROVEMENTS.md** - Complete changelog of improvements and new features
 - **QUICK_REFERENCE.md** - Quick reference guide for new features and functions
 
+### Reference
+- **GLOSSARY.md** - Definitions of terms, concepts, and technologies used in the project
+
 ### Database
 - **MIGRATIONS.md** - Database migration system guide
 - **DATABASE_BEST_PRACTICES.md** - Database patterns and performance tips
