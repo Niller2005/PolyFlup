@@ -578,7 +578,7 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
 
 def main():
     """Main bot loop"""
-    log("🚀 Starting PolyAstra Trading Bot (Modular Version)...")
+    log("🚀 Starting PolyFlup Trading Bot (Modular Version)...")
     log(
         f"📊 ADX System: {'INTEGRATED' if ADX_ENABLED else 'DISABLED'} (period={ADX_PERIOD}, interval={ADX_INTERVAL})"
     )
@@ -595,7 +595,7 @@ def main():
 
     log("=" * 90)
     log(
-        f"🤖 POLYASTRA | Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC"
+        f"🤖 POLYFLUP | Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC"
     )
     log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: {BET_PERCENT}%")
     log(f"⚙️  HEDGED REVERSAL: {'ENABLED' if ENABLE_HEDGED_REVERSAL else 'DISABLED'}")

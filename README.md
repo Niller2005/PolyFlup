@@ -1,4 +1,4 @@
-# PolyAstra Trading Bot 🚀
+# PolyFlup Trading Bot 🚀
 
 Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 
@@ -46,8 +46,8 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/Niller2005/polyastra.git
-   cd polyastra
+   git clone https://github.com/Niller2005/polyflup.git
+   cd polyflup
    ```
 
 2. **Install dependencies**
@@ -113,12 +113,12 @@ docker compose up -d --build
 
 - **Dashboard**: [http://localhost:3001](http://localhost:3001)
 - **API Stats**: [http://localhost:3001/api/stats](http://localhost:3001/api/stats)
-- **Bot Logs**: `docker logs -f polyastra-bot`
+- **Bot Logs**: `docker logs -f polyflup-bot`
 
 ### Option 2: Local Installation
 #### Start Trading
 ```bash
-uv run polyastra.py
+uv run polyflup.py
 ```
 
 #### Start Dashboard
@@ -132,10 +132,10 @@ npm start
 ## 📂 Project Structure
 
 ```
-polyastra/
+polyflup/
 ├── src/          # Bot source code
 ├── ui/           # Real-time Svelte dashboard
-├── polyastra.py  # Bot entry point
+├── polyflup.py  # Bot entry point
 └── trades.db     # Shared SQLite database
 ```
 

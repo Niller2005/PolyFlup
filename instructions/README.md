@@ -1,6 +1,6 @@
 # Instructions & Documentation
 
-This folder contains internal documentation and instructions for PolyAstra development.
+This folder contains internal documentation and instructions for PolyFlup development.
 
 ## Files
 

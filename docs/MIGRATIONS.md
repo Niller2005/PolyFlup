@@ -1,6 +1,6 @@
 # Database Migrations Guide
 
-This document explains how to add new database migrations to PolyAstra.
+This document explains how to add new database migrations to PolyFlup.
 
 ## How It Works
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Deploy PolyAstra to production
+# Deploy PolyFlup to production
 # Usage: ./deploy_prod.sh [--pull] [--logs]
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,7 +48,7 @@ echo ""
 if [ "$FOLLOW_LOGS" = true ]; then
     echo "📊 Following bot logs (Ctrl+C to exit)..."
     echo ""
-    docker logs -f polyastra-bot
+    docker logs -f polyflup-bot
 else
     echo "💡 Tips:"
     echo "   ./deploy_prod.sh --pull         (pull latest code before deploying)"

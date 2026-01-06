@@ -33,4 +33,4 @@ ENV PYTHONUNBUFFERED=1
 COPY . .
 
 # Run the application using the venv python directly
-CMD ["python", "polyastra.py"]
+CMD ["python", "polyflup.py"]

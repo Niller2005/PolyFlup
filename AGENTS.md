@@ -1,10 +1,10 @@
-# Agent Guidelines for PolyAstra Trading Bot
+# Agent Guidelines for PolyFlup Trading Bot
 
-This document provides coding standards and guidelines for AI agents working on the PolyAstra trading bot codebase.
+This document provides coding standards and guidelines for AI agents working on the PolyFlup trading bot codebase.
 
 ## Project Overview
 
-PolyAstra is an automated trading bot for 15-minute crypto prediction markets on Polymarket. It consists of:
+PolyFlup is an automated trading bot for 15-minute crypto prediction markets on Polymarket. It consists of:
 - **Backend**: Python trading bot (`src/`)
 - **Frontend**: Svelte dashboard (`ui/`)
 - **Database**: SQLite (`trades.db`)
@@ -21,7 +21,7 @@ The following tools are installed and available for system tasks:
 
 ```bash
 # Run the trading bot
-uv run polyastra.py
+uv run polyflup.py
 
 # Run a specific test script
 uv run test_price_buffer.py
@@ -67,7 +67,7 @@ npm start
 docker compose up -d --build
 
 # View bot logs
-docker logs -f polyastra-bot
+docker logs -f polyflup-bot
 
 # Stop containers
 docker compose down
@@ -234,7 +234,7 @@ src/
 
 ### Data Flow
 ```
-polyastra.py (main loop)
+polyflup.py (main loop)
   → trade_symbol()
     → calculate_confidence() [strategy]
     → place_order() [orders]

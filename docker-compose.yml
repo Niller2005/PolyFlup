@@ -1,6 +1,6 @@
 services:
-  polyastra:
-    container_name: polyastra-bot
+  polyflup:
+    container_name: polyflup-bot
     build: .
     volumes:
       - .:/app
@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
 
   dashboard:
-    container_name: polyastra-dashboard
+    container_name: polyflup-dashboard
     build:
       context: ./ui
     ports:

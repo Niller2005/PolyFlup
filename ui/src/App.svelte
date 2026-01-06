@@ -93,7 +93,7 @@
                     <div class="p-2 bg-primary rounded-lg text-primary-foreground">
                         <Activity size={24} />
                     </div>
-                    PolyAstra Dashboard
+                    PolyFlup Dashboard
                 </h1>
                 <p class="text-muted-foreground mt-1 font-medium text-sm">Automated Trading Intelligence</p>
             </div>

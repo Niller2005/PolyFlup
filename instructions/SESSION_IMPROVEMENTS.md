@@ -36,7 +36,7 @@ This document summarizes the improvements made during the 2026-01-06 session, fo
 ## Operations & Infrastructure
 
 ### 6. Enhanced Crash Logging
-- **Logger Integration:** Updated `polyastra.py` to use the standardized `log()` function for fatal crashes and keyboard interrupts, ensuring stack traces are captured in the log files rather than just printed to the console.
+- **Logger Integration:** Updated `polyflup.py` to use the standardized `log()` function for fatal crashes and keyboard interrupts, ensuring stack traces are captured in the log files rather than just printed to the console.
 
 ### 7. Permission & Script Updates
 - **Security:** Updated `opencode.json` with strict `.env` file permission rules to prevent accidental exposure of secrets during agent interactions.

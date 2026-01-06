@@ -1577,7 +1577,7 @@ wheels = [
 ]
 
 [[package]]
-name = "polyastra"
+name = "polyflup"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

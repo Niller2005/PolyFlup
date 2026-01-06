@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PolyAstra Trading Bot
+PolyFlup Trading Bot
 Entry point for the modular trading system.
 """
 

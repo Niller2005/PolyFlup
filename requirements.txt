@@ -1,4 +1,4 @@
-# PolyAstra Trading Bot - Requirements
+# PolyFlup Trading Bot - Requirements
 # Install with: pip install -r requirements.txt
 
 # Web3 & Blockchain

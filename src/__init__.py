@@ -1,1 +1,1 @@
-# PolyAstra Trading Bot
+# PolyFlup Trading Bot
