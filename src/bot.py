@@ -641,6 +641,7 @@ def main():
                 w_start, w_end = get_window_times(MARKETS[0])
                 if last_window_logged != w_start:
                     range_str = format_window_range(w_start, w_end)
+                    log("")
                     log(f"🪟 NEW WINDOW: {range_str}")
                     last_window_logged = w_start
 
