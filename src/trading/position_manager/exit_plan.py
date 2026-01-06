@@ -186,10 +186,7 @@ def _check_exit_plan(
         if scaled_in:
             status += " | 📊 Scaled in"
         if limit_sell_id:
-            status += f" | ⏰ Exit active ({age:.0f}s)"
+            status += " | ⏰ Exit active"
         else:
-            wait_text = ""
-            if age < EXIT_MIN_POSITION_AGE:
-                wait_text = f" (Waiting {EXIT_MIN_POSITION_AGE - age:.0f}s)"
-            status += f" | ⏳ Exit pending ({age:.0f}s){wait_text}"
+            status += " | ⏳ Exit pending"
         log(f"  {'📈' if pnl_pct > 0 else '📉'} [{symbol}] {status}")
