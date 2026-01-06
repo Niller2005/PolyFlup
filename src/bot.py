@@ -39,7 +39,7 @@ from src.config.settings import (
     ENABLE_BFXD,
 )
 
-from src.utils.logger import log, log_error, send_discord
+from src.utils.logger import log, log_error, send_discord, set_log_window
 from src.utils.web3_utils import get_balance
 from src.data.database import (
     init_database,
@@ -649,6 +649,8 @@ def main():
                 w_start, w_end = get_window_times(MARKETS[0])
                 if last_window_logged != w_start:
                     range_str = format_window_range(w_start, w_end)
+                    # Update logger to use a new file for this window
+                    set_log_window(w_start.isoformat())
                     log("")
                     log(f"🪟 NEW WINDOW: {range_str}")
                     last_window_logged = w_start

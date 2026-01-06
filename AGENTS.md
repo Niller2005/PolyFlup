@@ -128,6 +128,8 @@ docker compose down
 
 #### Logging
 - Use the `log()` function from `src.utils.logger` for general messages.
+- **Window-Specific Logs**: The bot automatically creates a new log file for each 15-minute trading window (e.g., `logs/window_2026-01-06_15-45.log`).
+- **Master Log**: All logs are also mirrored to `logs/trades_2025.log` for a complete history.
 - **Use the `log_error()` function from `src.utils.logger` for all exceptions and failures.**
   - `log_error(text, include_traceback=True)`: Captures full stack trace and writes to dedicated `logs/errors.log`.
 - Include context: `log(f"[{symbol}] message")`

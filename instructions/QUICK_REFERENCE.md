@@ -224,6 +224,18 @@ server_time = get_server_time()
 # Returns Unix timestamp
 ```
 
+### Window-Specific Logs
+```python
+# The bot automatically splits logs by trading window
+# Master log: logs/trades_2025.log
+# Window log: logs/window_YYYY-MM-DD_HH-MM.log
+
+from src.utils.logger import set_log_window
+
+# Manually switch to a specific window log (usually handled by bot.py)
+set_log_window("2026-01-06 15:45:00")
+```
+
 ### Error Logging
 ```python
 from src.utils.logger import log_error

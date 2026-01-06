@@ -35,6 +35,16 @@ A single iteration of the bot's main processing loop. During a cycle, the bot ev
 
 ---
 
+## Logging & Auditing
+
+### Master Log
+A monolithic log file (`logs/trades_2025.log`) that contains the entire historical output of the bot across all sessions and windows. Useful for long-term auditing.
+
+### Window Log
+A dedicated log file created for each 15-minute trading window (e.g., `logs/window_2026-01-06_15-45.log`). It contains only the activity relevant to that specific window, making it easier to analyze performance for a particular market event.
+
+---
+
 ## Polymarket & CLOB
 
 ### CLOB (Central Limit Order Book)

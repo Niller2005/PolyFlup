@@ -1,10 +1,29 @@
 """Logging utilities"""
 
+import os
 import requests
 import traceback
 from datetime import datetime
+from typing import Optional
 from zoneinfo import ZoneInfo
-from src.config.settings import LOG_FILE, ERROR_LOG_FILE, DISCORD_WEBHOOK
+from src.config.settings import LOG_FILE, ERROR_LOG_FILE, DISCORD_WEBHOOK, BASE_DIR
+
+
+_current_log_file: str = LOG_FILE
+
+
+def set_log_window(window_id: str = "") -> None:
+    """Set the log file for the current window"""
+    global _current_log_file
+    if not window_id:
+        _current_log_file = LOG_FILE
+    else:
+        # Create a filename from window_id, e.g., 2026-01-06_15-45
+        # If window_id is like '2026-01-06 15:45:00', it will be '2026-01-06_15-45'
+        safe_id = window_id.replace(" ", "_").replace(":", "-").replace("T", "_")
+        if "+" in safe_id:
+            safe_id = safe_id.split("+")[0]
+        _current_log_file = os.path.join(BASE_DIR, "logs", f"window_{safe_id}.log")
 
 
 def log(text: str) -> None:
@@ -21,8 +40,17 @@ def log(text: str) -> None:
                 pass
 
         try:
+            # Always log to master log file
             with open(LOG_FILE, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
+
+            # Also log to window-specific file if it's different
+            if _current_log_file != LOG_FILE:
+                try:
+                    with open(_current_log_file, "a", encoding="utf-8") as f:
+                        f.write(line + "\n")
+                except Exception:
+                    pass
         except Exception:
             pass
     except Exception:

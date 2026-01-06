@@ -1,3 +1,29 @@
+# Session Improvements - 2026-01-06 (Part 3)
+
+This document summarizes the third phase of improvements made during the 2026-01-06 session, focusing on log organization.
+
+---
+
+## High Impact: Log Organization
+
+### 1. Window-Specific Log Files
+**Description:** Implemented automatic log rotation based on trading windows.
+- **Master & Window Logs:** All logs are now written to both a master history file (`logs/trades_2025.log`) and a dedicated window file (e.g., `logs/window_2026-01-06_15-45.log`).
+- **Improved Auditing:** This allows for precise auditing of bot performance and strategy decisions for specific market windows without searching through a monolithic log file.
+- **Dynamic Rotation:** The bot automatically detects new 15-minute windows and creates/switches to the appropriate log file in real-time.
+
+---
+
+## Complete Session Statistics (2026-01-06 Part 3)
+
+### Lines of Code
+- **Modified/Added:** ~80 lines
+
+### Features
+- **Window-Specific Logging:** 1
+
+---
+
 # Session Improvements - 2026-01-06 (Part 2)
 
 This document summarizes the second phase of improvements made during the 2026-01-06 session, focusing on hedged reversals, midpoint-based stop losses, and robust exit plan self-healing.
