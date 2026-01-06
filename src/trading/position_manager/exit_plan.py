@@ -176,13 +176,11 @@ def _check_exit_plan(
             balance_info = get_balance_allowance(token_id)
             actual_bal = balance_info.get("balance", 0) if balance_info else 0
 
-            if actual_bal < size:
+            # BI-DIRECTIONAL HEALING: Sync DB size with actual wallet balance
+            if abs(actual_bal - size) > 0.01:
                 if actual_bal > 0:
-                    # ALWAYS update size if we have some balance but less than expected
-                    # This fixes the "stuck" exit plan due to minor rounding differences
-                    diff = size - actual_bal
                     log(
-                        f"   🔧 [{symbol}] #{trade_id} Adjusting size to match balance: {size:.4f} -> {actual_bal:.4f} (diff: {diff:.6f})"
+                        f"   🔧 [{symbol}] #{trade_id} Syncing size to match balance: {size:.2f} -> {actual_bal:.2f}"
                     )
                     c.execute(
                         "UPDATE trades SET size = ?, bet_usd = ? * entry_price WHERE id = ?",
@@ -200,6 +198,12 @@ def _check_exit_plan(
                             (trade_id,),
                         )
                         return
+                    if verbose:
+                        log(
+                            f"   ⏳ [{symbol}] #{trade_id} Exit pending: Balance is 0.0 (waiting for API sync...)"
+                        )
+                    return
+
                     if verbose:
                         log(
                             f"   ⏳ [{symbol}] #{trade_id} Exit pending: Balance is 0.0 (waiting for API sync...)"

@@ -128,8 +128,22 @@ def _check_stop_loss(
 
     # CANCEL ANY PENDING ORDERS
     if limit_sell_order_id:
+        l_status = get_order_status(limit_sell_order_id)
+        if l_status in ["FILLED", "MATCHED"]:
+            log(
+                f"   ℹ️ [{symbol}] #{trade_id} Stop loss skipped: Exit plan already filled."
+            )
+            c.execute(
+                "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1 WHERE id=?",
+                (trade_id,),
+            )
+            return True
+
         if cancel_order(limit_sell_order_id):
-            time.sleep(2)
+            log(
+                f"   🔓 [{symbol}] #{trade_id} Cancelled existing exit plan to execute stop loss."
+            )
+            time.sleep(1)  # Short wait for exchange to unlock tokens
 
     if scale_in_order_id:
         log(

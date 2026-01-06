@@ -622,7 +622,7 @@ def main():
             now_ts = time.time()
             now_et = datetime.now(tz=ZoneInfo("America/New_York"))
             is_verbose_cycle = now_ts - last_verbose_log >= 60
-            is_order_check_cycle = now_ts - last_order_check >= 30
+            is_order_check_cycle = now_ts - last_order_check >= 10
 
             if now_ts - last_position_check >= 1:
                 check_open_positions(
