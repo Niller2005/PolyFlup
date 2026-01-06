@@ -9,6 +9,12 @@ from .client import client
 _last_midpoint_error_time = 0
 
 
+def _is_404_error(e: Exception) -> bool:
+    """Check if the exception is a 404/No Orderbook error"""
+    err_str = str(e).lower()
+    return "404" in err_str or "no orderbook" in err_str or "not found" in err_str
+
+
 def get_multiple_market_prices(token_ids: List[str]) -> Dict[str, float]:
     """Get market prices for multiple tokens in a single call"""
     global _last_midpoint_error_time
@@ -39,12 +45,10 @@ def get_multiple_market_prices(token_ids: List[str]) -> Dict[str, float]:
                     result[str(tid)] = float(mid)
         return result
     except Exception as e:
-        now = time.time()
-        # Suppress 404 (No orderbook) spam
-        err_str = str(e).lower()
-        if "404" in err_str or "no orderbook" in err_str:
+        if _is_404_error(e):
             return {}
 
+        now = time.time()
         if now - _last_midpoint_error_time > 60:  # Log other errors once per minute
             log(f"⚠️ Error getting bulk midpoints (falling back to single calls): {e}")
             _last_midpoint_error_time = now
@@ -65,9 +69,7 @@ def get_midpoint(token_id: str) -> Optional[float]:
                 return float(val)
         return None
     except Exception as e:
-        # Suppress 404 (No orderbook) spam
-        err_str = str(e).lower()
-        if "404" not in err_str and "no orderbook" not in err_str:
+        if not _is_404_error(e):
             log(f"⚠️ Error getting midpoint for {token_id[:10]}...: {e}")
         return None
 
@@ -84,7 +86,8 @@ def get_tick_size(token_id: str) -> float:
     except Exception as e:
         from .constants import MIN_TICK_SIZE
 
-        log(f"⚠️ Error getting tick size for {token_id[:10]}...: {e}")
+        if not _is_404_error(e):
+            log(f"⚠️ Error getting tick size for {token_id[:10]}...: {e}")
         return MIN_TICK_SIZE
 
 
@@ -102,7 +105,8 @@ def get_spread(token_id: str) -> Optional[float]:
                 return float(val)
         return None
     except Exception as e:
-        log(f"⚠️ Error getting spread for {token_id[:10]}...: {e}")
+        if not _is_404_error(e):
+            log(f"⚠️ Error getting spread for {token_id[:10]}...: {e}")
         return None
 
 
@@ -134,7 +138,8 @@ def get_bulk_spreads(token_ids: List[str]) -> Dict[str, float]:
                     result[str(tid)] = float(spread)
         return result
     except Exception as e:
-        log(f"⚠️ Error getting bulk spreads: {e}")
+        if not _is_404_error(e):
+            log(f"⚠️ Error getting bulk spreads: {e}")
         return {}
 
 
