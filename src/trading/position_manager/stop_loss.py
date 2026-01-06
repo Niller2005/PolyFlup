@@ -52,6 +52,17 @@ def _trigger_price_based_reversal(
         # Opposite side
         rev_side = "DOWN" if original_side == "UP" else "UP"
         rev_token_id = down_id if original_side == "UP" else up_id
+
+        # NEW: Check if we already have a trade for THIS SIDE in this window
+        window_start, window_end = get_window_times(symbol)
+        from src.data.database import has_side_for_window
+
+        if has_side_for_window(symbol, window_start.isoformat(), rev_side):
+            log(
+                f"   ℹ️ [{symbol}] Already have an open {rev_side} position for this window. Linking as hedge."
+            )
+            return True
+
         rev_price = 1.0 - p_up if original_side == "UP" else p_up
 
         # Clamp and round
@@ -100,7 +111,7 @@ def _trigger_price_based_reversal(
             "slug": get_current_slug(symbol),
         }
 
-        rev_id = execute_trade(trade_params, is_reversal=True)
+        rev_id = execute_trade(trade_params, is_reversal=True, cursor=c)
         if rev_id:
             log(f"⚔️ Reversal trade #{rev_id} opened for {symbol} {rev_side}")
             return True
@@ -166,7 +177,7 @@ def _check_stop_loss(
                     "UPDATE trades SET reversal_triggered = 1, reversal_triggered_at = ? WHERE id = ?",
                     (now.isoformat(), trade_id),
                 )
-                return False  # Don't stop loss in the same cycle as reversal trigger
+            return False  # Don't stop loss in the same cycle as reversal trigger
         else:
             # Reversals disabled, mark as triggered anyway to allow SL path
             c.execute(

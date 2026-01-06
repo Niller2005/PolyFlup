@@ -7,7 +7,7 @@ from src.trading.orders import place_order, get_order
 
 
 def execute_trade(
-    trade_params: Dict[str, Any], is_reversal: bool = False
+    trade_params: Dict[str, Any], is_reversal: bool = False, cursor=None
 ) -> Optional[int]:
     """
     Execute a trade and save to database.
@@ -54,6 +54,7 @@ def execute_trade(
 
     try:
         trade_id = save_trade(
+            cursor=cursor,
             symbol=symbol,
             window_start=trade_params["window_start"].isoformat()
             if hasattr(trade_params["window_start"], "isoformat")
