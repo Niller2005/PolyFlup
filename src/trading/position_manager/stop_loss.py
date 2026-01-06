@@ -45,7 +45,7 @@ def _trigger_price_based_reversal(
             return False
 
         client = get_clob_client()
-        confidence, bias, p_up, best_bid, best_ask, signals = calculate_confidence(
+        confidence, bias, p_up, best_bid, best_ask, _ = calculate_confidence(
             symbol, up_id, client
         )
 
@@ -80,10 +80,6 @@ def _trigger_price_based_reversal(
 
         window_start, window_end = get_window_times(symbol)
 
-        imbalance_val = 0.5
-        if isinstance(signals, dict):
-            imbalance_val = signals.get("order_flow", {}).get("buy_pressure", 0.5)
-
         trade_params = {
             "symbol": symbol,
             "token_id": rev_token_id,
@@ -96,7 +92,7 @@ def _trigger_price_based_reversal(
             "p_up": p_up,
             "best_bid": best_bid,
             "best_ask": best_ask,
-            "imbalance": imbalance_val,
+            "imbalance": 0.5,
             "funding_bias": 0.0,
             "target_price": float(get_window_start_price(symbol)),
             "window_start": window_start,

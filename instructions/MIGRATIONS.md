@@ -14,7 +14,7 @@ Migrations are defined in `src/data/migrations.py` in the `MIGRATIONS` list:
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
     (2, "Verify timestamp column", migration_002_add_created_at_column),
-    # Add new migrations here...
+    (3, "Add reversal_triggered column", migration_003_add_reversal_triggered_column),
 ]
 ```
 
@@ -148,6 +148,7 @@ uv run python -c "import sqlite3; conn = sqlite3.connect('trades.db'); c = conn.
 |---------|-------------|---------|
 | 1 | Add scale_in_order_id column | ✅ |
 | 2 | Verify timestamp column | ✅ |
+| 3 | Add reversal_triggered column | ✅ |
 
 ## Rollback
 

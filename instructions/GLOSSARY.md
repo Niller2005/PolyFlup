@@ -10,6 +10,12 @@ An automated strategy that places a limit sell order at $0.99 (or a target price
 ### Hedged Reversal
 A strategy where the bot holds both **UP** and **DOWN** positions for the same market window simultaneously. This occurs when a trend flips with high confidence. The losing side is eventually cleared by a stop loss.
 
+### Reversal-First Stop Loss
+A strategy refinement where the bot prioritizes trend-flipping before exiting a position. A low midpoint price ($0.30) first triggers a Hedged Reversal. Only after a reversal has been initiated can a true stop loss (selling the original position) occur.
+
+### Price-Based Reversal
+A reversal trade triggered purely by the midpoint price of a token falling below a specific floor (default $0.30), as opposed to a strategy signal flip.
+
 ### Scale-In
 The process of adding more capital to an existing winning position. In PolyFlup, scale-ins are executed using Market Orders (FAK) to ensure immediate execution, followed by an automatic update of the Exit Plan to cover the new total size.
 
