@@ -8,7 +8,12 @@ from src.config.settings import (
     SCALE_IN_MULTIPLIER,
 )
 from src.utils.logger import log
-from src.trading.orders import get_order, place_order, place_market_order
+from src.trading.orders import (
+    get_order,
+    place_order,
+    place_market_order,
+    get_balance_allowance,
+)
 from src.data.market_data import get_current_spot_price
 
 
@@ -94,6 +99,19 @@ def _check_scale_in(
                 return
 
     s_size = size * SCALE_IN_MULTIPLIER
+
+    # Pre-flight balance check to prevent insufficient funds loop
+    est_cost = s_size * current_price
+    bal_info = get_balance_allowance()
+    if bal_info:
+        usdc_balance = bal_info.get("balance", 0)
+        if usdc_balance < est_cost:
+            if verbose:
+                log(
+                    f"   ⏳ [{symbol}] Scale-in skipped: Insufficient funds (Need ${est_cost:.2f}, Have ${usdc_balance:.2f})"
+                )
+            return
+
     log(
         f"📈 [{symbol}] Trade #{trade_id} {side} | 📈 SCALE IN triggered (Market Order): size={s_size:.2f}, {t_left:.0f}s left"
     )

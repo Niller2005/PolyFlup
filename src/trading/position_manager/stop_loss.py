@@ -89,6 +89,13 @@ def _trigger_price_based_reversal(
 
         size, bet_usd = _calculate_bet_size(balance, rev_price, sizing_confidence)
 
+        # Pre-flight balance check
+        if balance < bet_usd:
+            log(
+                f"   ⏳ [{symbol}] Reversal skipped: Insufficient funds (Need ${bet_usd:.2f}, Have ${balance:.2f})"
+            )
+            return False
+
         window_start, window_end = get_window_times(symbol)
 
         trade_params = {

@@ -3,7 +3,7 @@
 from typing import Optional, Dict, Any
 from src.utils.logger import log, log_error, send_discord
 from src.data.database import save_trade
-from src.trading.orders import place_order, get_order
+from src.trading.orders import place_order, get_order, get_balance_allowance
 
 
 def execute_trade(
@@ -18,6 +18,17 @@ def execute_trade(
     token_id = trade_params["token_id"]
     price = trade_params["price"]
     size = trade_params["size"]
+
+    # Pre-flight balance check
+    est_cost = size * price
+    bal_info = get_balance_allowance()
+    if bal_info:
+        usdc_balance = bal_info.get("balance", 0)
+        if usdc_balance < est_cost:
+            log(
+                f"[{symbol}] ❌ Insufficient funds (Need ${est_cost:.2f}, Have ${usdc_balance:.2f})"
+            )
+            return None
 
     # Place order
     result = place_order(token_id, price, size)

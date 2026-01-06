@@ -176,7 +176,19 @@ docker compose down
   📈 [XRP] Trade #154 UP PnL=+71.1% | ⏳ Exit plan pending (45s/60s)
 🎯 [BTC] EXIT PLAN SUCCESS: Trade #143 MATCHED at 0.99! (matched 30.58 shares)
 💰 [BTC] #143 UP: +4.89$ (+19.2%)
+🚀 [BTC] Trend Following: Confidence: 72.4% (UP) | #1087 UP $5.20 @ 0.5200
+🔄 [ETH] Contrarian Entry: Confidence: 5.2% (UP) | #1088 DOWN $3.50 @ 0.4500
+⚔️ 🚀 [XRP] Hedged Reversal (Trend): Confidence: 65.0% (DOWN) | #1089 DOWN $4.10 @ 0.7200
+⚔️ 🔄 [SOL] Hedged Reversal (Contrarian): Confidence: 4.5% (DOWN) | #1090 UP $2.80 @ 0.4800
 ✅ [BTC] #154 UP PnL=+71.1% | ⏰ Exit plan active (120s) | ✅ SCORING
+
+============================================================
+🏁 WINDOW SUMMARY: 15:45 - 16:00
+   Total PnL: +12.45$ (+8.2%)
+   Trades:    2
+     - [BTC] UP: +15.20$ (+10.1%) | RESOLVED
+     - [ETH] DOWN: -2.75$ (-1.8%) | RESOLVED
+============================================================
 ```
 
 
