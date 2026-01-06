@@ -203,6 +203,9 @@ def _prepare_trade_params(
                 log("")
         return
 
+    if verbose:
+        log(f"[{symbol}] 🔍 Token IDs: UP={up_id}, DOWN={down_id}")
+
     client = get_clob_client()
     confidence, bias, p_up, best_bid, best_ask, signals = calculate_confidence(
         symbol, up_id, client

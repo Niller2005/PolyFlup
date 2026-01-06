@@ -55,8 +55,15 @@ def get_token_ids(symbol: str):
                         ]
                 if isinstance(clob_ids, list) and len(clob_ids) >= 2:
                     return clob_ids[0], clob_ids[1]
-        except:
-            pass
+            elif r.status_code == 404 and attempt == 1:
+                from src.utils.logger import log
+
+                log(f"[{symbol}] 🔍 Market slug not found: {slug}")
+        except Exception as e:
+            if attempt == 1:
+                from src.utils.logger import log
+
+                log(f"[{symbol}] ❌ Error fetching token IDs: {e}")
         if attempt < 12:
             time.sleep(4)
     return None, None

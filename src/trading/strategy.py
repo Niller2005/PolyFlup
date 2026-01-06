@@ -48,8 +48,11 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
             bids = getattr(book, "bids", []) or []
             asks = getattr(book, "asks", []) or []
     except Exception as e:
-        if not is_404_error(e):
-            log(f"[{symbol}] Order book error: {e}")
+        if is_404_error(e):
+            # Log the token ID occasionally or during 404 to help debug "wrong ID" vs "not ready"
+            log(f"[{symbol}] Order book not ready for token {up_token[:10]}... (404)")
+        else:
+            log(f"[{symbol}] Order book error for {up_token}: {e}")
         return 0.0, "NEUTRAL", 0.5, None, None, {}
 
     if not bids or not asks:
