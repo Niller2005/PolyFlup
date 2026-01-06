@@ -142,6 +142,7 @@ The bot operates on a multi-tiered monitoring schedule:
 | 1 | Add scale_in_order_id column | Jan 2026 |
 | 2 | Verify timestamp column | Jan 2026 |
 | 3 | Add reversal_triggered column | Jan 2026 |
+| 4 | Add reversal_triggered_at column | Jan 2026 |
 
 ---
 

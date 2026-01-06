@@ -18,6 +18,12 @@ This document summarizes the sixth phase of improvements, focusing on fixing a c
 - **Solution:** Added `has_side_for_window()` check inside the reversal logic. The bot now verifies if it already holds the target side on the exchange/database before sending a new buy request.
 - **Impact:** Prevents "fat-finger" duplicate buying sprees during high-volatility events.
 
+### 3. Pre-Flight Balance Verification
+**Description:** Implemented real-time balance checks before attempting any BUY orders (Scale-in, Reversal, Initial Entry).
+- **Issue:** Bot was entering high-frequency retry loops when USDC balance was insufficient, causing log spam and unnecessary API calls.
+- **Solution:** Added `get_balance_allowance()` checks in `scale_in.py`, `stop_loss.py`, and `execution.py`.
+- **Impact:** Eliminates "Insufficient funds" retry loops. Failed checks are logged once per verbose cycle (60s) instead of every second.
+
 ---
 
 ## Complete Session Statistics (2026-01-06 Part 6)
@@ -28,6 +34,7 @@ This document summarizes the sixth phase of improvements, focusing on fixing a c
 ### Features
 - **Database Transaction Management:** 1
 - **Duplicate Entry Filter:** 1
+- **Pre-Flight Balance Check:** 1
 
 ---
 
