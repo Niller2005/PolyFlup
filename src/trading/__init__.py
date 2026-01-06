@@ -1,4 +1,6 @@
 from .strategy import calculate_confidence, bfxd_allows_trade
+from .execution import execute_trade
+from .logic import _determine_trade_side, _calculate_bet_size, _prepare_trade_params
 from .orders import (
     setup_api_creds,
     place_order,
@@ -38,6 +40,10 @@ from .settlement import get_market_resolution, check_and_settle_trades
 __all__ = [
     "calculate_confidence",
     "bfxd_allows_trade",
+    "execute_trade",
+    "_determine_trade_side",
+    "_calculate_bet_size",
+    "_prepare_trade_params",
     "setup_api_creds",
     "place_order",
     "place_limit_order",

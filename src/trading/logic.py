@@ -1,0 +1,284 @@
+"""Trade logic and parameter preparation"""
+
+from typing import Optional, Tuple
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from src.config.settings import (
+    MIN_EDGE,
+    CONTRARIAN_THRESHOLD,
+    BET_PERCENT,
+    CONFIDENCE_SCALING_FACTOR,
+    MAX_ENTRY_LATENESS_SEC,
+    ENABLE_BFXD,
+)
+from src.utils.logger import log
+from src.data.database import has_trade_for_window, has_side_for_window
+from src.data.market_data import (
+    get_token_ids,
+    get_current_slug,
+    get_window_times,
+    get_funding_bias,
+    get_window_start_price,
+)
+from src.trading.strategy import calculate_confidence, bfxd_allows_trade
+from src.trading.orders import get_clob_client
+
+
+def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
+    """
+    Determine actual trading side and confidence for sizing.
+    Updated: Support Trend Following and Contrarian flips, ignoring Neutral/Wait zone.
+    """
+    if confidence <= CONTRARIAN_THRESHOLD:
+        # Contrarian: Expect flip because confidence in current bias is extremely low
+        actual_side = "DOWN" if bias == "UP" else "UP"
+        sizing_confidence = 0.25  # Fixed sizing for contrarian entries
+    else:
+        # Follow Trend (no matter the confidence level)
+        actual_side = bias
+        sizing_confidence = confidence
+
+    return actual_side, sizing_confidence
+
+
+def _check_target_price_alignment(
+    symbol: str,
+    side: str,
+    confidence: float,
+    current_spot: float,
+    target_price: float,
+    current_price: float,
+    verbose: bool = True,
+) -> bool:
+    """Check if target price alignment allows trading"""
+
+    # 1. Winning Side Only Filter: Strictly skip underdog positions (price < $0.50)
+    # This enforces the "Only winning side" mandate.
+    is_underdog = current_price < 0.50
+
+    if is_underdog:
+        if verbose:
+            log(
+                f"[{symbol}] ⚠️ {side} is UNDERDOG (${current_price:.2f}). Only entering WINNING side positions. SKIPPING."
+            )
+        return False
+
+    # 2. Spot-vs-Target Alignment (Safety Layer)
+    if target_price > 0 and current_spot > 0:
+        from src.config.settings import WINDOW_START_PRICE_BUFFER_PCT
+
+        buffer = target_price * (WINDOW_START_PRICE_BUFFER_PCT / 100.0)
+
+        is_winning_side_on_spot = False
+        if side == "UP":
+            is_winning_side_on_spot = current_spot >= (target_price - buffer)
+        elif side == "DOWN":
+            is_winning_side_on_spot = current_spot <= (target_price + buffer)
+
+        if not is_winning_side_on_spot:
+            if verbose:
+                log(
+                    f"[{symbol}] ⚠️ {side} is losing on SPOT (${current_spot:,.2f} vs Target ${target_price:,.2f}). SKIPPING."
+                )
+            return False
+
+    return True
+
+
+def _calculate_bet_size(
+    balance: float, price: float, sizing_confidence: float
+) -> tuple[float, float]:
+    """Calculate position size and effective bet amount"""
+    base_bet = balance * (BET_PERCENT / 100.0)
+    # Scaled bet based on confidence
+    confidence_multiplier = sizing_confidence * CONFIDENCE_SCALING_FACTOR
+    target_bet = base_bet * confidence_multiplier
+
+    # Ensure at least some minimum multiplier if confidence is very low but valid
+    if target_bet < base_bet * 0.5:
+        target_bet = base_bet * 0.5
+
+    size = round(target_bet / price, 4)
+
+    MIN_SIZE = 5.0
+    bet_usd_effective = target_bet
+
+    if size < MIN_SIZE:
+        size = MIN_SIZE
+        bet_usd_effective = round(size * price, 4)
+
+    return size, bet_usd_effective
+
+
+def _prepare_trade_params(
+    symbol: str, balance: float, add_spacing: bool = True, verbose: bool = True
+) -> Optional[dict]:
+    """
+    Prepare trade parameters without executing the order
+    """
+    up_id, down_id = get_token_ids(symbol)
+    if not up_id or not down_id:
+        if verbose:
+            log(f"[{symbol}] ❌ Market not found")
+            if add_spacing:
+                log("")
+        return
+
+    client = get_clob_client()
+    confidence, bias, p_up, best_bid, best_ask, signals = calculate_confidence(
+        symbol, up_id, client
+    )
+
+    if bias == "NEUTRAL":
+        if verbose:
+            log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
+            if add_spacing:
+                log("")
+        return
+
+    actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
+
+    if actual_side == "NEUTRAL":
+        if verbose:
+            if confidence == 0 and bias == "NEUTRAL":
+                log(f"[{symbol}] ⚪ Neutral / No Signal")
+            else:
+                log(
+                    f"[{symbol}] ⏳ WAIT ZONE: {bias} ({confidence:.1%}) | {CONTRARIAN_THRESHOLD} < x < {MIN_EDGE}"
+                )
+
+            if add_spacing:
+                log("")
+        return
+
+    if actual_side == "UP":
+        token_id, side, price = up_id, "UP", p_up
+    else:
+        token_id, side, price = down_id, "DOWN", 1.0 - p_up
+
+    # NEW: Check if we already have a trade for THIS SIDE in this window
+    window_start, window_end = get_window_times(symbol)
+
+    # Check if ANY trade exists for this window
+    other_side_exists = False
+    if has_trade_for_window(symbol, window_start.isoformat()):
+        other_side_exists = True
+
+    if has_side_for_window(symbol, window_start.isoformat(), side):
+        if verbose:
+            log(
+                f"[{symbol}] ℹ️ Already have an open {side} position for this window. Skipping duplicate entry."
+            )
+            if add_spacing:
+                log("")
+        return None
+
+    if actual_side == bias:
+        entry_type = "Trend Following"
+        emoji = "🌊"
+    else:
+        entry_type = "Contrarian Entry"
+        emoji = "🔄"
+
+    if other_side_exists:
+        entry_type = f"HEDGED REVERSAL ({entry_type})"
+        emoji = f"⚔️ {emoji}"
+
+    if verbose:
+        log(
+            f"[{symbol}] {emoji} {entry_type}: {actual_side} (Bias: {bias} @ {confidence:.1%})"
+        )
+
+    # Check lateness
+    now_et = datetime.now(tz=ZoneInfo("America/New_York"))
+    lateness = (now_et - window_start).total_seconds()
+    time_left = (window_end - now_et).total_seconds()
+
+    if lateness > MAX_ENTRY_LATENESS_SEC:
+        if verbose:
+            log(
+                f"[{symbol}] ⚠️  Cycle is TOO LATE ({lateness:.0f}s into window, {time_left:.0f}s left). SKIPPING."
+            )
+            if add_spacing:
+                log("")
+        return
+    elif lateness > 60:
+        if verbose:
+            log(
+                f"[{symbol}] ⏳ Cycle is LATE ({lateness:.0f}s into window, {time_left:.0f}s left)"
+            )
+
+    target_price = float(get_window_start_price(symbol))
+
+    current_spot = 0.0
+    if isinstance(signals, dict):
+        current_spot = float(signals.get("current_spot", 0))
+
+    if not _check_target_price_alignment(
+        symbol, side, confidence, current_spot, target_price, price, verbose=verbose
+    ):
+        if add_spacing and verbose:
+            log("")
+        return
+
+    # Check filters
+    bfxd_ok, bfxd_trend = bfxd_allows_trade(symbol, side)
+
+    # Signal details
+    rsi = 50.0
+    imbalance_val = 0.5
+    adx_val = 0.0
+    if isinstance(signals, dict):
+        if "momentum" in signals and isinstance(signals["momentum"], dict):
+            rsi = signals["momentum"].get("rsi", 50.0)
+
+        if "order_flow" in signals and isinstance(signals["order_flow"], dict):
+            imbalance_val = signals["order_flow"].get("buy_pressure", 0.5)
+
+        if "adx" in signals and isinstance(signals["adx"], dict):
+            adx_val = signals["adx"].get("value", 0.0)
+
+    filter_text = f"ADX: {adx_val:.1f}"
+
+    if ENABLE_BFXD and symbol == "BTC":
+        filter_text += f" | BFXD: {bfxd_trend} {'✅' if bfxd_ok else '❌'}"
+
+    core_summary = f"Confidence: {confidence:.1%} ({bias})"
+
+    if not bfxd_ok:
+        log(f"[{symbol}] ⛔ {core_summary} | status: BLOCKED")
+        if add_spacing:
+            log("")
+        return
+
+    if price <= 0:
+        log(f"[{symbol}] ERROR: Invalid price {price}")
+        if add_spacing:
+            log("")
+        return
+
+    # Clamp and round to minimum tick size (0.01)
+    price = max(0.01, min(0.99, price))
+    price = round(price, 2)
+
+    size, bet_usd_effective = _calculate_bet_size(balance, price, sizing_confidence)
+
+    return {
+        "symbol": symbol,
+        "token_id": token_id,
+        "side": side,
+        "price": price,
+        "size": size,
+        "bet_usd": bet_usd_effective,
+        "confidence": confidence,
+        "core_summary": core_summary,
+        "p_up": p_up,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "imbalance": imbalance_val,
+        "funding_bias": get_funding_bias(symbol),
+        "target_price": target_price if target_price > 0 else None,
+        "window_start": window_start,
+        "window_end": window_end,
+        "slug": get_current_slug(symbol),
+    }

@@ -58,9 +58,13 @@ from src.data.market_data import (
     get_window_start_price,
     get_current_spot_price,
 )
-from src.trading.strategy import (
+from src.trading import (
     calculate_confidence,
     bfxd_allows_trade,
+    execute_trade,
+    _determine_trade_side,
+    _calculate_bet_size,
+    _prepare_trade_params,
 )
 
 
@@ -87,273 +91,6 @@ from src.trading.settlement import check_and_settle_trades
 from src.utils.websocket_manager import ws_manager
 
 
-def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
-    """
-    Determine actual trading side and confidence for sizing.
-    Updated: Support Trend Following and Contrarian flips, ignoring Neutral/Wait zone.
-    """
-    from src.config.settings import CONTRARIAN_THRESHOLD
-
-    if confidence <= CONTRARIAN_THRESHOLD:
-        # Contrarian: Expect flip because confidence in current bias is extremely low
-        actual_side = "DOWN" if bias == "UP" else "UP"
-        sizing_confidence = 0.25  # Fixed sizing for contrarian entries
-    else:
-        # Follow Trend (no matter the confidence level)
-        actual_side = bias
-        sizing_confidence = confidence
-
-    return actual_side, sizing_confidence
-
-
-def _check_target_price_alignment(
-    symbol: str,
-    side: str,
-    confidence: float,
-    current_spot: float,
-    target_price: float,
-    current_price: float,
-    verbose: bool = True,
-) -> bool:
-    """Check if target price alignment allows trading"""
-
-    # 1. Winning Side Only Filter: Strictly skip underdog positions (price < $0.50)
-    # This enforces the "Only winning side" mandate.
-    is_underdog = current_price < 0.50
-
-    if is_underdog:
-        if verbose:
-            log(
-                f"[{symbol}] ⚠️ {side} is UNDERDOG (${current_price:.2f}). Only entering WINNING side positions. SKIPPING."
-            )
-        return False
-
-    # 2. Spot-vs-Target Alignment (Safety Layer)
-    if target_price > 0 and current_spot > 0:
-        from src.config.settings import WINDOW_START_PRICE_BUFFER_PCT
-
-        buffer = target_price * (WINDOW_START_PRICE_BUFFER_PCT / 100.0)
-
-        is_winning_side_on_spot = False
-        if side == "UP":
-            is_winning_side_on_spot = current_spot >= (target_price - buffer)
-        elif side == "DOWN":
-            is_winning_side_on_spot = current_spot <= (target_price + buffer)
-
-        if not is_winning_side_on_spot:
-            if verbose:
-                log(
-                    f"[{symbol}] ⚠️ {side} is losing on SPOT (${current_spot:,.2f} vs Target ${target_price:,.2f}). SKIPPING."
-                )
-            return False
-
-    return True
-
-
-def _calculate_bet_size(
-    balance: float, price: float, sizing_confidence: float
-) -> tuple[float, float]:
-    """Calculate position size and effective bet amount"""
-    base_bet = balance * (BET_PERCENT / 100.0)
-    # Scaled bet based on confidence
-    confidence_multiplier = sizing_confidence * CONFIDENCE_SCALING_FACTOR
-    target_bet = base_bet * confidence_multiplier
-
-    # Ensure at least some minimum multiplier if confidence is very low but valid
-    if target_bet < base_bet * 0.5:
-        target_bet = base_bet * 0.5
-
-    size = round(target_bet / price, 4)
-
-    MIN_SIZE = 5.0
-    bet_usd_effective = target_bet
-
-    if size < MIN_SIZE:
-        size = MIN_SIZE
-        bet_usd_effective = round(size * price, 4)
-
-    return size, bet_usd_effective
-
-
-def _prepare_trade_params(
-    symbol: str, balance: float, add_spacing: bool = True, verbose: bool = True
-) -> Optional[dict]:
-    """
-    Prepare trade parameters without executing the order
-    """
-    up_id, down_id = get_token_ids(symbol)
-    if not up_id or not down_id:
-        if verbose:
-            log(f"[{symbol}] ❌ Market not found")
-            if add_spacing:
-                log("")
-        return
-
-    # if verbose:
-    #     log(f"[{symbol}] 🔍 Token IDs: UP={up_id}, DOWN={down_id}")
-
-    client = get_clob_client()
-    confidence, bias, p_up, best_bid, best_ask, signals = calculate_confidence(
-        symbol, up_id, client
-    )
-
-    if bias == "NEUTRAL":
-        if verbose:
-            log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
-            if add_spacing:
-                log("")
-        return
-
-    actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
-
-    if actual_side == "NEUTRAL":
-        if verbose:
-            if confidence == 0 and bias == "NEUTRAL":
-                log(f"[{symbol}] ⚪ Neutral / No Signal")
-            else:
-                log(
-                    f"[{symbol}] ⏳ WAIT ZONE: {bias} ({confidence:.1%}) | {CONTRARIAN_THRESHOLD} < x < {MIN_EDGE}"
-                )
-
-            if add_spacing:
-                log("")
-        return
-
-    if actual_side == "UP":
-        token_id, side, price = up_id, "UP", p_up
-    else:
-        token_id, side, price = down_id, "DOWN", 1.0 - p_up
-
-    # NEW: Check if we already have a trade for THIS SIDE in this window
-    window_start, window_end = get_window_times(symbol)
-
-    # Check if ANY trade exists for this window
-    other_side_exists = False
-    if has_trade_for_window(symbol, window_start.isoformat()):
-        other_side_exists = True
-
-    if has_side_for_window(symbol, window_start.isoformat(), side):
-        if verbose:
-            log(
-                f"[{symbol}] ℹ️ Already have an open {side} position for this window. Skipping duplicate entry."
-            )
-            if add_spacing:
-                log("")
-        return None
-
-    if actual_side == bias:
-        entry_type = "Trend Following"
-        emoji = "🌊"
-    else:
-        entry_type = "Contrarian Entry"
-        emoji = "🔄"
-
-    if other_side_exists:
-        entry_type = f"HEDGED REVERSAL ({entry_type})"
-        emoji = f"⚔️ {emoji}"
-
-    if verbose:
-        log(
-            f"[{symbol}] {emoji} {entry_type}: {actual_side} (Bias: {bias} @ {confidence:.1%})"
-        )
-
-    # Check lateness
-    now_et = datetime.now(tz=ZoneInfo("America/New_York"))
-    lateness = (now_et - window_start).total_seconds()
-    time_left = (window_end - now_et).total_seconds()
-
-    if lateness > MAX_ENTRY_LATENESS_SEC:
-        if verbose:
-            log(
-                f"[{symbol}] ⚠️  Cycle is TOO LATE ({lateness:.0f}s into window, {time_left:.0f}s left). SKIPPING."
-            )
-            if add_spacing:
-                log("")
-        return
-    elif lateness > 60:
-        if verbose:
-            log(
-                f"[{symbol}] ⏳ Cycle is LATE ({lateness:.0f}s into window, {time_left:.0f}s left)"
-            )
-
-    target_price = float(get_window_start_price(symbol))
-
-    current_spot = 0.0
-    if isinstance(signals, dict):
-        current_spot = float(signals.get("current_spot", 0))
-
-    if not _check_target_price_alignment(
-        symbol, side, confidence, current_spot, target_price, price, verbose=verbose
-    ):
-        if add_spacing and verbose:
-            log("")
-        return
-
-    # Check filters
-    bfxd_ok, bfxd_trend = bfxd_allows_trade(symbol, side)
-
-    # Signal details
-    rsi = 50.0
-    imbalance_val = 0.5
-    adx_val = 0.0
-    if isinstance(signals, dict):
-        if "momentum" in signals and isinstance(signals["momentum"], dict):
-            rsi = signals["momentum"].get("rsi", 50.0)
-
-        if "order_flow" in signals and isinstance(signals["order_flow"], dict):
-            imbalance_val = signals["order_flow"].get("buy_pressure", 0.5)
-
-        if "adx" in signals and isinstance(signals["adx"], dict):
-            adx_val = signals["adx"].get("value", 0.0)
-
-    filter_text = f"ADX: {adx_val:.1f}"
-
-    if ENABLE_BFXD and symbol == "BTC":
-        filter_text += f" | BFXD: {bfxd_trend} {'✅' if bfxd_ok else '❌'}"
-
-    core_summary = f"Confidence: {confidence:.1%} ({bias})"
-
-    if not bfxd_ok:
-        log(f"[{symbol}] ⛔ {core_summary} | status: BLOCKED")
-        if add_spacing:
-            log("")
-        return
-
-    # log(f"[{symbol}] ✅ {core_summary} | status: ENTERING TRADE")
-
-    if price <= 0:
-        log(f"[{symbol}] ERROR: Invalid price {price}")
-        if add_spacing:
-            log("")
-        return
-
-    # Clamp and round to minimum tick size (0.01)
-    price = max(0.01, min(0.99, price))
-    price = round(price, 2)
-
-    size, bet_usd_effective = _calculate_bet_size(balance, price, sizing_confidence)
-
-    return {
-        "symbol": symbol,
-        "token_id": token_id,
-        "side": side,
-        "price": price,
-        "size": size,
-        "bet_usd": bet_usd_effective,
-        "confidence": confidence,
-        "core_summary": core_summary,
-        "p_up": p_up,
-        "best_bid": best_bid,
-        "best_ask": best_ask,
-        "imbalance": imbalance_val,
-        "funding_bias": get_funding_bias(symbol),
-        "target_price": target_price if target_price > 0 else None,
-        "window_start": window_start,
-        "window_end": window_end,
-        "slug": get_current_slug(symbol),
-    }
-
-
 def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
     """Execute trading logic for a symbol"""
     trade_params = _prepare_trade_params(
@@ -363,69 +100,28 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
     if not trade_params:
         return 0
 
-    # Place order
-    result = place_order(
-        trade_params["token_id"], trade_params["price"], trade_params["size"]
-    )
+    is_reversal = "HEDGED REVERSAL" in str(trade_params.get("core_summary", ""))
 
-    if not result["success"]:
-        log(f"[{trade_params['symbol']}] ❌ Order failed, skipping trade tracking")
-        return 0
+    trade_id = execute_trade(trade_params, is_reversal=is_reversal)
 
-    actual_size = trade_params["size"]
-    actual_price = trade_params["price"]
-    actual_status = result["status"]
+    if trade_id and is_reversal:
+        # Mark the original trade for this window as reversal_triggered
+        from src.data.db_connection import db_connection
 
-    if actual_status.upper() in ["FILLED", "MATCHED"]:
-        try:
-            o_data = get_order(result["order_id"])
-            if o_data:
-                sz_m = float(o_data.get("size_matched", 0))
-                pr_m = float(o_data.get("price", 0))
-                if sz_m > 0:
-                    actual_size = sz_m
-                    if pr_m > 0:
-                        actual_price = pr_m
-                    trade_params["bet_usd"] = actual_size * actual_price
-        except Exception as e:
-            log_error(
-                f"[{trade_params['symbol']}] Could not sync execution details immediately: {e}"
+        with db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "UPDATE trades SET reversal_triggered = 1 WHERE symbol = ? AND window_start = ? AND side != ? AND settled = 0",
+                (
+                    symbol,
+                    trade_params["window_start"].isoformat(),
+                    trade_params["side"],
+                ),
             )
+            if c.rowcount > 0:
+                log(f"   🛡️ [{symbol}] Original trade marked as reversal_triggered")
 
-    send_discord(
-        f"**[{trade_params['symbol']}] {trade_params['side']} ${trade_params['bet_usd']:.2f}** | Confidence {trade_params['confidence']:.1%} | Price {actual_price:.4f}"
-    )
-
-    try:
-        trade_id = save_trade(
-            symbol=trade_params["symbol"],
-            window_start=trade_params["window_start"].isoformat(),
-            window_end=trade_params["window_end"].isoformat(),
-            slug=trade_params["slug"],
-            token_id=trade_params["token_id"],
-            side=trade_params["side"],
-            edge=trade_params["confidence"],
-            price=actual_price,
-            size=actual_size,
-            bet_usd=trade_params["bet_usd"],
-            p_yes=trade_params["p_up"],
-            best_bid=trade_params["best_bid"],
-            best_ask=trade_params["best_ask"],
-            imbalance=trade_params["imbalance"],
-            funding_bias=trade_params["funding_bias"],
-            order_status=actual_status,
-            order_id=result["order_id"],
-            limit_sell_order_id=None,
-            target_price=trade_params["target_price"],
-        )
-        # Log combined entry summary
-        log(
-            f"[{trade_params['symbol']}] ✅ {trade_params.get('core_summary', '')} | 🚀 #{trade_id} {trade_params['side']} ${trade_params['bet_usd']:.2f} @ {actual_price:.4f} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
-        )
-        return 1
-    except Exception as e:
-        log_error(f"[{trade_params['symbol']}] Trade completion error: {e}")
-        return 0
+    return 1 if trade_id else 0
 
 
 def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> int:
@@ -499,6 +195,9 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
     if not trade_params_list:
         return 0
 
+    # For batch orders, we still use the old place_batch_orders logic for now
+    # to keep it efficient, but we manually save them using a similar logic to execute_trade.
+    # TODO: In future, refactor batch saving into a utility as well.
     orders = [
         {
             "token_id": p["token_id"],
@@ -512,6 +211,8 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
     results = place_batch_orders(orders)
 
     placed_count = 0
+    from src.data.db_connection import db_connection
+
     for i, result in enumerate(results):
         if i < len(trade_params_list) and result["success"]:
             placed_count += 1
@@ -520,6 +221,7 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
             actual_size = p["size"]
             actual_price = p["price"]
             actual_status = result["status"]
+            is_reversal = "HEDGED REVERSAL" in str(p.get("core_summary", ""))
 
             if actual_status.upper() in ["FILLED", "MATCHED"]:
                 try:
@@ -536,7 +238,7 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                     pass
 
             send_discord(
-                f"**[{p['symbol']}] {p['side']} ${p['bet_usd']:.2f}** | Confidence {p['confidence']:.1%} | Price {actual_price:.4f}"
+                f"**{'🔄 ' if is_reversal else ''}[{p['symbol']}] {p['side']} ${p['bet_usd']:.2f}** | Confidence {p['confidence']:.1%} | Price {actual_price:.4f}"
             )
             try:
                 trade_id = save_trade(
@@ -558,12 +260,26 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                     order_status=actual_status,
                     order_id=result["order_id"],
                     limit_sell_order_id=None,
+                    is_reversal=is_reversal,
                     target_price=p["target_price"],
                 )
-                # Log combined entry summary for batch
+
+                emoji = "⚔️ 🔄" if is_reversal else "🚀"
                 log(
-                    f"[{p['symbol']}] ✅ {p.get('core_summary', '')} | 🚀 #{trade_id} {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
+                    f"[{p['symbol']}] ✅ {p.get('core_summary', '')} | {emoji} #{trade_id} {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
                 )
+
+                if is_reversal:
+                    with db_connection() as conn:
+                        c = conn.cursor()
+                        c.execute(
+                            "UPDATE trades SET reversal_triggered = 1 WHERE symbol = ? AND window_start = ? AND side != ? AND settled = 0",
+                            (p["symbol"], p["window_start"].isoformat(), p["side"]),
+                        )
+                        if c.rowcount > 0:
+                            log(
+                                f"   🛡️ [{p['symbol']}] Original trade marked as reversal_triggered"
+                            )
             except Exception as e:
                 log_error(f"[{p['symbol']}] Trade completion error: {e}")
         elif i < len(trade_params_list):
