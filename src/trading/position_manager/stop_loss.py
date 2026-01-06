@@ -55,7 +55,12 @@ def _check_stop_loss(
 
     # STOP LOSS TRIGGER: Use Midpoint Price instead of PnL %
     # Default trigger: $0.30 (can be adjusted in settings)
+    # We only trigger if price is below the threshold AND below our entry price
+    # to avoid stopping out winning underdog trades that were entered below the threshold.
     if not ENABLE_STOP_LOSS or current_price > STOP_LOSS_PRICE or size == 0:
+        return False
+
+    if current_price >= entry_price:
         return False
 
     if buy_order_status not in ["FILLED", "MATCHED"]:

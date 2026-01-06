@@ -129,6 +129,14 @@ def _check_target_price_alignment(
     is_underdog = current_price < 0.50
 
     if is_underdog:
+        # PROTECT AGAINST IMMEDIATE STOP LOSS: Don't enter if already below/at stop loss threshold
+        if ENABLE_STOP_LOSS and current_price <= STOP_LOSS_PRICE:
+            if verbose:
+                log(
+                    f"[{symbol}] ⚠️ {side} is below stop loss threshold (${current_price:.2f} <= ${STOP_LOSS_PRICE:.2f}). SKIPPING."
+                )
+            return False
+
         if confidence < LOSING_SIDE_MIN_CONFIDENCE:
             if verbose:
                 log(

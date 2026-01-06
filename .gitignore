@@ -5,7 +5,7 @@ __pycache__/
 .venv
 .ruff_cache/
 logs/
-trades.db
+trades.db*
 .DS_Store
 public/
 deploy_prod.sh
