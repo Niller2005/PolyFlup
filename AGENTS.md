@@ -236,6 +236,7 @@ src/
 2. **Database Connection**: Use `db_connection()` context manager
    - **NEVER** call `conn.commit()` manually - handled by context manager
    - Context manager automatically commits on success, rolls back on error
+   - **CRITICAL**: When calling functions that perform writes (like `execute_trade` or `save_trade`) from within an existing database transaction, **pass the active cursor**. This prevents "database is locked" deadlocks caused by nested connections.
 3. **Timing**: UTC timezone via `ZoneInfo('UTC')`
 4. **Position Monitoring**: High-frequency checks (10 second intervals)
 5. **Hedged Reversal**: Bot can hold both UP and DOWN positions simultaneously for the same window. Reversals don't close existing positions; the losing side is cleared via stop loss.

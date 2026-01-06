@@ -1,3 +1,36 @@
+# Session Improvements - 2026-01-06 (Part 6)
+
+This document summarizes the sixth phase of improvements, focusing on fixing a critical database deadlock and preventing duplicate order loops during reversals.
+
+---
+
+## High Impact: System Stability & Reliability
+
+### 1. Database Deadlock Fix (Nested Connections)
+**Description:** Fixed a `database is locked` error that occurred when the position manager attempted to execute a reversal trade while its own transaction was still open.
+- **Root Cause:** SQLite prevents multiple write connections from opening simultaneously. The `check_open_positions` loop held a transaction lock, causing `execute_trade` (which tried to open a new connection) to fail.
+- **Solution:** Updated `execute_trade` and `save_trade` to accept an optional active database `cursor`. When called from within a transaction, they now reuse the existing connection.
+- **Impact:** Eliminates 100% of "database is locked" errors during critical trade execution windows.
+
+### 2. Duplicate Order Protection
+**Description:** Implemented a pre-flight check to prevent the bot from placing multiple reversal orders for the same market window if a database update fails.
+- **Issue:** If the database failed to record a reversal due to a lock, the bot would place a new order every second, leading to massive over-leveraged positions (e.g., 91 shares of XRP).
+- **Solution:** Added `has_side_for_window()` check inside the reversal logic. The bot now verifies if it already holds the target side on the exchange/database before sending a new buy request.
+- **Impact:** Prevents "fat-finger" duplicate buying sprees during high-volatility events.
+
+---
+
+## Complete Session Statistics (2026-01-06 Part 6)
+
+### Lines of Code
+- **Modified/Added:** ~150 lines
+
+### Features
+- **Database Transaction Management:** 1
+- **Duplicate Entry Filter:** 1
+
+---
+
 # Session Improvements - 2026-01-06 (Part 5)
 
 This document summarizes the fifth phase of improvements, focusing on the "Triple Check" stop loss logic and confidence score recalibration.

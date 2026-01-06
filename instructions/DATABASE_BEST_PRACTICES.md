@@ -33,9 +33,39 @@ with db_connection() as conn:
 2. **Automatic Transaction Management**
    - On success: `conn.commit()` is called automatically
    - On exception: `conn.rollback()` is called automatically
-   - Connection is always closed properly
+    - Connection is always closed properly
+
+## Avoiding "Database is Locked" Deadlocks
+
+When calling functions that write to the database (like `execute_trade` or `save_trade`) from within an existing database transaction, you **MUST** pass the active cursor.
+
+Opening a second connection (`with db_connection()`) while a first connection has an uncommitted transaction will cause a `database is locked` error in SQLite.
+
+**✅ CORRECT: Passing the cursor**
+```python
+def check_positions():
+    with db_connection() as conn:
+        c = conn.cursor()
+        # ... logic ...
+        if needs_reversal:
+            # Pass the cursor to use the existing transaction
+            execute_trade(params, cursor=c) 
+```
+
+**❌ WRONG: Nested connections**
+```python
+def check_positions():
+    with db_connection() as conn:
+        c = conn.cursor()
+        # ... logic ...
+        if needs_reversal:
+            # This will fail with "database is locked" 
+            # because execute_trade internally tries to open a new connection
+            execute_trade(params) 
+```
 
 ## Database Connection Mode
+
 
 The bot uses a local SQLite file (`trades.db`) located in the project root.
 
