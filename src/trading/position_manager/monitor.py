@@ -134,8 +134,17 @@ def check_open_positions(verbose=True, check_orders=False):
                                 log(
                                     f"💰 [{sym}] #{tid} {side}: {pnl_val_f:+.2f}$ ({roi_val_f:+.1f}%)"
                                 )
+                                # CANCEL ANY PENDING SCALE-IN ORDER
+                                if sc_id:
+                                    from src.trading.orders import cancel_order
+
+                                    log(
+                                        f"   🧹 [{sym}] #{tid} Exiting: Cancelling orphan scale-in order {sc_id[:10]}..."
+                                    )
+                                    cancel_order(sc_id)
+
                                 c.execute(
-                                    "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, settled_at=? WHERE id=?",
+                                    "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, settled_at=?, scale_in_order_id=NULL WHERE id=?",
                                     (ex_p, pnl_val_f, roi_val_f, now.isoformat(), tid),
                                 )
                                 continue
@@ -179,6 +188,7 @@ def check_open_positions(verbose=True, check_orders=False):
                         conn,
                         now,
                         curr_b_status,
+                        sc_id,
                     ):
                         continue
 

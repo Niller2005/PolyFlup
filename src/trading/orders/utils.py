@@ -1,9 +1,41 @@
 """Order validation and utility functions"""
 
 import time
-from typing import Optional
+from typing import Optional, Any
 from src.utils.logger import log
-from .constants import MIN_TICK_SIZE, MIN_ORDER_SIZE, API_ERRORS, MAX_RETRIES, RETRY_DELAYS
+from .constants import (
+    MIN_TICK_SIZE,
+    MIN_ORDER_SIZE,
+    API_ERRORS,
+    MAX_RETRIES,
+    RETRY_DELAYS,
+)
+
+
+def normalize_token_id(tid: Any) -> str:
+    """Normalize token ID to decimal string"""
+    if tid is None:
+        return ""
+    s = str(tid).strip().lower()
+    if not s:
+        return ""
+    # If it's already a pure decimal string, return it
+    if s.isdigit():
+        return s
+    # If it's hex (starts with 0x or contains a-f), try to convert
+    if s.startswith("0x"):
+        try:
+            return str(int(s, 16))
+        except:
+            return s
+    # Try converting anyway if it looks like a hex hash (longer than 10 chars)
+    if len(s) > 10:
+        try:
+            return str(int(s, 16))
+        except:
+            return s
+    return s
+
 
 def _validate_price(
     price: float, tick_size: float = MIN_TICK_SIZE
@@ -25,16 +57,20 @@ def _validate_price(
         return False, f"Price must be rounded to {tick_size}"
     return True, None
 
+
 def _validate_size(size: float) -> tuple[bool, Optional[str]]:
     if size < MIN_ORDER_SIZE:
         return False, f"Order size must be at least {MIN_ORDER_SIZE}"
     return True, None
 
+
 def truncate_float(val: float, decimals: int) -> float:
     """Truncate float to N decimal places without rounding up"""
     import math
-    factor = 10 ** decimals
+
+    factor = 10**decimals
     return math.floor(val * factor) / factor
+
 
 def _validate_order(price: float, size: float) -> tuple[bool, Optional[str]]:
     valid, err = _validate_price(price)
@@ -44,6 +80,7 @@ def _validate_order(price: float, size: float) -> tuple[bool, Optional[str]]:
     if not valid:
         return False, err
     return True, None
+
 
 def _parse_api_error(error_str: str) -> str:
     error_upper = error_str.upper()
@@ -56,11 +93,13 @@ def _parse_api_error(error_str: str) -> str:
         return "Rate limit"
     return error_str
 
+
 def _should_retry(error_str: str) -> bool:
     error_upper = error_str.upper()
     return any(
         k in error_upper for k in ["TIMEOUT", "RATE LIMIT", "503", "502", "CONNECTION"]
     )
+
 
 def _execute_with_retry(func, *args, **kwargs):
     last_err = None

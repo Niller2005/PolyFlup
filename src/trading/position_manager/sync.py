@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from src.data.db_connection import db_connection
 from src.utils.logger import log
-from src.trading.orders import get_current_positions
+from src.trading.orders import get_current_positions, normalize_token_id
 from src.utils.websocket_manager import ws_manager
 from src.data.market_data import get_token_ids, get_window_times, get_current_slug
 from src.data.database import save_trade
@@ -26,7 +26,6 @@ def sync_positions_with_exchange(user_address: str):
         # We normalize to decimal string for the primary key
         pos_map = {}
         for p in exchange_positions:
-            # Data API uses 'asset', Gamma might use 'asset_id' or 'token_id'
             aid = (
                 p.get("asset")
                 or p.get("asset_id")
@@ -34,14 +33,7 @@ def sync_positions_with_exchange(user_address: str):
                 or p.get("token_id")
             )
             if aid:
-                aid_str = str(aid).strip().lower()
-                norm_aid = aid_str
-                # If it's hex, convert to decimal string
-                if aid_str.startswith("0x"):
-                    try:
-                        norm_aid = str(int(aid_str, 16))
-                    except:
-                        pass
+                norm_aid = normalize_token_id(aid)
                 pos_map[norm_aid] = p
 
         with db_connection() as conn:
@@ -59,27 +51,13 @@ def sync_positions_with_exchange(user_address: str):
             all_tracked_token_ids = set()
             for (tid,) in c.fetchall():
                 if tid:
-                    tid_raw = str(tid).strip().lower()
-                    tid_str = tid_raw
-                    if tid_raw.startswith("0x"):
-                        try:
-                            tid_str = str(int(tid_raw, 16))
-                        except:
-                            pass
-                    all_tracked_token_ids.add(tid_str)
+                    all_tracked_token_ids.add(normalize_token_id(tid))
 
             # Track which exchange positions were matched to DB trades (for open ones)
             matched_exchange_ids = set()
 
             for trade_id, symbol, side, db_size, token_id, db_entry in db_trades:
-                # Normalize DB token_id to decimal string
-                tid_raw = str(token_id).strip().lower() if token_id else ""
-                tid_str = tid_raw
-                if tid_raw.startswith("0x"):
-                    try:
-                        tid_str = str(int(tid_raw, 16))
-                    except:
-                        pass
+                tid_str = normalize_token_id(token_id)
 
                 # Check match in pos_map
                 if tid_str and tid_str in pos_map:

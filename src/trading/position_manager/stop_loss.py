@@ -10,8 +10,14 @@ from src.trading.orders import (
     get_balance_allowance,
     place_order,
 )
-from src.data.market_data import get_current_spot_price, get_window_times, get_current_slug, get_token_ids
+from src.data.market_data import (
+    get_current_spot_price,
+    get_window_times,
+    get_current_slug,
+    get_token_ids,
+)
 from src.data.database import save_trade
+
 
 def _check_stop_loss(
     symbol,
@@ -30,6 +36,7 @@ def _check_stop_loss(
     conn,
     now,
     buy_order_status,
+    scale_in_order_id=None,
 ):
     """Check and execute stop loss with REVERSAL support"""
     c.execute("SELECT settled FROM trades WHERE id = ?", (trade_id,))
@@ -39,7 +46,7 @@ def _check_stop_loss(
     effective_stop_loss = STOP_LOSS_PERCENT
     if is_reversal:
         effective_stop_loss = STOP_LOSS_PERCENT * 1.5
-        
+
     if not ENABLE_STOP_LOSS or pnl_pct > -effective_stop_loss or size == 0:
         return False
     if buy_order_status not in ["FILLED", "MATCHED"]:
@@ -54,18 +61,18 @@ def _check_stop_loss(
             pass
 
     current_spot = get_current_spot_price(symbol)
-    
+
     # Check if we are on the winning side of the prediction market
-    # PRIORITIZE: Prediction Market Midpoint (Fair Value) 
+    # PRIORITIZE: Prediction Market Midpoint (Fair Value)
     # This inherently reflects the Chainlink price source Polymarket uses for resolution.
     # If the midpoint is high (winning), we hold even if Binance spot looks bad.
     is_on_losing_side = True
-    
-    # Midpoint interpretation: 
+
+    # Midpoint interpretation:
     # Regardless of side, if the token we hold is >= $0.50, we are on the favored (winning) side.
     if current_price >= 0.50:
         is_on_losing_side = False
-            
+
     # FALLBACK: Binance Spot Price vs Window Start (Chainlink Proxy)
     # Only use this if the prediction market itself is extremely illiquid (midpoint near 0.5 but spot moved)
     if is_on_losing_side and current_spot > 0 and target_price:
@@ -79,33 +86,44 @@ def _check_stop_loss(
         # If we can't verify spot price, default to HOLDING if PnL is not extremely bad
         # or if it's a reversal to avoid accidental closes
         if is_reversal or pnl_pct > -effective_stop_loss * 1.2:
-            log(f"⚠️ [{symbol}] Could not fetch spot price - HOLDING (PnL: {pnl_pct:.1f}%)")
+            log(
+                f"⚠️ [{symbol}] Could not fetch spot price - HOLDING (PnL: {pnl_pct:.1f}%)"
+            )
             return False
 
     if not is_on_losing_side:
         log(f"ℹ️ [{symbol}] PnL is bad ({pnl_pct:.1f}%) but on WINNING side - HOLDING")
         return False
 
-    outcome = 'STOP_LOSS'
+    outcome = "STOP_LOSS"
     if is_reversal:
-        outcome = 'REVERSAL_STOP_LOSS'
+        outcome = "REVERSAL_STOP_LOSS"
 
     log(f"🛑 [{symbol}] #{trade_id} {outcome}: {pnl_pct:.1f}% PnL")
-    
+
     # Robust size check: fetch actual balance to ensure we sell everything
     # This prevents "leftover" shares if the database size was slightly inaccurate
     try:
         balance_info = get_balance_allowance(token_id)
         actual_balance = balance_info.get("balance", 0) if balance_info else 0
         if actual_balance > 0 and abs(actual_balance - size) > 0.01:
-            log(f"   📊 [{symbol}] #{trade_id} Sync: Database size {size:.2f} != actual balance {actual_balance:.2f} - Updating sell size.")
+            log(
+                f"   📊 [{symbol}] #{trade_id} Sync: Database size {size:.2f} != actual balance {actual_balance:.2f} - Updating sell size."
+            )
             size = actual_balance
     except Exception as e:
         log(f"   ⚠️ [{symbol}] Could not verify balance before sell: {e}")
 
+    # CANCEL ANY PENDING ORDERS
     if limit_sell_order_id:
         if cancel_order(limit_sell_order_id):
             time.sleep(2)
+
+    if scale_in_order_id:
+        log(
+            f"   🧹 [{symbol}] #{trade_id} Stop Loss: Cancelling orphan scale-in order {scale_in_order_id[:10]}..."
+        )
+        cancel_order(scale_in_order_id)
 
     sell_result = sell_position(token_id, size, current_price)
     if not sell_result["success"]:
@@ -120,14 +138,14 @@ def _check_stop_loss(
                 )
                 return False
             c.execute(
-                "UPDATE trades SET settled=1, final_outcome='UNFILLED_NO_BALANCE' WHERE id=?",
+                "UPDATE trades SET settled=1, final_outcome='UNFILLED_NO_BALANCE', scale_in_order_id=NULL WHERE id=?",
                 (trade_id,),
             )
             return True
         return False
 
     c.execute(
-        "UPDATE trades SET exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, final_outcome=?, settled=1, settled_at=? WHERE id=?",
+        "UPDATE trades SET exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, final_outcome=?, settled=1, settled_at=?, scale_in_order_id=NULL WHERE id=?",
         (current_price, pnl_usd, pnl_pct, outcome, now.isoformat(), trade_id),
     )
     send_discord(f"🛑 {outcome} [{symbol}] {side} closed at {pnl_pct:+.1f}%")
@@ -142,7 +160,9 @@ def _check_stop_loss(
             opp_price = round(max(0.01, min(0.99, 1.0 - current_price)), 2)
             rev_res = place_order(opposite_token, opp_price, size)
             if rev_res["success"]:
-                log(f"🚀 [{symbol}] Reversal order placed: {opposite_side} @ {opp_price}")
+                log(
+                    f"🚀 [{symbol}] Reversal order placed: {opposite_side} @ {opp_price}"
+                )
                 send_discord(f"🔄 **REVERSED** [{symbol}] {side} → {opposite_side}")
                 try:
                     w_start, w_end = get_window_times(symbol.split("-")[0])

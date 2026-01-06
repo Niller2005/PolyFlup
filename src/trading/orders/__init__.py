@@ -32,7 +32,7 @@ from .market_info import (
     get_trades_for_user,
 )
 from .scoring import check_order_scoring, check_orders_scoring
-from .utils import truncate_float
+from .utils import truncate_float, normalize_token_id
 
 __all__ = [
     "setup_api_creds",
@@ -69,4 +69,5 @@ __all__ = [
     "MIN_TICK_SIZE",
     "MIN_ORDER_SIZE",
     "truncate_float",
+    "normalize_token_id",
 ]

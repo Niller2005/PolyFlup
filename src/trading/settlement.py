@@ -52,7 +52,7 @@ def _audit_settlements():
     try:
         addr = Account.from_key(PROXY_PK).address
         closed_positions = get_closed_positions(addr, limit=20)
-        
+
         if not closed_positions:
             return
 
@@ -61,18 +61,20 @@ def _audit_settlements():
             for pos in closed_positions:
                 token_id = pos.get("assetId")
                 pnl = float(pos.get("pnl", 0))
-                
+
                 # Look for matching trade in DB that was recently settled
                 c.execute(
                     "SELECT id, symbol, pnl_usd FROM trades WHERE token_id = ? AND settled = 1 ORDER BY settled_at DESC LIMIT 1",
-                    (token_id,)
+                    (token_id,),
                 )
                 row = c.fetchone()
                 if row:
                     trade_id, symbol, db_pnl = row
                     diff = abs(db_pnl - pnl)
-                    if diff > 0.1: # More than 10 cents difference
-                        log(f"🔍 Audit [{symbol}] #{trade_id}: DB PnL ${db_pnl:.2f} vs API PnL ${pnl:.2f} (Diff: ${diff:.2f})")
+                    if diff > 0.1:  # More than 10 cents difference
+                        log(
+                            f"🔍 Audit [{symbol}] #{trade_id}: DB PnL ${db_pnl:.2f} vs API PnL ${pnl:.2f} (Diff: ${diff:.2f})"
+                        )
     except Exception as e:
         log(f"⚠️ Settlement audit error: {e}")
 
@@ -82,13 +84,13 @@ def force_settle_trade(trade_id: int):
     with db_connection() as conn:
         c = conn.cursor()
         c.execute(
-            "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, limit_sell_order_id FROM trades WHERE id = ?",
+            "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, limit_sell_order_id, scale_in_order_id FROM trades WHERE id = ?",
             (trade_id,),
         )
         trade = c.fetchone()
         if not trade:
             return
-            
+
         now = datetime.now(tz=ZoneInfo("UTC"))
         (
             trade_id,
@@ -100,8 +102,9 @@ def force_settle_trade(trade_id: int):
             size,
             bet_usd,
             limit_sell_order_id,
+            scale_in_order_id,
         ) = trade
-        
+
         try:
             # 1. Get resolution from API
             is_resolved, prices = get_market_resolution(slug)
@@ -113,28 +116,50 @@ def force_settle_trade(trade_id: int):
             data = r.json()
             clob_ids = data.get("clobTokenIds") or data.get("clob_token_ids")
             if isinstance(clob_ids, str):
-                try: clob_ids = json.loads(clob_ids)
-                except: pass
+                try:
+                    clob_ids = json.loads(clob_ids)
+                except:
+                    pass
 
             final_price = 0.0
             if prices and clob_ids and len(clob_ids) >= 2:
-                final_price = float(prices[0]) if str(token_id) == str(clob_ids[0]) else float(prices[1])
+                final_price = (
+                    float(prices[0])
+                    if str(token_id) == str(clob_ids[0])
+                    else float(prices[1])
+                )
             else:
                 return
 
             if limit_sell_order_id:
                 cancel_order(limit_sell_order_id)
 
+            if scale_in_order_id:
+                log(
+                    f"   🧹 [{symbol}] #{trade_id} Force Settling: Cancelling orphan scale-in order {scale_in_order_id[:10]}..."
+                )
+                cancel_order(scale_in_order_id)
+
             pnl_usd = (final_price * size) - bet_usd
             roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
             c.execute(
-                "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=? WHERE id=?",
-                ("FORCE_SETTLED", final_price, pnl_usd, roi_pct, now.isoformat(), trade_id),
+                "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=?, scale_in_order_id=NULL WHERE id=?",
+                (
+                    "FORCE_SETTLED",
+                    final_price,
+                    pnl_usd,
+                    roi_pct,
+                    now.isoformat(),
+                    trade_id,
+                ),
             )
-            log(f"✅ Force settled zombie trade [{symbol}] #{trade_id}: {pnl_usd:+.2f}$")
+            log(
+                f"✅ Force settled zombie trade [{symbol}] #{trade_id}: {pnl_usd:+.2f}$"
+            )
         except Exception as e:
             log(f"⚠️ Error force settling trade #{trade_id}: {e}")
+
 
 def check_and_settle_trades():
     """Check and settle completed trades using definitive API resolution"""
@@ -144,7 +169,7 @@ def check_and_settle_trades():
 
         # Only check trades where window has ended
         c.execute(
-            "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, limit_sell_order_id FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)",
+            "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, limit_sell_order_id, scale_in_order_id FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)",
             (now.isoformat(),),
         )
         unsettled = c.fetchall()
@@ -166,6 +191,7 @@ def check_and_settle_trades():
             size,
             bet_usd,
             limit_sell_order_id,
+            scale_in_order_id,
         ) in unsettled:
             try:
                 # 1. Get resolution from API
@@ -205,12 +231,19 @@ def check_and_settle_trades():
                 if limit_sell_order_id:
                     cancel_order(limit_sell_order_id)
 
+                # NEW: Cancel orphan scale-in order
+                if scale_in_order_id:
+                    log(
+                        f"   🧹 [{symbol}] #{trade_id} Resolved: Cancelling orphan scale-in order {scale_in_order_id[:10]}..."
+                    )
+                    cancel_order(scale_in_order_id)
+
                 exit_value = final_price
                 pnl_usd = (exit_value * size) - bet_usd
                 roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
                 c.execute(
-                    "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=? WHERE id=?",
+                    "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=?, scale_in_order_id=NULL WHERE id=?",
                     (
                         "RESOLVED",
                         final_price,
@@ -239,7 +272,7 @@ def check_and_settle_trades():
             send_discord(
                 f"📊 Settled {settled_count} trades | Total PnL: ${total_pnl:+.2f}"
             )
-    
+
     # Audit after settlement
     try:
         _audit_settlements()
