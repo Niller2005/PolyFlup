@@ -242,17 +242,20 @@ def _prepare_trade_params(
         return None
 
     if actual_side == bias:
-        entry_type = "HEDGED REVERSAL" if other_side_exists else "Trend Following"
-        if verbose:
-            log(f"[{symbol}] ✅ {entry_type}: {bias} (Confidence: {confidence:.1%})")
+        entry_type = "Trend Following"
+        emoji = "🌊"
     else:
-        entry_type = (
-            "HEDGED REVERSAL (Contrarian)" if other_side_exists else "Contrarian Entry"
+        entry_type = "Contrarian Entry"
+        emoji = "🔄"
+
+    if other_side_exists:
+        entry_type = f"HEDGED REVERSAL ({entry_type})"
+        emoji = f"⚔️ {emoji}"
+
+    if verbose:
+        log(
+            f"[{symbol}] {emoji} {entry_type}: {actual_side} (Bias: {bias} @ {confidence:.1%})"
         )
-        if verbose:
-            log(
-                f"[{symbol}] 🔄 {entry_type}: {actual_side} (Bias flipping from {bias} @ {confidence:.1%})"
-            )
 
     # Check lateness
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
