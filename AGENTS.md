@@ -228,9 +228,11 @@ src/
    - **NEVER** call `conn.commit()` manually - handled by context manager
    - Context manager automatically commits on success, rolls back on error
 3. **Timing**: UTC timezone via `ZoneInfo('UTC')`
-4. **Position Monitoring**: High-frequency checks (1 second intervals)
-5. **Trade Execution**: Validate before saving to database
-6. **Order Status**: Treat both `FILLED` and `MATCHED` statuses as successful executions in the position manager to ensure trades are settled promptly and redundant logging is avoided.
+4. **Position Monitoring**: High-frequency checks (10 second intervals)
+5. **Hedged Reversal**: Bot can hold both UP and DOWN positions simultaneously for the same window. Reversals don't close existing positions; the losing side is cleared via stop loss.
+6. **Midpoint Stop Loss**: Primary stop loss trigger is the midpoint price (default <= $0.30) rather than percentage-based PnL.
+7. **Trade Execution**: Validate before saving to database
+8. **Order Status**: Treat both `FILLED` and `MATCHED` statuses as successful executions in the position manager to ensure trades are settled promptly and redundant logging is avoided.
 
 ### Data Flow
 ```

@@ -12,18 +12,20 @@ The backend has been fully modularized into packages. You can still import from 
 - `client.py`: CLOB Client & API Creds
 - `limit.py`: Limit & Batch Orders
 - `market.py`: Market Orders
-- `management.py`: Cancel & Status
+- `management.py`: Order status, retrieval, and cancellation.
 - `positions.py`: Balance & Positions
-- `market_info.py`: Prices & Spreads
-- `scoring.py`: Reward Verification
-- `utils.py`: `truncate_float` & Validation
+- `market_info.py`: Pricing (midpoints, spreads), tick sizes, and server time.
+- `notifications.py`: Legacy notification polling support.
+- `scoring.py`: Liquidity reward scoring checks.
+- `constants.py`: BUY/SELL constants and API constraints.
+- `utils.py`: Validation helpers, retry logic, and truncation.
 
 ### Market Data (`src.data.market_data`)
-- `polymarket.py`: CLOB native data
-- `binance.py`: Spot price data
-- `indicators.py`: TA (ADX, RSI, VWM)
-- `analysis.py`: Order Flow & Divergence
-- `external.py`: Funding & Sentiment
+- `polymarket.py`: CLOB-specific data (token IDs, slugs, internal momentum).
+- `binance.py`: Spot price fetching and window start tracking.
+- `indicators.py`: Technical analysis (ADX, RSI, VWM).
+- `analysis.py`: Order flow and cross-exchange divergence.
+- `external.py`: Funding rates and Fear & Greed index.
 
 ---
 
@@ -261,6 +263,11 @@ EXIT_MIN_POSITION_AGE=60               # Wait 1 minute before exit plan (default
 # Unfilled Order Management
 UNFILLED_TIMEOUT_SECONDS=300           # Cancel after 5 minutes (default: 300)
 UNFILLED_RETRY_ON_WINNING_SIDE=YES     # Retry at market if winning (default: YES)
+
+# Reversal & Stop Loss (NEW)
+ENABLE_HEDGED_REVERSAL=YES             # Hold both sides during trend flip
+STOP_LOSS_PRICE=0.30                   # Stop out if midpoint <= $0.30
+LOSING_SIDE_MIN_CONFIDENCE=0.40        # Min 40% confidence for underdog entries
 ```
 
 ---
@@ -273,9 +280,18 @@ UNFILLED_RETRY_ON_WINNING_SIDE=YES     # Retry at market if winning (default: YE
 # No manual intervention needed!
 
 # 1. Exit plan places order at 60s for initial size
-# 2. Scale-in triggers and fills
+# 2. Scale-in triggers and fills (using Market Order)
 # 3. Exit plan order automatically updated for new total size
 # 4. Full position covered ✅
+```
+
+### Hedged Reversal
+```python
+# Bot holds UP position.
+# Signal flips to DOWN with high confidence.
+# Bot opens DOWN position WITHOUT closing UP.
+# Both positions managed independently.
+# Losing side clears via $0.30 Stop Loss.
 ```
 
 ### Pre-Flight Checks
@@ -348,6 +364,10 @@ print(f"Cancelled {len(result['canceled'])} orders")
 ### "Zombie position stuck in loop (Price Unavailable)"
 **Cause:** Market is closed or illiquid, API cannot return midpoint price.  
 **Solution:** Bot now automatically force-settles trades after 3 consecutive failed price checks to clear the queue.
+
+### "Insufficient funds loop on Stop Loss"
+**Cause:** Stop loss triggered while target fill was also happening.
+**Solution:** Bot now verifies if exit target has already filled before attempting stop loss.
 
 ---
 

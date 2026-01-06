@@ -1,12 +1,54 @@
-# Session Improvements - 2026-01-06
+# Session Improvements - 2026-01-06 (Part 2)
 
-This document summarizes the improvements made during the 2026-01-06 session, focusing on system robustness, error handling, and position synchronization.
+This document summarizes the second phase of improvements made during the 2026-01-06 session, focusing on hedged reversals, midpoint-based stop losses, and robust exit plan self-healing.
 
 ---
 
-## High Impact: System Robustness & Self-Healing
+## High Impact: resilience & Execution Quality
+
+### 1. Hedged Reversal Strategy
+**Description:** Refactored the bot to support holding both UP and DOWN positions for the same market window.
+- **Hedge Support:** Replaced the "Close UP -> Open DOWN" logic with a multi-position model. The bot can now open a reversal position without closing the original one.
+- **Self-Clearing:** The losing side of a hedged pair is now cleared naturally by the new midpoint-based stop loss, protecting against "weak" reversal fake-outs.
+- **Improved Entry Logic:** Added explicit `HEDGED REVERSAL` logging labels to differentiate between initial entries and trend-flipping hedges.
+
+### 2. Midpoint-Based Stop Loss
+**Description:** Replaced percentage-based stop losses with a more robust midpoint price trigger.
+- **Fair Value Trigger:** Stop losses now trigger if the midpoint price drops to or below **$0.30** (configurable via `STOP_LOSS_PRICE`).
+- **Reduction in Noise:** This prevents being stopped out by temporary bid/ask spread volatility or small PnL fluctuations when the market still shows high recovery probability.
+- **Pre-Stop Fill Verification:** The bot now verifies if an exit target has already been filled before attempting a stop loss, preventing "Insufficient funds" loops.
+
+### 3. Strict Underdog Quality Control
+**Description:** Implemented a higher confidence requirement for entering "losing" positions.
+- **Confidence Threshold:** Any entry on a side with a price < $0.50 (the "underdog") now requires a minimum of **40% confidence** (configurable via `LOSING_SIDE_MIN_CONFIDENCE`).
+- **Wait-to-Enter Synergy:** If confidence is low, the bot skips the entry but remains eligible to enter later in the window if the price improves or momentum builds.
+
+### 4. Robust Exit Plan Self-Healing
+**Description:** Enhanced the exit plan management to be more reactive and accurate.
+- **Bi-Directional Healing:** The bot now compares actual wallet balance to database size every 10 seconds. If they are out of sync (regardless of direction), it automatically updates the DB and replaces the exit plan order.
+- **Market Order Scale-In:** Scale-ins now use **Market Orders (FAK)** instead of Limit Orders. This ensures shares are acquired instantly, allowing the exit plan to be updated for the new total size in the same cycle.
+- **Increased Check Frequency:** Increased order monitoring and self-healing frequency from 30s to **10s** intervals.
+
+---
+
+## Complete Session Statistics (2026-01-06 Part 2)
+
+### Lines of Code
+- **Modified/Added:** ~450 lines
+
+### Features
+- **Hedged Reversals:** 1
+- **New Stop Loss Model:** 1
+- **Quality Control Filters:** 1
+- **Self-Healing Enhancements:** 2
+- **Bug Fixes:** 3
+
+---
+
+# Session Improvements - 2026-01-06 (Part 1)
 
 ### 1. Robust Position Synchronization
+
 **Description:** Enhanced the startup synchronization logic to be more intelligent and prevent "ghost" position adoption.
 - **Global Tracked Filter:** Now fetches all known token IDs from the database (both open and settled) to ensure settled positions aren't accidentally re-adopted from exchange cache.
 - **Resolution Verification:** Added a pre-adoption check that verifies if an untracked market is already resolved. Resolved markets are now skipped silently.
