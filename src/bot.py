@@ -311,9 +311,7 @@ def _prepare_trade_params(
     if ENABLE_BFXD and symbol == "BTC":
         filter_text += f" | BFXD: {bfxd_trend} {'✅' if bfxd_ok else '❌'}"
 
-    core_summary = (
-        f"Confidence: {confidence:.1%} ({bias}) | {filter_text} | RSI: {rsi:.1f}"
-    )
+    core_summary = f"Confidence: {confidence:.1%} ({bias})"
 
     if not bfxd_ok:
         log(f"[{symbol}] ⛔ {core_summary} | status: BLOCKED")
@@ -321,7 +319,7 @@ def _prepare_trade_params(
             log("")
         return
 
-    log(f"[{symbol}] ✅ {core_summary} | status: ENTERING TRADE")
+    # log(f"[{symbol}] ✅ {core_summary} | status: ENTERING TRADE")
 
     if price <= 0:
         log(f"[{symbol}] ERROR: Invalid price {price}")
@@ -343,6 +341,7 @@ def _prepare_trade_params(
         "size": size,
         "bet_usd": bet_usd_effective,
         "confidence": confidence,
+        "core_summary": core_summary,
         "p_up": p_up,
         "best_bid": best_bid,
         "best_ask": best_ask,
@@ -419,9 +418,9 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
             limit_sell_order_id=None,
             target_price=trade_params["target_price"],
         )
-        log("")
+        # Log combined entry summary
         log(
-            f"[{trade_params['symbol']}] 🚀 #{trade_id} {trade_params['side']} ${trade_params['bet_usd']:.2f} @ {actual_price:.4f} | {actual_status} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
+            f"[{trade_params['symbol']}] ✅ {trade_params.get('core_summary', '')} | 🚀 #{trade_id} {trade_params['side']} ${trade_params['bet_usd']:.2f} @ {actual_price:.4f} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
         )
         return 1
     except Exception as e:
@@ -561,8 +560,9 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                     limit_sell_order_id=None,
                     target_price=p["target_price"],
                 )
+                # Log combined entry summary for batch
                 log(
-                    f"[{p['symbol']}] 🚀 #{trade_id} {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | {actual_status} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
+                    f"[{p['symbol']}] ✅ {p.get('core_summary', '')} | 🚀 #{trade_id} {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
                 )
             except Exception as e:
                 log_error(f"[{p['symbol']}] Trade completion error: {e}")
