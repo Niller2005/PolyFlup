@@ -141,6 +141,9 @@ docker compose down
 - **Trend Agreement Bonus**: A **1.1x multiplier** is applied to the final confidence if both Binance and Polymarket signals agree on the trend direction.
 - **Underdog Filter**: Any entry on a side with a price < $0.50 (the "underdog") requires a minimum of **40% confidence** (configurable via `LOSING_SIDE_MIN_CONFIDENCE`).
 - **Lead/Lag Bonus**: An experimental **1.2x multiplier** (or 0.8x penalty) is applied based on cross-exchange consistency (Lead/Lag relationship).
+- **Share Precision & Minimums**:
+  - **5.0 Shares**: Polymarket enforces a 5.0 share minimum for all limit orders. The bot checks `sell_size >= 5.0` before placing exit plans.
+  - **0.0001 Precision**: Local database size is synced to actual exchange balance using a strict **0.0001** threshold to prevent "Insufficient funds" errors on 6-decimal tokens.
 
 **Standard Emoji Guide:**
   - 👀 Monitoring/watching positions

@@ -1,3 +1,47 @@
+# Session Improvements - 2026-01-07 (Part 1)
+
+This document summarizes the improvements made to address share precision discrepancies and system stability.
+
+---
+
+## High Impact: System Reliability & Precision
+
+### 1. Tightened Balance Sync Threshold
+**Description:** Reduced the threshold for syncing local database size with actual exchange balance from `0.01` to `0.0001`.
+- **Issue:** Minor discrepancies (e.g., 0.0008 shares) were being ignored by the bot, causing it to attempt sell orders for 5.0 shares when only 4.9992 were available.
+- **Solution:** Tightened threshold ensures that even sub-cent share differences trigger a database sync before placing sell orders.
+- **Impact:** Eliminates "Insufficient funds" retry loops caused by precision mismatches on 6-decimal tokens.
+
+### 2. Strict Minimum Order Enforcement
+**Description:** Added a pre-flight check to ensure exit plan orders meet the Polymarket 5.0 share minimum.
+- **Issue:** When a position was partially filled or reduced below 5.0 shares, the bot would enter an infinite failure loop trying to place an exit plan that the API rejected.
+- **Solution:** The bot now verifies `sell_size >= 5.0` before attempting to place a limit sell. If below minimum, it logs a warning and skips instead of failing.
+- **Impact:** Reduces log spam and prevents unnecessary API error states.
+
+### 3. Enhanced Error Reporting for Balance Issues
+**Description:** Updated the error parser to include the raw API error message when "Insufficient funds" occurs.
+- **Impact:** Provides immediate visibility into whether the failure is due to USDC balance, outcome token balance, or order locking, significantly speeding up debugging.
+
+### 4. Stability Fixes (NoneType & Logic)
+**Description:** Fixed several potential `TypeError` crashes.
+- **Settlement:** Added safety `or 0.0` when summing window PnL to handle `NULL` database entries.
+- **Monitoring:** Added `None` safety to `bet` calculation in the core position loop.
+- **Order Placement:** Ensured the bot uses `min(size, actual_bal)` for all sell actions to guarantee execution success.
+
+---
+
+## Complete Session Statistics (2026-01-07 Part 1)
+
+### Lines of Code
+- **Modified/Added:** ~100 lines
+
+### Features
+- **Precision Syncing:** 1
+- **Min Size Enforcement:** 1
+- **Stability Fixes:** 2
+
+---
+
 # Session Improvements - 2026-01-06 (Part 6)
 
 This document summarizes the sixth phase of improvements, focusing on fixing a critical database deadlock and preventing duplicate order loops during reversals.

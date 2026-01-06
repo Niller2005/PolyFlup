@@ -146,4 +146,18 @@ The bot operates on a multi-tiered monitoring schedule:
 
 ---
 
+## Precision & Limits
+
+### Share Precision Syncing
+The bot uses a tight threshold of **0.0001** to compare database size vs actual wallet balance.
+- If discrepancy > 0.0001: Database is synced to actual balance.
+- If actual balance < 0.1: Position is settled as a "ghost trade".
+
+### Minimum Order Size
+Polymarket enforces a **5.0 share minimum** for all limit orders.
+- The bot performs a pre-flight check for `size >= 5.0` before placing exit plans.
+- If size < 5.0, the bot skips placement and logs a warning to prevent API errors.
+
+---
+
 **For detailed information, see `SESSION_IMPROVEMENTS.md`**
