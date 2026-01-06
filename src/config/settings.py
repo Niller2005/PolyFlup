@@ -72,8 +72,8 @@ REWARD_OPT_MIN_MIDPOINT = float(os.getenv("REWARD_OPT_MIN_MIDPOINT", "0.85"))
 REWARD_OPT_MIN_PRICE = float(os.getenv("REWARD_OPT_MIN_PRICE", "0.90"))
 REWARD_OPT_PRICE_OFFSET = float(os.getenv("REWARD_OPT_PRICE_OFFSET", "0.01"))
 EXIT_MIN_POSITION_AGE = int(
-    os.getenv("EXIT_MIN_POSITION_AGE", "60")
-)  # Minimum position age in seconds (1 minute) before exit plan activates
+    os.getenv("EXIT_MIN_POSITION_AGE", "0")
+)  # Disabled by default for immediate exit plan placement
 EXIT_CHECK_INTERVAL = int(
     os.getenv("EXIT_CHECK_INTERVAL", "60")
 )  # Check for exit opportunities every N seconds

@@ -52,14 +52,14 @@ def _check_exit_plan(
     except:
         age = 0
     last_att = _last_exit_attempt.get(trade_id, 0)
-    on_cd = now.timestamp() - last_att < 30
+    on_cd = now.timestamp() - last_att < 10
 
     if not limit_sell_id:
-        if age >= EXIT_MIN_POSITION_AGE:
+        if True:  # Removed EXIT_MIN_POSITION_AGE check for immediate placement
             if on_cd:
                 if verbose:
                     log(
-                        f"   ⏳ [{symbol}] Exit plan cooldown: {30 - (now.timestamp() - last_att):.0f}s left (Trade age: {age:.0f}s)"
+                        f"   ⏳ [{symbol}] Exit plan cooldown: {10 - (now.timestamp() - last_att):.0f}s left (Trade age: {age:.0f}s)"
                     )
                 return
 
