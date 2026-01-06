@@ -90,25 +90,18 @@ from src.utils.websocket_manager import ws_manager
 def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
     """
     Determine actual trading side and confidence for sizing.
-    Tiered logic:
-    - High Confidence: Follow Trend
-    - Low Confidence: Contrarian (expect flip)
-    - Medium: Wait (Neutral)
+    Updated: Support Trend Following and Contrarian flips, ignoring Neutral/Wait zone.
     """
-    from src.config.settings import MIN_EDGE, CONTRARIAN_THRESHOLD
+    from src.config.settings import CONTRARIAN_THRESHOLD
 
-    if confidence >= MIN_EDGE:
-        # Strong trend confirmed
+    if confidence <= CONTRARIAN_THRESHOLD:
+        # Contrarian: Expect flip because confidence in current bias is extremely low
+        actual_side = "DOWN" if bias == "UP" else "UP"
+        sizing_confidence = 0.25  # Fixed sizing for contrarian entries
+    else:
+        # Follow Trend (no matter the confidence level)
         actual_side = bias
         sizing_confidence = confidence
-    elif confidence <= CONTRARIAN_THRESHOLD:
-        # Very low confidence - high chance of side flipping (Contrarian)
-        actual_side = "DOWN" if bias == "UP" else "UP"
-        sizing_confidence = 0.25  # Fixed lower sizing for contrarian plays
-    else:
-        # "No man's land" - wait for higher confidence or clear flip
-        actual_side = "NEUTRAL"
-        sizing_confidence = 0.0
 
     return actual_side, sizing_confidence
 
@@ -124,30 +117,16 @@ def _check_target_price_alignment(
 ) -> bool:
     """Check if target price alignment allows trading"""
 
-    # 1. Underdog Filter: Require higher confidence if we are entering the losing side
-    # A side is considered "losing" if its midpoint price is < $0.50
+    # 1. Winning Side Only Filter: Strictly skip underdog positions (price < $0.50)
+    # This enforces the "Only winning side" mandate.
     is_underdog = current_price < 0.50
 
     if is_underdog:
-        # PROTECT AGAINST IMMEDIATE STOP LOSS: Don't enter if already below/at stop loss threshold
-        # We require at least 5 cents of cushion above the standard floor ($0.30 + $0.05 = $0.35)
-        if ENABLE_STOP_LOSS and current_price <= (STOP_LOSS_PRICE + 0.05):
-            if verbose:
-                log(
-                    f"[{symbol}] ⚠️ {side} is too close to stop loss zone (${current_price:.2f} <= ${STOP_LOSS_PRICE + 0.05:.2f}). SKIPPING."
-                )
-            return False
-
-        if confidence < LOSING_SIDE_MIN_CONFIDENCE:
-            if verbose:
-                log(
-                    f"[{symbol}] ⚠️ {side} is UNDERDOG (${current_price:.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_MIN_CONFIDENCE:.0%}. SKIPPING."
-                )
-            return False
-        else:
+        if verbose:
             log(
-                f"[{symbol}] 🔥 HIGH CONFIDENCE UNDERDOG: Entering {side} at ${current_price:.2f} (Confidence: {confidence:.1%})"
+                f"[{symbol}] ⚠️ {side} is UNDERDOG (${current_price:.2f}). Only entering WINNING side positions. SKIPPING."
             )
+        return False
 
     # 2. Spot-vs-Target Alignment (Safety Layer)
     if target_price > 0 and current_spot > 0:
@@ -162,16 +141,11 @@ def _check_target_price_alignment(
             is_winning_side_on_spot = current_spot <= (target_price + buffer)
 
         if not is_winning_side_on_spot:
-            if confidence < LOSING_SIDE_MIN_CONFIDENCE:
-                if verbose:
-                    log(
-                        f"[{symbol}] ⚠️ {side} is losing on SPOT (${current_spot:,.2f} vs Target ${target_price:,.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_MIN_CONFIDENCE:.0%}. SKIPPING."
-                    )
-                return False
-            else:
+            if verbose:
                 log(
-                    f"[{symbol}] 🔥 HIGH CONFIDENCE REVERSAL: Entering {side} against spot direction (Confidence: {confidence:.1%})"
+                    f"[{symbol}] ⚠️ {side} is losing on SPOT (${current_spot:,.2f} vs Target ${target_price:,.2f}). SKIPPING."
                 )
+            return False
 
     return True
 
