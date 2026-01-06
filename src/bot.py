@@ -130,10 +130,11 @@ def _check_target_price_alignment(
 
     if is_underdog:
         # PROTECT AGAINST IMMEDIATE STOP LOSS: Don't enter if already below/at stop loss threshold
-        if ENABLE_STOP_LOSS and current_price <= STOP_LOSS_PRICE:
+        # We require at least 5 cents of cushion above the standard floor ($0.30 + $0.05 = $0.35)
+        if ENABLE_STOP_LOSS and current_price <= (STOP_LOSS_PRICE + 0.05):
             if verbose:
                 log(
-                    f"[{symbol}] ⚠️ {side} is below stop loss threshold (${current_price:.2f} <= ${STOP_LOSS_PRICE:.2f}). SKIPPING."
+                    f"[{symbol}] ⚠️ {side} is too close to stop loss zone (${current_price:.2f} <= ${STOP_LOSS_PRICE + 0.05:.2f}). SKIPPING."
                 )
             return False
 

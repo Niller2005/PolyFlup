@@ -53,14 +53,11 @@ def _check_stop_loss(
     if (row := c.fetchone()) and row[0] == 1:
         return True
 
-    # STOP LOSS TRIGGER: Use Midpoint Price instead of PnL %
-    # Default trigger: $0.30 (can be adjusted in settings)
-    # We only trigger if price is below the threshold AND below our entry price
-    # to avoid stopping out winning underdog trades that were entered below the threshold.
-    if not ENABLE_STOP_LOSS or current_price > STOP_LOSS_PRICE or size == 0:
-        return False
+    # STOP LOSS TRIGGER: Dynamic Headroom
+    # We use the $0.30 floor, but ensure at least $0.10 headspace for low-priced entries
+    dynamic_trigger = min(STOP_LOSS_PRICE, entry_price - 0.10)
 
-    if current_price >= entry_price:
+    if not ENABLE_STOP_LOSS or current_price > dynamic_trigger or size == 0:
         return False
 
     if buy_order_status not in ["FILLED", "MATCHED"]:
@@ -129,7 +126,7 @@ def _check_stop_loss(
         log(f"   ⚠️ [{symbol}] Could not verify balance before sell: {e}")
 
     log(
-        f"🛑 [{symbol}] #{trade_id} {outcome}: Midpoint ${current_price:.2f} <= ${STOP_LOSS_PRICE:.2f} trigger"
+        f"🛑 [{symbol}] #{trade_id} {outcome}: Midpoint ${current_price:.2f} <= ${dynamic_trigger:.2f} trigger"
     )
 
     # CANCEL ANY PENDING ORDERS
