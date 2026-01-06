@@ -3,6 +3,7 @@
 from .polymarket import (
     get_current_slug,
     get_window_times,
+    format_window_range,
     get_token_ids,
     get_polymarket_momentum,
 )
@@ -22,6 +23,7 @@ from .analysis import get_order_flow_analysis, get_cross_exchange_divergence
 __all__ = [
     "get_current_slug",
     "get_window_times",
+    "format_window_range",
     "get_token_ids",
     "get_funding_bias",
     "get_fear_greed",

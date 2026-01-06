@@ -53,6 +53,7 @@ from src.data.market_data import (
     get_token_ids,
     get_current_slug,
     get_window_times,
+    format_window_range,
     get_funding_bias,
     get_window_start_price,
     get_current_spot_price,
@@ -616,11 +617,21 @@ def main():
     last_settle_check = time.time()
 
     log("🏁 Bot initialized. Entering continuous monitoring loop...")
+    last_window_logged = None
 
     while True:
         try:
             now_ts = time.time()
             now_et = datetime.now(tz=ZoneInfo("America/New_York"))
+
+            # Log new window start
+            if MARKETS:
+                w_start, w_end = get_window_times(MARKETS[0])
+                if last_window_logged != w_start:
+                    range_str = format_window_range(w_start, w_end)
+                    log(f"🪟 NEW WINDOW: {range_str}")
+                    last_window_logged = w_start
+
             is_verbose_cycle = now_ts - last_verbose_log >= 60
             is_order_check_cycle = now_ts - last_order_check >= 10
 

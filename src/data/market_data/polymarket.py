@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from src.config.settings import GAMMA_API_BASE, CLOB_HOST
 
+
 def get_current_slug(symbol: str) -> str:
     """Generate slug for current 15-minute window"""
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
@@ -16,6 +17,7 @@ def get_current_slug(symbol: str) -> str:
     ts = int(window_start_utc.timestamp())
     return f"{symbol.lower()}-updown-15m-{ts}"
 
+
 def get_window_times(symbol: str):
     """Get window start and end times in ET"""
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
@@ -23,6 +25,16 @@ def get_window_times(symbol: str):
     window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0)
     window_end_et = window_start_et + timedelta(minutes=15)
     return window_start_et, window_end_et
+
+
+def format_window_range(start_et: datetime, end_et: datetime) -> str:
+    """Format window range as 'January 6, 10:30-10:45AM ET'"""
+    month = start_et.strftime("%B")
+    day = start_et.day
+    start_t = start_et.strftime("%I:%M").lstrip("0")
+    end_t = end_et.strftime("%I:%M%p").lstrip("0")
+    return f"{month} {day}, {start_t}-{end_t} ET"
+
 
 def get_token_ids(symbol: str):
     """Get UP and DOWN token IDs from Gamma API"""
@@ -48,6 +60,7 @@ def get_token_ids(symbol: str):
         if attempt < 12:
             time.sleep(4)
     return None, None
+
 
 def get_polymarket_momentum(token_id: str, interval: str = "1m") -> dict:
     """Calculate momentum based on Polymarket's own price history"""
