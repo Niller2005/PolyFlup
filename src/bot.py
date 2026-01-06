@@ -184,15 +184,24 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         return 0
 
     trade_params_list = []
+    last_symbol_logged = False
     for i, symbol in enumerate(valid_symbols):
+        if last_symbol_logged and verbose:
+            log("")
+            last_symbol_logged = False
+
         params = _prepare_trade_params(
             symbol, balance, add_spacing=False, verbose=verbose
         )
         if params:
             trade_params_list.append(params)
-
-        if i < len(valid_symbols) - 1 and verbose:
-            log("")
+            last_symbol_logged = True
+        elif verbose:
+            # If _prepare_trade_params logged something (Wait zone, etc), it returns None
+            # We don't have a perfect way to know if it logged, but we can assume
+            # if it was verbose it might have.
+            # Actually, let's only spacing if params was found to keep it compact.
+            pass
 
     if not trade_params_list:
         return 0
@@ -266,9 +275,10 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                     target_price=p["target_price"],
                 )
 
-                emoji = "⚔️ 🔄" if is_reversal else "🚀"
+                emoji = p.get("emoji", "🚀")
+                entry_type = p.get("entry_type", "Trade")
                 log(
-                    f"[{p['symbol']}] ✅ {p.get('core_summary', '')} | {emoji} #{trade_id} {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
+                    f"{emoji} [{p['symbol']}] {entry_type}: {p.get('core_summary', '')} | #{trade_id} {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
                 )
 
                 if is_reversal:

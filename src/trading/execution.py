@@ -81,9 +81,10 @@ def execute_trade(
             target_price=trade_params.get("target_price"),
         )
 
-        emoji = "⚔️ 🔄" if is_reversal else "🚀"
+        emoji = trade_params.get("emoji", "🚀")
+        entry_type = trade_params.get("entry_type", "Trade")
         log(
-            f"[{symbol}] ✅ {trade_params.get('core_summary', '')} | {emoji} #{trade_id} {side} ${trade_params['bet_usd']:.2f} @ {actual_price:.4f} | ID: {order_id[:10] if order_id else 'N/A'}"
+            f"{emoji} [{symbol}] {entry_type}: {trade_params.get('core_summary', '')} | #{trade_id} {side} ${trade_params['bet_usd']:.2f} @ {actual_price:.4f} | ID: {order_id[:10] if order_id else 'N/A'}"
         )
         return trade_id
     except Exception as e:

@@ -165,29 +165,25 @@ def _prepare_trade_params(
         other_side_exists = True
 
     if has_side_for_window(symbol, window_start.isoformat(), side):
-        if verbose:
-            log(
-                f"[{symbol}] ℹ️ Already have an open {side} position for this window. Skipping duplicate entry."
-            )
-            if add_spacing:
-                log("")
         return None
 
     if actual_side == bias:
         entry_type = "Trend Following"
-        emoji = "🌊"
+        emoji = "🚀"
     else:
         entry_type = "Contrarian Entry"
         emoji = "🔄"
 
     if other_side_exists:
-        entry_type = f"HEDGED REVERSAL ({entry_type})"
+        # Construct Hedged Reversal label
+        # Example: ⚔️ 🚀 Hedged Reversal (Trend)
+        short_type = "Trend" if actual_side == bias else "Contrarian"
+        entry_type = f"Hedged Reversal ({short_type})"
         emoji = f"⚔️ {emoji}"
 
     if verbose:
-        log(
-            f"[{symbol}] {emoji} {entry_type}: {actual_side} (Bias: {bias} @ {confidence:.1%})"
-        )
+        # This log is for evaluation, not execution
+        pass
 
     # Check lateness
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
@@ -272,6 +268,8 @@ def _prepare_trade_params(
         "bet_usd": bet_usd_effective,
         "confidence": confidence,
         "core_summary": core_summary,
+        "entry_type": entry_type,
+        "emoji": emoji,
         "p_up": p_up,
         "best_bid": best_bid,
         "best_ask": best_ask,
