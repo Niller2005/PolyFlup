@@ -120,6 +120,7 @@ def _check_target_price_alignment(
     current_spot: float,
     target_price: float,
     current_price: float,
+    verbose: bool = True,
 ) -> bool:
     """Check if target price alignment allows trading"""
 
@@ -129,9 +130,10 @@ def _check_target_price_alignment(
 
     if is_underdog:
         if confidence < LOSING_SIDE_MIN_CONFIDENCE:
-            log(
-                f"[{symbol}] ⚠️ {side} is UNDERDOG (${current_price:.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_MIN_CONFIDENCE:.0%}. SKIPPING."
-            )
+            if verbose:
+                log(
+                    f"[{symbol}] ⚠️ {side} is UNDERDOG (${current_price:.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_MIN_CONFIDENCE:.0%}. SKIPPING."
+                )
             return False
         else:
             log(
@@ -152,9 +154,10 @@ def _check_target_price_alignment(
 
         if not is_winning_side_on_spot:
             if confidence < LOSING_SIDE_MIN_CONFIDENCE:
-                log(
-                    f"[{symbol}] ⚠️ {side} is losing on SPOT (${current_spot:,.2f} vs Target ${target_price:,.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_MIN_CONFIDENCE:.0%}. SKIPPING."
-                )
+                if verbose:
+                    log(
+                        f"[{symbol}] ⚠️ {side} is losing on SPOT (${current_spot:,.2f} vs Target ${target_price:,.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_MIN_CONFIDENCE:.0%}. SKIPPING."
+                    )
                 return False
             else:
                 log(
@@ -257,14 +260,16 @@ def _prepare_trade_params(
 
     if actual_side == bias:
         entry_type = "HEDGED REVERSAL" if other_side_exists else "Trend Following"
-        log(f"[{symbol}] ✅ {entry_type}: {bias} (Confidence: {confidence:.1%})")
+        if verbose:
+            log(f"[{symbol}] ✅ {entry_type}: {bias} (Confidence: {confidence:.1%})")
     else:
         entry_type = (
             "HEDGED REVERSAL (Contrarian)" if other_side_exists else "Contrarian Entry"
         )
-        log(
-            f"[{symbol}] 🔄 {entry_type}: {actual_side} (Bias flipping from {bias} @ {confidence:.1%})"
-        )
+        if verbose:
+            log(
+                f"[{symbol}] 🔄 {entry_type}: {actual_side} (Bias flipping from {bias} @ {confidence:.1%})"
+            )
 
     # Check lateness
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
@@ -280,9 +285,10 @@ def _prepare_trade_params(
                 log("")
         return
     elif lateness > 60:
-        log(
-            f"[{symbol}] ⏳ Cycle is LATE ({lateness:.0f}s into window, {time_left:.0f}s left)"
-        )
+        if verbose:
+            log(
+                f"[{symbol}] ⏳ Cycle is LATE ({lateness:.0f}s into window, {time_left:.0f}s left)"
+            )
 
     target_price = float(get_window_start_price(symbol))
 
@@ -291,7 +297,7 @@ def _prepare_trade_params(
         current_spot = float(signals.get("current_spot", 0))
 
     if not _check_target_price_alignment(
-        symbol, side, confidence, current_spot, target_price, price
+        symbol, side, confidence, current_spot, target_price, price, verbose=verbose
     ):
         if add_spacing and verbose:
             log("")

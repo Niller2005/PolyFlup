@@ -97,13 +97,16 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
                 # Check if this is a buy order
                 c.execute(
-                    "SELECT id, symbol, side, size, entry_price FROM trades WHERE order_id = ? AND settled = 0",
+                    "SELECT id, symbol, side, size, entry_price, order_status FROM trades WHERE order_id = ? AND settled = 0",
                     (order_id,),
                 )
                 row = c.fetchone()
 
                 if row:
-                    trade_id, symbol, trade_side, db_size, db_price = row
+                    trade_id, symbol, trade_side, db_size, db_price, db_status = row
+
+                    if db_status == "FILLED":
+                        return
 
                     # Update price/size if provided in notification
                     new_price = float(fill_price) if fill_price else db_price

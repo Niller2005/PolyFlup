@@ -185,6 +185,14 @@ if token_balance["balance"] >= size:
 
 ## Monitoring
 
+### Check Intervals
+The bot operates on a multi-tiered monitoring schedule:
+- **1s (Passive)**: Position monitoring and P&L updates.
+- **10s (Active)**: Order status synchronization with exchange and deep self-healing.
+- **20s**: Market evaluation and new trade entry logic.
+- **60s (Verbose)**: Summary logging and settlement audit.
+- **30s (Legacy)**: Notification polling (now largely superseded by real-time WebSocket).
+
 ### Real-Time Notifications
 ```python
 from src.utils.notifications import process_notifications
