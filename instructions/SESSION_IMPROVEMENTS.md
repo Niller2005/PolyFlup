@@ -1,3 +1,44 @@
+# Session Improvements - 2026-01-06 (Part 5)
+
+This document summarizes the fifth phase of improvements, focusing on the "Triple Check" stop loss logic and confidence score recalibration.
+
+---
+
+## High Impact: Strategy Intelligence & Sensitivity
+
+### 1. "Triple Check" Reversal-First Stop Loss
+**Description:** Enhanced the stop loss dependency to ensure hedges have adequate time and technical confirmation before clearing losing sides.
+- **Immediate Floor**: Added a **$0.15** absolute price floor that triggers an immediate stop loss regardless of other conditions.
+- **Time Cooldown**: Implemented a **120-second minimum** hedge duration once a reversal is triggered.
+- **Strategy Confirmation**: After the cooldown, the bot now requires the **strategy confidence (>30%)** to favor the reversal side before killing the original position.
+- **Database Tracking**: Added `reversal_triggered_at` column (Migration 004) to track hedge age.
+
+### 2. Confidence Score Recalibration
+**Description:** Adjusted strategy weights and sensitivity to make the confidence score more expressive and reactive to market moves.
+- **Increased Sensitivity**: Binance momentum now reaches full strength at **0.2% price moves** (was 2.0%).
+- **Aggressive Scaling**: Increased final confidence multiplier to **1.5x** and reduced opposing signal penalties to **0.1x**.
+- **Trend Agreement Bonus**: Boosted consensus multiplier to **1.2x** when Binance and Polymarket trends align.
+- **Result**: Confidence scores now frequently reach the **40-75% range** during clear trends, allowing for more consistent entries and better sizing.
+
+### 3. Optimized Exit Plan Healing
+**Description:** Refined the self-healing logic for exit plan size mismatches.
+- **1s Frequency**: Size checks now run every second instead of every 10 seconds.
+- **Log Clarity**: Suppressed "Repairing..." spam; only successful "✅ Repaired" messages are now logged.
+
+---
+
+## Complete Session Statistics (2026-01-06 Part 5)
+
+### Lines of Code
+- **Modified/Added:** ~300 lines
+
+### Features
+- **Triple Check Stop Loss:** 1
+- **Confidence Recalibration:** 1
+- **High-Freq Healing Fix:** 1
+
+---
+
 # Session Improvements - 2026-01-06 (Part 4)
 
 This document summarizes the fourth phase of improvements, focusing on execution modularity and the new reversal-first stop loss logic.
@@ -528,7 +569,7 @@ Without this fix, if exit plan places an order for 5.62 shares, then scale-in ad
 **Functions Added:**
 - `cancel_orders(order_ids)` - Cancel multiple orders
 - `cancel_market_orders(market, asset_id)` - Cancel all orders for market
-- `cancel_all()` - Emergency cancel all orders
+- `cancel_all()` - Emergency cancel all
 - `get_orders(market, asset_id)` - Get active orders
 
 **Impact:** Better order management, faster cleanup.

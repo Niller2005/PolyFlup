@@ -15,6 +15,7 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
     (2, "Verify timestamp column", migration_002_add_created_at_column),
     (3, "Add reversal_triggered column", migration_003_add_reversal_triggered_column),
+    (4, "Add reversal_triggered_at column", migration_004_add_reversal_triggered_at_column),
 ]
 ```
 
@@ -149,6 +150,7 @@ uv run python -c "import sqlite3; conn = sqlite3.connect('trades.db'); c = conn.
 | 1 | Add scale_in_order_id column | ✅ |
 | 2 | Verify timestamp column | ✅ |
 | 3 | Add reversal_triggered column | ✅ |
+| 4 | Add reversal_triggered_at column | ✅ |
 
 ## Rollback
 
