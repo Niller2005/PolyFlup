@@ -5,7 +5,7 @@ import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from src.config.settings import GAMMA_API_BASE, PROXY_PK
-from src.utils.logger import log, send_discord
+from src.utils.logger import log, log_error, send_discord
 from src.trading.orders import cancel_order, get_closed_positions
 from src.data.db_connection import db_connection
 from eth_account import Account
@@ -42,7 +42,7 @@ def get_market_resolution(slug: str):
                 return True, [p0, p1]
 
     except Exception as e:
-        log(f"Error fetching resolution for {slug}: {e}")
+        log_error(f"Error fetching resolution for {slug}: {e}")
 
     return False, None
 
@@ -76,7 +76,7 @@ def _audit_settlements():
                             f"🔍 Audit [{symbol}] #{trade_id}: DB PnL ${db_pnl:.2f} vs API PnL ${pnl:.2f} (Diff: ${diff:.2f})"
                         )
     except Exception as e:
-        log(f"⚠️ Settlement audit error: {e}")
+        log_error(f"Settlement audit error: {e}")
 
 
 def force_settle_trade(trade_id: int):
@@ -158,7 +158,7 @@ def force_settle_trade(trade_id: int):
                 f"✅ Force settled zombie trade [{symbol}] #{trade_id}: {pnl_usd:+.2f}$"
             )
         except Exception as e:
-            log(f"⚠️ Error force settling trade #{trade_id}: {e}")
+            log_error(f"Error force settling trade #{trade_id}: {e}")
 
 
 def check_and_settle_trades():
@@ -266,7 +266,7 @@ def check_and_settle_trades():
                 settled_count += 1
 
             except Exception as e:
-                log(f"⚠️ [{symbol}] #{trade_id} Error settling trade: {e}")
+                log_error(f"[{symbol}] #{trade_id} Error settling trade: {e}")
 
         if settled_count > 0:
             send_discord(

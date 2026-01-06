@@ -13,7 +13,7 @@ from src.config.settings import (
     ENABLE_VWM,
     ENABLE_BFXD,
 )
-from src.utils.logger import log
+from src.utils.logger import log, log_error
 from src.trading.orders.utils import is_404_error
 from src.data.market_data import (
     get_funding_bias,
@@ -52,7 +52,7 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
             # Log the token ID occasionally or during 404 to help debug "wrong ID" vs "not ready"
             log(f"[{symbol}] Order book not ready for token {up_token[:10]}... (404)")
         else:
-            log(f"[{symbol}] Order book error for {up_token}: {e}")
+            log_error(f"[{symbol}] Order book error for {up_token}: {e}")
         return 0.0, "NEUTRAL", 0.5, None, None, {}
 
     if not bids or not asks:

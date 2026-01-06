@@ -6,7 +6,7 @@ from py_clob_client.clob_types import (
     OrderType,
     PostOrdersArgs,
 )
-from src.utils.logger import log
+from src.utils.logger import log, log_error
 from .client import client, _ensure_api_creds
 from .constants import BUY
 from .utils import (
@@ -73,7 +73,7 @@ def place_limit_order(
         except:
             pass
         if not (silent_on_balance_error and "balance" in str(e).lower()):
-            log(f"❌ {side} Order error: {emsg}")
+            log_error(f"{side} Order error: {emsg}")
         return {
             "success": bool(oid),
             "status": "ERROR" if not oid else "UNKNOWN",
@@ -145,5 +145,5 @@ def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
                 )
         return results
     except Exception as e:
-        log(f"❌ Batch order error: {e}")
+        log_error(f"Batch order error: {e}")
         return results

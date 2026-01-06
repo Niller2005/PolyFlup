@@ -29,6 +29,12 @@ This document summarizes the second phase of improvements made during the 2026-0
 - **Market Order Scale-In:** Scale-ins now use **Market Orders (FAK)** instead of Limit Orders. This ensures shares are acquired instantly, allowing the exit plan to be updated for the new total size in the same cycle.
 - **Increased Check Frequency:** Increased order monitoring and self-healing frequency from 30s to **10s** intervals.
 
+### 5. Dedicated Error Logging System
+**Description:** Implemented a separate logging system for exceptions to keep main logs clean while preserving debug context.
+- **New `log_error()` Utility:** Standardized error reporting that captures full tracebacks and writes to `logs/errors.log`.
+- **Main Log Sanity:** Errors are still reported to the main log and console, but without the bulky stack traces, which are now exclusively stored in the dedicated error log.
+- **Global Adoption:** Updated all major modules (bot, orders, positions, websocket) to use the new error logging convention.
+
 ---
 
 ## Complete Session Statistics (2026-01-06 Part 2)

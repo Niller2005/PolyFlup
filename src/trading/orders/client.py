@@ -11,7 +11,7 @@ from src.config.settings import (
     SIGNATURE_TYPE,
     FUNDER_PROXY,
 )
-from src.utils.logger import log
+from src.utils.logger import log, log_error
 
 # Initialize client
 client = ClobClient(
@@ -26,9 +26,11 @@ client = ClobClient(
 if not hasattr(client, "builder_config"):
     setattr(client, "builder_config", None)
 
+
 def get_clob_client() -> ClobClient:
     """Get the initialized CLOB client"""
     return client
+
 
 def setup_api_creds() -> None:
     """Setup API credentials"""
@@ -44,7 +46,7 @@ def setup_api_creds() -> None:
             log("✓ API credentials loaded from .env")
             return
         except Exception as e:
-            log(f"⚠ Error loading API creds from .env: {e}")
+            log_error(f"Error loading API creds from .env: {e}")
     try:
         creds = client.create_or_derive_api_creds()
         client.set_api_creds(creds)
@@ -53,8 +55,9 @@ def setup_api_creds() -> None:
         set_key(".env", "API_PASSPHRASE", creds.api_passphrase)
         log("✓ API credentials generated and saved")
     except Exception as e:
-        log(f"❌ FATAL: API credentials error: {e}")
+        log_error(f"FATAL: API credentials error: {e}")
         raise
+
 
 def _ensure_api_creds(order_client: ClobClient) -> None:
     """Ensure API credentials are set"""
@@ -68,4 +71,4 @@ def _ensure_api_creds(order_client: ClobClient) -> None:
             )
             order_client.set_api_creds(creds)
         except Exception as e:
-            log(f"⚠ Error setting API creds: {e}")
+            log_error(f"Error setting API creds: {e}")

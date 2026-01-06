@@ -8,7 +8,7 @@ import os
 from typing import Dict, List, Optional, Callable, Any, Union
 import websockets
 from src.config.settings import CLOB_WSS_HOST, MARKETS
-from src.utils.logger import log
+from src.utils.logger import log, log_error
 
 
 class WebSocketManager:
@@ -60,7 +60,7 @@ class WebSocketManager:
             )
         except Exception as e:
             if self._running:
-                log(f"❌ WebSocket event loop crashed: {e}")
+                log_error(f"WebSocket event loop crashed: {e}")
 
     async def _market_loop(self):
         """Handles connection to the public market data channel"""
@@ -90,7 +90,10 @@ class WebSocketManager:
                             raise exc
             except Exception as e:
                 if self._running:
-                    log(f"⚠️ Market WebSocket lost: {e}. Reconnecting in 5s...")
+                    log_error(
+                        f"Market WebSocket lost: {e}. Reconnecting in 5s...",
+                        include_traceback=False,
+                    )
                     await asyncio.sleep(5)
 
     async def _user_loop(self):
@@ -132,7 +135,10 @@ class WebSocketManager:
                             raise exc
             except Exception as e:
                 if self._running:
-                    log(f"⚠️ User WebSocket lost: {e}. Reconnecting in 5s...")
+                    log_error(
+                        f"User WebSocket lost: {e}. Reconnecting in 5s...",
+                        include_traceback=False,
+                    )
                     await asyncio.sleep(5)
 
     async def _ping_loop(self, ws):
@@ -184,7 +190,7 @@ class WebSocketManager:
             else:
                 await self._process_single_message(data)
         except Exception as e:
-            log(f"⚠️ Error handling WSS message: {e}")
+            log_error(f"Error handling WSS message: {e}")
 
     async def _process_single_message(self, data: Any):
         """Process a single message object from WSS"""
@@ -235,9 +241,12 @@ class WebSocketManager:
                     except:
                         pass
             elif data.get("type") == "error":
-                log(f"❌ WebSocket API Error: {data.get('message')}")
+                log_error(
+                    f"WebSocket API Error: {data.get('message')}",
+                    include_traceback=False,
+                )
         except Exception as e:
-            log(f"⚠️ Error processing single WSS message: {e}")
+            log_error(f"Error processing single WSS message: {e}")
 
     async def _trigger_price_callbacks(self, asset_id: str, price: float):
         """Execute all registered price callbacks"""

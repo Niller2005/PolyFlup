@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from src.data.db_connection import db_connection
-from src.utils.logger import log
+from src.utils.logger import log, log_error
 from src.config.settings import EXIT_PRICE_TARGET
 from src.trading.orders import (
     get_order_status,
@@ -264,6 +264,6 @@ def check_open_positions(verbose=True, check_orders=False):
                         is_scoring=scoring_map.get(l_sell) if l_sell else None,
                     )
                 except Exception as e:
-                    log(f"⚠️ [{sym}] #{tid} Error: {e}")
+                    log_error(f"[{sym}] #{tid} Position monitoring error: {e}")
     finally:
         _position_check_lock.release()

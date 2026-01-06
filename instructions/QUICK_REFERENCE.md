@@ -224,6 +224,18 @@ server_time = get_server_time()
 # Returns Unix timestamp
 ```
 
+### Error Logging
+```python
+from src.utils.logger import log_error
+
+try:
+    # ... code ...
+except Exception as e:
+    log_error(f"Something went wrong: {e}")
+    # Main log gets: ❌ ERROR: Something went wrong: ...
+    # logs/errors.log gets: timestamp + error + full stack trace
+```
+
 ---
 
 ## Database

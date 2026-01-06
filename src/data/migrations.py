@@ -1,7 +1,7 @@
 """Database migrations system"""
 
 from typing import List, Callable, Any
-from src.utils.logger import log
+from src.utils.logger import log, log_error
 from src.data.db_connection import db_connection
 
 
@@ -99,17 +99,14 @@ def run_migrations() -> None:
                     latest_version = version
                     log(f"    ✓ Migration {version} completed")
                 except Exception as e:
-                    log(f"    ❌ Migration {version} failed: {e}")
+                    log_error(f"Migration {version} failed: {e}")
                     conn.rollback()
                     raise
 
             log(f"✓ All migrations completed. Schema version: {latest_version}")
 
         except Exception as e:
-            log(f"❌ Migration error: {e}")
-            import traceback
-
-            log(traceback.format_exc())
+            log_error(f"Migration error: {e}")
             raise
 
 

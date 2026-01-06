@@ -2,7 +2,7 @@
 
 import time
 from typing import List, Dict
-from src.utils.logger import log, send_discord
+from src.utils.logger import log, log_error, send_discord
 from src.trading.orders import get_notifications, drop_notifications, SELL
 from src.data.db_connection import db_connection
 from src.trading.position_manager.shared import _position_check_lock
@@ -76,7 +76,7 @@ def process_notifications() -> None:
             drop_notifications(processed_ids)
 
     except Exception as e:
-        log(f"⚠️ Error processing notifications: {e}")
+        log_error(f"Error processing notifications: {e}")
 
 
 def _handle_order_fill(payload: dict, timestamp: int) -> None:
@@ -181,7 +181,7 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                 # Order not tracked in our database - skip logging (likely old or other trader's order)
 
     except Exception as e:
-        log(f"⚠️ Error handling order fill notification: {e}")
+        log_error(f"Error handling order fill notification: {e}")
 
 
 def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
@@ -208,7 +208,7 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                 # Don't log cancellations - position manager already logs them if needed
 
     except Exception as e:
-        log(f"⚠️ Error handling order cancellation notification: {e}")
+        log_error(f"Error handling order cancellation notification: {e}")
 
 
 def _handle_market_resolved(payload: dict, timestamp: int) -> None:
@@ -221,4 +221,4 @@ def _handle_market_resolved(payload: dict, timestamp: int) -> None:
         pass
 
     except Exception as e:
-        log(f"⚠️ Error handling market resolution notification: {e}")
+        log_error(f"Error handling market resolution notification: {e}")

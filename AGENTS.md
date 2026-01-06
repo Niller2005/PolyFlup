@@ -127,7 +127,9 @@ docker compose down
 - Send critical errors to Discord webhook via `send_discord()`
 
 #### Logging
-- Use the `log()` function from `src.utils.logger`
+- Use the `log()` function from `src.utils.logger` for general messages.
+- **Use the `log_error()` function from `src.utils.logger` for all exceptions and failures.**
+  - `log_error(text, include_traceback=True)`: Captures full stack trace and writes to dedicated `logs/errors.log`.
 - Include context: `log(f"[{symbol}] message")`
 - **Always start log lines with relevant emojis** for visual scanning
 - Keep logs concise - only log significant events and state changes

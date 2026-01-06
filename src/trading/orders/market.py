@@ -5,9 +5,10 @@ from py_clob_client.clob_types import (
     OrderType,
     MarketOrderArgs,
 )
-from src.utils.logger import log
+from src.utils.logger import log, log_error
 from .client import client, _ensure_api_creds
 from .utils import _parse_api_error
+
 
 def place_market_order(
     token_id: str,
@@ -37,5 +38,5 @@ def place_market_order(
     except Exception as e:
         emsg = _parse_api_error(str(e))
         if not silent_on_error:
-            log(f"❌ {side} Market Order error: {emsg}")
+            log_error(f"{side} Market Order error: {emsg}")
         return {"success": False, "status": "ERROR", "order_id": None, "error": emsg}

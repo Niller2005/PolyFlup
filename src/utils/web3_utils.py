@@ -9,7 +9,7 @@ from src.config.settings import (
     CTF_ABI,
     PROXY_PK,
 )
-from src.utils.logger import log
+from src.utils.logger import log, log_error
 
 
 w3 = Web3(Web3.HTTPProvider(POLYGON_RPC))
@@ -85,12 +85,9 @@ def redeem_winnings(condition_id_hex: str, neg_risk: bool = False) -> bool:
                 log("❌ Redemption failed")
                 return False
         except Exception as e:
-            log(f"⚠️ TX receipt error: {e}")
+            log_error(f"TX receipt error: {e}")
             return False
 
     except Exception as e:
-        log(f"❌ Redeem error: {e}")
-        import traceback
-
-        log(traceback.format_exc())
+        log_error(f"Redeem error: {e}")
         return False

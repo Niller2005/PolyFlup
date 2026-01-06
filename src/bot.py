@@ -39,7 +39,7 @@ from src.config.settings import (
     ENABLE_BFXD,
 )
 
-from src.utils.logger import log, send_discord
+from src.utils.logger import log, log_error, send_discord
 from src.utils.web3_utils import get_balance
 from src.data.database import (
     init_database,
@@ -403,8 +403,8 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
                         actual_price = pr_m
                     trade_params["bet_usd"] = actual_size * actual_price
         except Exception as e:
-            log(
-                f"⚠️ [{trade_params['symbol']}] Could not sync execution details immediately: {e}"
+            log_error(
+                f"[{trade_params['symbol']}] Could not sync execution details immediately: {e}"
             )
 
     send_discord(
@@ -439,7 +439,7 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
         )
         return 1
     except Exception as e:
-        log(f"[{trade_params['symbol']}] Trade completion error: {e}")
+        log_error(f"[{trade_params['symbol']}] Trade completion error: {e}")
         return 0
 
 
@@ -579,10 +579,13 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                     f"[{p['symbol']}] 🚀 #{trade_id} {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | {actual_status} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
                 )
             except Exception as e:
-                log(f"[{p['symbol']}] Trade completion error: {e}")
+                log_error(f"[{p['symbol']}] Trade completion error: {e}")
         elif i < len(trade_params_list):
             p = trade_params_list[i]
-            log(f"[{p['symbol']}] ❌ Batch order failed: {result.get('error')}")
+            log_error(
+                f"[{p['symbol']}] ❌ Batch order failed: {result.get('error')}",
+                include_traceback=False,
+            )
     return placed_count
 
 
@@ -711,10 +714,7 @@ def main():
             generate_statistics()
             break
         except Exception as e:
-            log(f"❌ Critical error: {e}")
-            import traceback
-
-            log(traceback.format_exc())
+            log_error(f"Critical error: {e}")
             send_discord(f"❌ Error: {e}")
             time.sleep(60)
 
