@@ -384,7 +384,7 @@ def main():
                     # Update logger to use a new file for this window
                     set_log_window(w_start.isoformat())
                     log("")
-                    log(f"🪟 NEW WINDOW: {range_str}")
+                    log(f"🪟  NEW WINDOW: {range_str}")
                     last_window_logged = w_start
 
             is_verbose_cycle = now_ts - last_verbose_log >= 60
