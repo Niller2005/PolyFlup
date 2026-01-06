@@ -9,7 +9,13 @@ from py_clob_client.clob_types import (
 from src.utils.logger import log
 from .client import client, _ensure_api_creds
 from .constants import BUY
-from .utils import _validate_order, truncate_float, _execute_with_retry, _parse_api_error
+from .utils import (
+    _validate_order,
+    truncate_float,
+    _execute_with_retry,
+    _parse_api_error,
+)
+
 
 def place_limit_order(
     token_id: str,
@@ -24,13 +30,15 @@ def place_limit_order(
     if not valid:
         return {"success": False, "status": "VALIDATION_ERROR", "error": err}
 
-    otype: Any = OrderType.GTC
+    # Extract enum value to avoid Literal vs Enum issues in type checker
     if order_type.upper() == "FOK":
         otype = OrderType.FOK
     elif order_type.upper() == "FAK":
         otype = OrderType.FAK
     elif order_type.upper() == "GTD":
         otype = OrderType.GTD
+    else:
+        otype = OrderType.GTC
 
     def _place():
         _ensure_api_creds(client)
@@ -73,9 +81,11 @@ def place_limit_order(
             "error": emsg,
         }
 
+
 def place_order(token_id: str, price: float, size: float) -> dict:
     """Convenience function for BUY limit orders"""
     return place_limit_order(token_id, price, size, BUY)
+
 
 def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
     if not orders:

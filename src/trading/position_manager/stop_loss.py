@@ -14,6 +14,7 @@ from src.trading.orders import (
     cancel_order,
     get_balance_allowance,
     place_order,
+    get_order_status,
 )
 from src.data.market_data import (
     get_current_spot_price,
