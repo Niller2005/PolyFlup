@@ -169,7 +169,7 @@ def check_and_settle_trades():
 
         # Only check trades where window has ended
         c.execute(
-            "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, limit_sell_order_id, scale_in_order_id FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)",
+            "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, limit_sell_order_id, scale_in_order_id, window_start, window_end FROM trades WHERE settled = 0 AND datetime(window_end) < datetime(?)",
             (now.isoformat(),),
         )
         unsettled = c.fetchall()
@@ -180,6 +180,7 @@ def check_and_settle_trades():
         total_pnl = 0
         settled_count = 0
         logged_spacing = False
+        involved_windows = set()
 
         for (
             trade_id,
@@ -192,6 +193,8 @@ def check_and_settle_trades():
             bet_usd,
             limit_sell_order_id,
             scale_in_order_id,
+            window_start,
+            window_end,
         ) in unsettled:
             try:
                 # 1. Get resolution from API
@@ -200,6 +203,8 @@ def check_and_settle_trades():
                 if not is_resolved:
                     # Market not resolved yet, skip and check next cycle
                     continue
+
+                involved_windows.add((window_start, window_end))
 
                 # 2. Identify which token we hold (UP or DOWN)
                 # Fetch specific market data to match IDs safely
@@ -272,6 +277,56 @@ def check_and_settle_trades():
             send_discord(
                 f"📊 Settled {settled_count} trades | Total PnL: ${total_pnl:+.2f}"
             )
+
+            # Log Window Summaries for completed windows
+            for window_start, window_end in involved_windows:
+                try:
+                    c.execute(
+                        "SELECT COUNT(*) FROM trades WHERE window_start = ? AND settled = 0",
+                        (window_start,),
+                    )
+                    remaining = c.fetchone()[0]
+                    if remaining == 0:
+                        # All trades for this window are now settled. Log summary.
+                        c.execute(
+                            "SELECT symbol, side, pnl_usd, roi_pct, final_outcome, bet_usd FROM trades WHERE window_start = ?",
+                            (window_start,),
+                        )
+                        window_trades = c.fetchall()
+                        if not window_trades:
+                            continue
+
+                        win_pnl = sum(t[2] for t in window_trades)
+                        win_bet = sum(t[5] for t in window_trades)
+                        win_roi = (win_pnl / win_bet * 100) if win_bet > 0 else 0
+
+                        # Format window range
+                        try:
+                            ws_dt = datetime.fromisoformat(window_start).astimezone(
+                                ZoneInfo("America/New_York")
+                            )
+                            we_dt = datetime.fromisoformat(window_end).astimezone(
+                                ZoneInfo("America/New_York")
+                            )
+                            range_str = (
+                                f"{ws_dt.strftime('%H:%M')} - {we_dt.strftime('%H:%M')}"
+                            )
+                        except:
+                            range_str = f"{window_start} - {window_end}"
+
+                        log("=" * 60)
+                        log(f"🏁 WINDOW SUMMARY: {range_str}")
+                        log(f"   Total PnL: {win_pnl:+.2f}$ ({win_roi:+.1f}%)")
+                        log(f"   Trades:    {len(window_trades)}")
+                        for sym, side, pnl, roi, outcome, bet in window_trades:
+                            log(
+                                f"     - [{sym}] {side}: {pnl:+.2f}$ ({roi:+.1f}%) | {outcome}"
+                            )
+                        log("=" * 60)
+                except Exception as e:
+                    log_error(
+                        f"Error generating window summary for {window_start}: {e}"
+                    )
 
     # Audit after settlement
     try:
