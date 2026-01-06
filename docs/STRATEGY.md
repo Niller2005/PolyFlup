@@ -36,27 +36,11 @@ Signal Weights (ADX Enabled):
 └── Polymarket Momentum (15%) - Internal price confirmation
 ```
 
-Signal Weights (ADX Disabled, default):
-├── Price Momentum (35%) - Velocity, acceleration, RSI
-├── Order Flow (25%) - Buy/sell pressure from volume
-├── Cross-Exchange Divergence (25%) - Polymarket vs Binance trend mismatch
-├── Volume-Weighted Momentum (10%) - VWAP distance & quality
-└── Polymarket-Native Momentum (5%) - Internal price confirmation
-
-Signal Weights (ADX Enabled):
-├── Price Momentum (25%) - Velocity, acceleration, RSI
-├── Order Flow (20%) - Buy/sell pressure from volume
-├── Cross-Exchange Divergence (25%) - Polymarket vs Binance trend mismatch
-├── Volume-Weighted Momentum (10%) - VWAP distance & quality
-├── ADX Trend Strength (15%) - Trend confirmation
-└── Polymarket-Native Momentum (5%) - Internal price confirmation
-```
-
 **Note**: The original documentation's "Base Signals (60%)" approach was replaced with a directional voting system where each signal contributes its strength weighted by confidence.
 
 ---
 
-## 1. Price Momentum Analysis (35% weight, or 30% with ADX)
+## 1. Price Momentum Analysis (30% weight, or 25% with ADX)
 
 **Source:** Binance 1-minute candles (configurable lookback, default 15 minutes)
 
@@ -82,12 +66,12 @@ IF Binance shows momentum (direction != NEUTRAL):
 - BTC up 1.5% in last 15 minutes with positive acceleration
 - Momentum strength: 0.85, direction: UP
 - Accelerating bonus: 0.85 × 1.2 = 1.02 (capped at 1.0)
-- Contribution: 1.0 × 0.35 = 0.35 toward UP side
+- Contribution: 1.0 × 0.30 = 0.30 toward UP side
 - **Signal:** Strong bullish momentum → Vote for UP
 
 ---
 
-## 2. Order Flow Analysis (25% weight, or 20% with ADX)
+## 2. Order Flow Analysis (20% weight, or 15% with ADX)
 
 **Source:** Binance 1-minute candles (recent volume data)
 
@@ -108,12 +92,12 @@ Signal contributes: score × weight × direction
 - BTC shows 62% buy pressure (strong buying)
 - Score: abs(0.62 - 0.5) × 2.0 = 0.24
 - Direction: UP
-- Contribution: 0.24 × 0.25 = 0.06 toward UP side
+- Contribution: 0.24 × 0.20 = 0.048 toward UP side
 - **Signal:** Moderate bullish order flow → Vote for UP
 
 ---
 
-## 3. Cross-Exchange Divergence (25% weight, constant)
+## 3. Cross-Exchange Divergence (20% weight, constant)
 
 **Source:** Binance price movement vs Polymarket implied probability
 
@@ -140,7 +124,7 @@ Signal contributes: score × weight × direction
 - Divergence: -18% (Polymarket underpricing)
 - Score: min(0.18 × 5.0, 1.0) = 0.90
 - Direction: UP
-- Contribution: 0.90 × 0.25 = 0.225 toward UP side
+- Contribution: 0.90 × 0.20 = 0.18 toward UP side
 - **Signal:** Strong divergence → Vote for UP
 
 ---
@@ -165,7 +149,7 @@ Signal contributes: score × weight × direction
 
 ---
 
-## 5. Polymarket-Native Momentum (20% weight, or 15% with ADX)
+## 5. Polymarket Momentum (20% weight, or 15% with ADX)
 
 **Source:** Polymarket CLOB 1-minute price history
 
@@ -182,8 +166,11 @@ direction = pm_momentum.direction
 Signal contributes: score × weight × direction
 ```
 
+### 🧠 Trend Agreement Bonus
+If Binance momentum and Polymarket momentum agree on the direction, the strategy applies a **1.1x multiplier** to the final confidence. This reinforces high-conviction entries where external and internal markets are aligned.
+
 ### 🧠 Lead/Lag Indicator (Experimental)
-If Binance momentum and Polymarket momentum agree on the direction, the strategy applies a **1.2x multiplier** to the final confidence. If they diverge, it applies a **0.8x penalty**, acting as a filter for cross-exchange noise.
+The bot also tracks the "Lead/Lag" relationship between exchanges. If a signal shows strong cross-exchange consistency, a **1.2x multiplier** may be applied to the final confidence. If they diverge sharply, a **0.8x penalty** is applied to filter out noise.
 
 ---
 
@@ -287,15 +274,15 @@ All features can be toggled in `.env`:
 
 ```bash
 # Enable/disable individual signals
-ENABLE_MOMENTUM_FILTER=YES    # Price velocity, acceleration, RSI (35% weight)
-ENABLE_ORDER_FLOW=YES          # Buy/sell pressure analysis (25% weight)
-ENABLE_DIVERGENCE=YES          # Cross-exchange mismatch detection (25% weight)
-ENABLE_VWM=YES                 # Volume-weighted momentum (15% weight)
+ENABLE_MOMENTUM_FILTER=YES    # Price velocity, acceleration, RSI (30% weight)
+ENABLE_ORDER_FLOW=YES          # Buy/sell pressure analysis (20% weight)
+ENABLE_DIVERGENCE=YES          # Cross-exchange mismatch detection (20% weight)
+ENABLE_VWM=YES                 # Volume-weighted momentum (10% weight)
 ADX=NO                         # Optional ADX trend filter (15% weight, adjusts others)
 
 # Tuning parameters
 MOMENTUM_LOOKBACK_MINUTES=15   # Momentum analysis window (default: 15)
-MIN_EDGE=0.565                 # Decision threshold (56.5% confidence required)
+MIN_EDGE=0.35                  # Decision threshold (35% confidence required)
 CONFIDENCE_SCALING_FACTOR=5.0  # Position sizing multiplier (higher = more aggressive)
 ```
 

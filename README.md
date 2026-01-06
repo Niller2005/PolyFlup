@@ -17,14 +17,12 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 > 📖 For detailed strategy logic and signal breakdowns, see [docs/STRATEGY.md](docs/STRATEGY.md)
 
 ### 🛡️ Risk Management
-- **Smart Breakeven Protection**: Activates at 20%+ PnL, exits if price reverses 5% from peak (doesn't cap upside)
 - **Confidence-Based Sizing**: Position size scales with signal strength (configurable multiplier)
 - **Exit Plan**: Places limit sell orders at 99 cents for near-guaranteed profitable exits
-- **🛑 Stop Loss**: Configurable auto-exit on losing positions (default -50%, validated against spot price)
-- **🎯 Take Profit**: Optional profit targets (disabled by default to let winners run)
-- **🔄 Auto Reversal**: Automatically flips position with target price tracking on stop loss
-- **📈 Scale In**: Adds to winning positions near expiry (70-90% probability, configurable multiplier)
-- **⚡ Real-Time Monitoring**: High-frequency position checking with order status tracking
+- **🛑 Midpoint Stop Loss**: Primary safety net triggers at $0.30 midpoint price (configurable)
+- **🔄 Hedged Reversal**: Supports holding both sides during trend flips, clearing losers via stop loss
+- **📈 Scale In**: Adds to winning positions near expiry (60-90% probability, configurable multiplier)
+- **⚡ Real-Time Monitoring**: 10-second position checking with robust order status tracking
 - **🛡️ Self-Healing Logic**: Automatically force-settles "ghost" trades if price data is unavailable for 3+ cycles
 
 ### 🚀 Recent Improvements (Jan 2026)
@@ -70,7 +68,8 @@ Key settings in `.env` (Balanced profile shown):
 BET_PERCENT=5.0                      # Base position size (% of balance)
 MIN_EDGE=0.35                        # Minimum confidence to enter (35%)
 MAX_SPREAD=0.15                      # Max allowed spread (15%)
-CONFIDENCE_SCALING_FACTOR=5.0        # Position scaling multiplier (higher = more aggressive on strong signals)
+CONFIDENCE_SCALING_FACTOR=5.0        # Position scaling multiplier
+LOSING_SIDE_MIN_CONFIDENCE=0.40      # Higher threshold for underdog entries
 
 # Binance Advanced Strategy
 ENABLE_MOMENTUM_FILTER=YES           # Price velocity, acceleration, RSI (30% weight)
@@ -78,26 +77,28 @@ ENABLE_ORDER_FLOW=YES                # Buy/sell pressure analysis (20% weight)
 ENABLE_DIVERGENCE=YES                # Cross-exchange mismatch detection (20% weight)
 ENABLE_VWM=YES                       # Volume-weighted momentum (10% weight)
 MOMENTUM_LOOKBACK_MINUTES=15         # Momentum analysis window
-ADX=NO                               # Optional ADX trend strength filter (15% weight if enabled)
 
 # Risk Management
-ENABLE_STOP_LOSS=YES                 # Stop loss + breakeven protection
-STOP_LOSS_PERCENT=40.0               # Exit at -40% loss (validated against spot price)
-ENABLE_TAKE_PROFIT=NO                # Let winners run (breakeven protection active)
-TAKE_PROFIT_PERCENT=80.0             # Take profit level (if enabled)
-ENABLE_REVERSAL=NO                   # Reverse position on stop loss
+ENABLE_STOP_LOSS=YES                 # Global stop loss switch
+STOP_LOSS_PRICE=0.30                 # Midpoint stop loss trigger ($0.30)
+ENABLE_TAKE_PROFIT=NO                # Let winners run
+ENABLE_HEDGED_REVERSAL=YES           # Hold both sides during trend flip
 
 # Exit Plan (Aggressive Profit Taking)
 ENABLE_EXIT_PLAN=YES                 # Place limit sell orders at target price
 EXIT_PRICE_TARGET=0.99               # Target exit price (99 cents)
-EXIT_MIN_POSITION_AGE=60             # Wait 1 minute before placing exit order
+EXIT_MIN_POSITION_AGE=60             # Wait 60s before placing exit order
+ENABLE_REWARD_OPTIMIZATION=YES       # Optimize exit orders for liquidity rewards
 
 # Position Scaling
 ENABLE_SCALE_IN=YES                  # Add to winners near expiry
-SCALE_IN_MIN_PRICE=0.70              # Min price to scale (70%)
+SCALE_IN_MIN_PRICE=0.60              # Min price to scale (60%)
 SCALE_IN_MAX_PRICE=0.90              # Max price to scale (90%)
-SCALE_IN_TIME_LEFT=120               # Scale in when ≤2 minutes left
-SCALE_IN_MULTIPLIER=1.0              # Add 100% more (2x total position)
+SCALE_IN_TIME_LEFT=300               # Scale in when ≤5 minutes left
+SCALE_IN_MULTIPLIER=1.5              # Add 150% more (2.5x total position)
+
+# Order Management
+UNFILLED_TIMEOUT_SECONDS=300         # Cancel stale orders after 5 minutes
 ```
 
 > 💡 **Need a different risk profile?** Check [docs/RISK_PROFILES.md](docs/RISK_PROFILES.md) for Conservative, Aggressive, and Ultra Aggressive configurations.

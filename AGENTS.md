@@ -137,6 +137,11 @@ docker compose down
 - Keep logs concise - only log significant events and state changes
 - Use verbose cycles (every 60s) for routine monitoring logs
 
+#### Strategy Nuances
+- **Trend Agreement Bonus**: A **1.1x multiplier** is applied to the final confidence if both Binance and Polymarket signals agree on the trend direction.
+- **Underdog Filter**: Any entry on a side with a price < $0.50 (the "underdog") requires a minimum of **40% confidence** (configurable via `LOSING_SIDE_MIN_CONFIDENCE`).
+- **Lead/Lag Bonus**: An experimental **1.2x multiplier** (or 0.8x penalty) is applied based on cross-exchange consistency (Lead/Lag relationship).
+
 **Standard Emoji Guide:**
   - 👀 Monitoring/watching positions
   - 📈 Position with positive P&L

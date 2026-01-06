@@ -291,6 +291,7 @@ MIGRATIONS = [
 ```env
 # Exit Plan Management
 EXIT_MIN_POSITION_AGE=60               # Wait 1 minute before exit plan (default: 60)
+ENABLE_REWARD_OPTIMIZATION=YES         # Earn liquidity rewards on exit orders
 
 # Unfilled Order Management
 UNFILLED_TIMEOUT_SECONDS=300           # Cancel after 5 minutes (default: 300)

@@ -13,7 +13,7 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MIN_EDGE` | 0.40 | Higher threshold = fewer, higher quality trades |
 | `MAX_SPREAD` | 0.12 | Only enter liquid markets with tight spreads |
 | `CONFIDENCE_SCALING_FACTOR` | 3.0 | Moderate scaling (max 3x base bet) |
-| `STOP_LOSS_PERCENT` | 40% | Tighter stop loss to limit losses |
+| `STOP_LOSS_PRICE` | 0.40 | Conservative stop loss trigger |
 | `ENABLE_TAKE_PROFIT` | YES | Lock in profits at 60% gain |
 | `TAKE_PROFIT_PERCENT` | 60% | Conservative profit target |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
@@ -37,12 +37,12 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MIN_EDGE` | 0.35 | Balanced threshold for good opportunities |
 | `MAX_SPREAD` | 0.15 | Accept reasonable spreads |
 | `CONFIDENCE_SCALING_FACTOR` | 5.0 | Standard scaling (max 5x base bet) |
-| `STOP_LOSS_PERCENT` | 40% | Standard stop loss with breakeven protection |
-| `ENABLE_TAKE_PROFIT` | NO | Let winners run (breakeven protection active) |
+| `STOP_LOSS_PRICE` | 0.30 | Standard stop loss trigger ($0.30) |
+| `ENABLE_TAKE_PROFIT` | NO | Let winners run |
 | `TAKE_PROFIT_PERCENT` | 80% | Not used (take profit disabled) |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
 | `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
-| `SCALE_IN_MULTIPLIER` | 1.0 | Double position size (2x total) |
+| `SCALE_IN_MULTIPLIER` | 1.5 | Scale in by 150% (2.5x total) |
 
 **Expected Results:**
 - Moderate volatility
@@ -61,12 +61,12 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MIN_EDGE` | 0.32 | Lower threshold = more trades, more action |
 | `MAX_SPREAD` | 0.18 | Accept wider spreads for more opportunities |
 | `CONFIDENCE_SCALING_FACTOR` | 7.0 | Aggressive scaling (max 7x base bet) |
-| `STOP_LOSS_PERCENT` | 60% | Wider stop loss to avoid noise |
+| `STOP_LOSS_PRICE` | 0.20 | Wider stop loss to avoid noise |
 | `ENABLE_TAKE_PROFIT` | NO | Let all winners run |
 | `TAKE_PROFIT_PERCENT` | 100% | Not used |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
 | `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
-| `SCALE_IN_MULTIPLIER` | 1.5 | Add 150% more (2.5x total position) |
+| `SCALE_IN_MULTIPLIER` | 2.0 | Double position size on scale-in (3x total) |
 
 **Expected Results:**
 - Higher volatility
@@ -85,12 +85,12 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MIN_EDGE` | 0.30 | Lowest threshold = maximum trade frequency |
 | `MAX_SPREAD` | 0.20 | Enter almost any liquid market |
 | `CONFIDENCE_SCALING_FACTOR` | 10.0 | Extreme scaling (max 10x base bet) |
-| `STOP_LOSS_PERCENT` | 70% | Very wide stop loss |
+| `STOP_LOSS_PRICE` | 0.10 | Very wide stop loss |
 | `ENABLE_TAKE_PROFIT` | NO | Never cap upside |
 | `TAKE_PROFIT_PERCENT` | 150% | Not used |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
 | `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
-| `SCALE_IN_MULTIPLIER` | 2.0 | Triple position size (3x total) |
+| `SCALE_IN_MULTIPLIER` | 3.0 | Quadruple position size on scale-in (4x total) |
 
 **Expected Results:**
 - Extreme volatility
@@ -127,23 +127,22 @@ Choose the risk profile that matches your trading style and account size. Each p
 
 ### Exit Plan (Aggressive Profit Taking)
 All profiles include **Exit Plan** by default:
-- After position ages (default 5 minutes), places limit sell order at EXIT_PRICE_TARGET (99 cents)
+- After position ages (default 60 seconds), places limit sell order at EXIT_PRICE_TARGET (99 cents)
 - Near-guaranteed profitable exit if market reaches 99 cents before expiry
-- Order is automatically cancelled if stop loss or other exit triggers first
+- Order is automatically updated if position size increases (scale-in)
 - Can be disabled with `ENABLE_EXIT_PLAN=NO` to only use market resolution
 
-### Smart Breakeven Protection
-All profiles include **Smart Breakeven Protection**:
-- Activates when position is up 20%+ in PnL
-- **Only** triggers if market moves AGAINST your position direction
-- Allows 5% drawback from peak before exiting
-- **Does NOT cap upside** if market continues in your favor
-- Works in conjunction with Exit Plan for multi-layered protection
+### Midpoint Stop Loss
+All profiles use a **Midpoint-based Stop Loss** for superior reliability:
+- Primary trigger is the fair-value midpoint price (e.g., $0.30)
+- Prevents being stopped out by temporary spread volatility
+- Includes dynamic "headroom" protection for low-priced entries
+- Integrates with **Hedged Reversal** to clear losers when trends flip
 
 ### Dynamic Position Sizing
 All profiles use **Confidence-Based Sizing**:
 - Base bet size increases with signal strength
-- Higher edge = larger position (up to 3x base in Balanced)
+- Higher edge = larger position (up to 5x base in Balanced)
 - Automatically scales back on weaker signals
 
 ### Portfolio Risk Management
