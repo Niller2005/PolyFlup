@@ -130,13 +130,18 @@ def _check_stop_loss(
     buy_order_status,
     scale_in_order_id=None,
     reversal_triggered=False,
+    reversal_triggered_at=None,
 ):
     """
     Check and execute stop loss OR reversal based on midpoint price.
-    NEW LOGIC:
+    NEW LOGIC (Triple Check):
     - At $0.30 midpoint: trigger reversal if not already done.
-    - Stop loss only allowed if reversal_triggered is True.
+    - If reversal_triggered:
+        1. Immediate Stop Loss if price <= $0.15 (Floor)
+        2. Wait at least 120s (Cooldown)
+        3. Only Stop Loss if strategy confirms the reversal trend (Confidence > 30%)
     """
+
     c.execute("SELECT settled FROM trades WHERE id = ?", (trade_id,))
     if (row := c.fetchone()) and row[0] == 1:
         return True
@@ -158,17 +163,71 @@ def _check_stop_loss(
             if _trigger_price_based_reversal(symbol, trade_id, side, c, conn):
                 # Mark as reversal triggered so next cycle can stop loss if needed
                 c.execute(
-                    "UPDATE trades SET reversal_triggered = 1 WHERE id = ?", (trade_id,)
+                    "UPDATE trades SET reversal_triggered = 1, reversal_triggered_at = ? WHERE id = ?",
+                    (now.isoformat(), trade_id),
                 )
                 return False  # Don't stop loss in the same cycle as reversal trigger
         else:
-            # Reversals disabled, but we still need to mark it as "triggered" to allow stop loss
+            # Reversals disabled, mark as triggered anyway to allow SL path
             c.execute(
-                "UPDATE trades SET reversal_triggered = 1 WHERE id = ?", (trade_id,)
+                "UPDATE trades SET reversal_triggered = 1, reversal_triggered_at = ? WHERE id = ?",
+                (now.isoformat(), trade_id),
             )
             return False
 
-    # STOP LOSS: Only if SL is enabled AND reversal has already been triggered
+    # HEDGED STOP LOSS LOGIC (Triple Check)
+    # 1. Immediate Price Floor
+    if current_price <= 0.15:
+        log(
+            f"🛑 [{symbol}] #{trade_id} CRITICAL FLOOR hit (${current_price:.2f}). Executing immediate stop loss."
+        )
+    else:
+        # 2. Time Check (Cooldown)
+        try:
+            if not reversal_triggered_at:
+                # Should not happen if triggered is True, but for safety
+                seconds_since_rev = 0
+            else:
+                rev_time = datetime.fromisoformat(reversal_triggered_at)
+                seconds_since_rev = (now - rev_time).total_seconds()
+        except:
+            seconds_since_rev = 0
+
+        if seconds_since_rev < 120:
+            # Only log every 60s to avoid spam
+            if int(seconds_since_rev) % 60 == 0:
+                log(
+                    f"⏳ [{symbol}] #{trade_id} HEDGE COOLDOWN: {seconds_since_rev:.0f}s/120s passed. Holding..."
+                )
+            return False
+
+        # 3. Strategy Confirmation
+        # Check if the strategy now favors the opposite side with decent confidence
+        try:
+            client = get_clob_client()
+            up_id, _ = get_token_ids(symbol)
+            if not up_id:
+                return False
+
+            conf, bias, _, _, _, _ = calculate_confidence(symbol, up_id, client)
+
+            target_bias = "DOWN" if side == "UP" else "UP"
+            if bias == target_bias and conf > 0.30:
+                log(
+                    f"🛡️ [{symbol}] #{trade_id} HEDGE CONFIRMED: Strategy favors {bias} @ {conf:.1%}. Clearing losing side."
+                )
+            else:
+                # Still holding hedge
+                if int(seconds_since_rev) % 60 == 0:
+                    log(
+                        f"🛡️ [{symbol}] #{trade_id} HEDGE ACTIVE: Waiting for strategy flip (Current: {bias} @ {conf:.1%})"
+                    )
+                return False
+        except Exception as e:
+            log_error(f"Error checking hedge confirmation for {symbol}: {e}")
+            return False
+
+    # STOP LOSS: Only if SL is enabled
     if not ENABLE_STOP_LOSS:
         return False
 

@@ -110,9 +110,11 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
 
         with db_connection() as conn:
             c = conn.cursor()
+            now_iso = datetime.now(tz=ZoneInfo("UTC")).isoformat()
             c.execute(
-                "UPDATE trades SET reversal_triggered = 1 WHERE symbol = ? AND window_start = ? AND side != ? AND settled = 0",
+                "UPDATE trades SET reversal_triggered = 1, reversal_triggered_at = ? WHERE symbol = ? AND window_start = ? AND side != ? AND settled = 0",
                 (
+                    now_iso,
                     symbol,
                     trade_params["window_start"].isoformat(),
                     trade_params["side"],
@@ -272,9 +274,15 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                 if is_reversal:
                     with db_connection() as conn:
                         c = conn.cursor()
+                        now_iso = datetime.now(tz=ZoneInfo("UTC")).isoformat()
                         c.execute(
-                            "UPDATE trades SET reversal_triggered = 1 WHERE symbol = ? AND window_start = ? AND side != ? AND settled = 0",
-                            (p["symbol"], p["window_start"].isoformat(), p["side"]),
+                            "UPDATE trades SET reversal_triggered = 1, reversal_triggered_at = ? WHERE symbol = ? AND window_start = ? AND side != ? AND settled = 0",
+                            (
+                                now_iso,
+                                p["symbol"],
+                                p["window_start"].isoformat(),
+                                p["side"],
+                            ),
                         )
                         if c.rowcount > 0:
                             log(

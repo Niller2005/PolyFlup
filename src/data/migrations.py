@@ -82,11 +82,31 @@ def migration_003_add_reversal_triggered_column(conn: Any) -> None:
         log("    ✓ reversal_triggered column already exists")
 
 
+def migration_004_add_reversal_triggered_at_column(conn: Any) -> None:
+    """Add reversal_triggered_at column to track when a reversal was initiated"""
+    c = conn.cursor()
+
+    c.execute("PRAGMA table_info(trades)")
+    columns = [row[1] for row in c.fetchall()]
+
+    if "reversal_triggered_at" not in columns:
+        log("  - Adding reversal_triggered_at column...")
+        c.execute("ALTER TABLE trades ADD COLUMN reversal_triggered_at TEXT")
+        log("    ✓ Column added")
+    else:
+        log("    ✓ reversal_triggered_at column already exists")
+
+
 # Migration registry: version -> migration function
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
     (2, "Verify timestamp column", migration_002_add_created_at_column),
     (3, "Add reversal_triggered column", migration_003_add_reversal_triggered_column),
+    (
+        4,
+        "Add reversal_triggered_at column",
+        migration_004_add_reversal_triggered_at_column,
+    ),
 ]
 
 

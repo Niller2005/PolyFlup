@@ -28,7 +28,7 @@ def init_database():
                 final_outcome TEXT, exit_price REAL, pnl_usd REAL, roi_pct REAL,
                 settled BOOLEAN DEFAULT 0, settled_at TEXT, exited_early BOOLEAN DEFAULT 0,
                 scaled_in BOOLEAN DEFAULT 0, is_reversal BOOLEAN DEFAULT 0, target_price REAL,
-                reversal_triggered BOOLEAN DEFAULT 0
+                reversal_triggered BOOLEAN DEFAULT 0, reversal_triggered_at TEXT
             )
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_symbol ON trades(symbol)")
@@ -54,8 +54,8 @@ def save_trade(cursor=None, **kwargs):
             """
             INSERT INTO trades (timestamp, symbol, window_start, window_end, slug, token_id,
             side, edge, entry_price, size, bet_usd, p_yes, best_bid, best_ask,
-            imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered, reversal_triggered_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 datetime.now(tz=ZoneInfo("UTC")).isoformat(),
@@ -80,6 +80,7 @@ def save_trade(cursor=None, **kwargs):
                 kwargs.get("is_reversal", False),
                 kwargs.get("target_price"),
                 kwargs.get("reversal_triggered", False),
+                kwargs.get("reversal_triggered_at"),
             ),
         )
         return cursor.lastrowid
@@ -91,8 +92,8 @@ def save_trade(cursor=None, **kwargs):
                 """
                 INSERT INTO trades (timestamp, symbol, window_start, window_end, slug, token_id,
                 side, edge, entry_price, size, bet_usd, p_yes, best_bid, best_ask,
-                imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered, reversal_triggered_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     datetime.now(tz=ZoneInfo("UTC")).isoformat(),
@@ -117,6 +118,7 @@ def save_trade(cursor=None, **kwargs):
                     kwargs.get("is_reversal", False),
                     kwargs.get("target_price"),
                     kwargs.get("reversal_triggered", False),
+                    kwargs.get("reversal_triggered_at"),
                 ),
             )
             trade_id = c.lastrowid
