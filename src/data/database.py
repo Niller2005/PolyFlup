@@ -120,6 +120,17 @@ def save_trade(cursor=None, **kwargs):
             return trade_id
 
 
+def has_side_for_window(symbol: str, window_start: str, side: str) -> bool:
+    """Check if a trade already exists for the given symbol, window and side"""
+    with db_connection() as conn:
+        c = conn.cursor()
+        c.execute(
+            "SELECT id FROM trades WHERE symbol = ? AND window_start = ? AND side = ? AND settled = 0",
+            (symbol, window_start, side),
+        )
+        return c.fetchone() is not None
+
+
 def has_trade_for_window(symbol: str, window_start: str) -> bool:
     """Check if a trade already exists for the given symbol and window"""
     with db_connection() as conn:
@@ -155,7 +166,9 @@ def generate_statistics():
         win_rate = (winning_trades / total_trades) * 100
 
         # Outcome Breakdown
-        c.execute("SELECT final_outcome, COUNT(*) FROM trades WHERE settled = 1 GROUP BY final_outcome")
+        c.execute(
+            "SELECT final_outcome, COUNT(*) FROM trades WHERE settled = 1 GROUP BY final_outcome"
+        )
         outcomes = c.fetchall()
 
     report = []
@@ -168,13 +181,13 @@ def generate_statistics():
     report.append(f"Total invested:   ${total_invested:.2f}")
     report.append(f"Average ROI:      {avg_roi:.2f}%")
     report.append(f"Total ROI:        {(total_pnl / total_invested) * 100:.2f}%")
-    
+
     if outcomes:
         report.append("-" * 40)
         report.append("OUTCOME BREAKDOWN:")
         for outcome, count in outcomes:
             report.append(f"  {str(outcome or 'UNKNOWN'):<20}: {count}")
-    
+
     report.append("=" * 80)
 
     report_text = "\n".join(report)

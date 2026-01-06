@@ -24,6 +24,9 @@ from src.config.settings import (
     ENABLE_TAKE_PROFIT,
     TAKE_PROFIT_PERCENT,
     ENABLE_REVERSAL,
+    ENABLE_HEDGED_REVERSAL,
+    LOSING_SIDE_MIN_CONFIDENCE,
+    STOP_LOSS_PRICE,
     ENABLE_SCALE_IN,
     SCALE_IN_MIN_PRICE,
     SCALE_IN_MAX_PRICE,
@@ -44,6 +47,7 @@ from src.data.database import (
     generate_statistics,
     get_total_exposure,
     has_trade_for_window,
+    has_side_for_window,
 )
 from src.data.market_data import (
     get_token_ids,
@@ -114,29 +118,46 @@ def _check_target_price_alignment(
     confidence: float,
     current_spot: float,
     target_price: float,
+    current_price: float,
 ) -> bool:
     """Check if target price alignment allows trading"""
+
+    # 1. Underdog Filter: Require higher confidence if we are entering the losing side
+    # A side is considered "losing" if its midpoint price is < $0.50
+    is_underdog = current_price < 0.50
+
+    if is_underdog:
+        if confidence < LOSING_SIDE_MIN_CONFIDENCE:
+            log(
+                f"[{symbol}] ⚠️ {side} is UNDERDOG (${current_price:.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_MIN_CONFIDENCE:.0%}. SKIPPING."
+            )
+            return False
+        else:
+            log(
+                f"[{symbol}] 🔥 HIGH CONFIDENCE UNDERDOG: Entering {side} at ${current_price:.2f} (Confidence: {confidence:.1%})"
+            )
+
+    # 2. Spot-vs-Target Alignment (Safety Layer)
     if target_price > 0 and current_spot > 0:
         from src.config.settings import WINDOW_START_PRICE_BUFFER_PCT
 
         buffer = target_price * (WINDOW_START_PRICE_BUFFER_PCT / 100.0)
 
-        is_winning_side = False
+        is_winning_side_on_spot = False
         if side == "UP":
-            is_winning_side = current_spot >= (target_price - buffer)
+            is_winning_side_on_spot = current_spot >= (target_price - buffer)
         elif side == "DOWN":
-            is_winning_side = current_spot <= (target_price + buffer)
+            is_winning_side_on_spot = current_spot <= (target_price + buffer)
 
-        if not is_winning_side:
-            LOSING_SIDE_BYPASS_CONFIDENCE = 0.45
-            if confidence < LOSING_SIDE_BYPASS_CONFIDENCE:
+        if not is_winning_side_on_spot:
+            if confidence < LOSING_SIDE_MIN_CONFIDENCE:
                 log(
-                    f"[{symbol}] ⚠️ {side} is on LOSING side (Spot ${current_spot:,.2f} vs Target ${target_price:,.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_BYPASS_CONFIDENCE:.0%}. SKIPPING."
+                    f"[{symbol}] ⚠️ {side} is losing on SPOT (${current_spot:,.2f} vs Target ${target_price:,.2f}) and confidence {confidence:.1%} < {LOSING_SIDE_MIN_CONFIDENCE:.0%}. SKIPPING."
                 )
                 return False
             else:
                 log(
-                    f"[{symbol}] 🔥 HIGH CONFIDENCE BYPASS: Entering {side} on losing side (Confidence: {confidence:.1%})"
+                    f"[{symbol}] 🔥 HIGH CONFIDENCE REVERSAL: Entering {side} against spot direction (Confidence: {confidence:.1%})"
                 )
 
     return True
@@ -172,16 +193,13 @@ def _prepare_trade_params(
 ) -> Optional[dict]:
     """
     Prepare trade parameters without executing the order
-
-    Returns:
-        Dict with trade parameters or None if no trade should be made
     """
     up_id, down_id = get_token_ids(symbol)
     if not up_id or not down_id:
         if verbose:
             log(f"[{symbol}] ❌ Market not found")
             if add_spacing:
-                log("")  # Add blank line
+                log("")
         return
 
     client = get_clob_client()
@@ -193,14 +211,13 @@ def _prepare_trade_params(
         if verbose:
             log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
             if add_spacing:
-                log("")  # Add blank line
+                log("")
         return
 
     actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
 
     if actual_side == "NEUTRAL":
         if verbose:
-            # Check if this is an "Empty Book" scenario or just low confidence
             if confidence == 0 and bias == "NEUTRAL":
                 log(f"[{symbol}] ⚪ Neutral / No Signal")
             else:
@@ -212,20 +229,28 @@ def _prepare_trade_params(
                 log("")
         return
 
+    if actual_side == "UP":
+        token_id, side, price = up_id, "UP", p_up
+    else:
+        token_id, side, price = down_id, "DOWN", 1.0 - p_up
+
+    # NEW: Check if we already have a trade for THIS SIDE in this window
+    window_start, window_end = get_window_times(symbol)
+    if has_side_for_window(symbol, window_start.isoformat(), side):
+        if verbose:
+            log(
+                f"[{symbol}] ℹ️ Already have an open {side} position for this window. Skipping duplicate entry."
+            )
+            if add_spacing:
+                log("")
+        return None
+
     if actual_side == bias:
         log(f"[{symbol}] ✅ Trend Following: {bias} (Confidence: {confidence:.1%})")
     else:
         log(
             f"[{symbol}] 🔄 Contrarian Entry: {actual_side} (Bias flipping from {bias} @ {confidence:.1%})"
         )
-
-    if actual_side == "UP":
-        token_id, side, price = up_id, "UP", p_up
-    else:
-        token_id, side, price = down_id, "DOWN", 1.0 - p_up
-
-    # Return trade parameters
-    window_start, window_end = get_window_times(symbol)
 
     # Check lateness
     now_et = datetime.now(tz=ZoneInfo("America/New_York"))
@@ -252,10 +277,10 @@ def _prepare_trade_params(
         current_spot = float(signals.get("current_spot", 0))
 
     if not _check_target_price_alignment(
-        symbol, side, confidence, current_spot, target_price
+        symbol, side, confidence, current_spot, target_price, price
     ):
         if add_spacing and verbose:
-            log("")  # Add blank line
+            log("")
         return
 
     # Check filters
@@ -287,7 +312,7 @@ def _prepare_trade_params(
     if not bfxd_ok:
         log(f"[{symbol}] ⛔ {core_summary} | status: BLOCKED")
         if add_spacing:
-            log("")  # Add blank line
+            log("")
         return
 
     log(f"[{symbol}] ✅ {core_summary} | status: ENTERING TRADE")
@@ -295,7 +320,7 @@ def _prepare_trade_params(
     if price <= 0:
         log(f"[{symbol}] ERROR: Invalid price {price}")
         if add_spacing:
-            log("")  # Add blank line
+            log("")
         return
 
     # Clamp and round to minimum tick size (0.01)
@@ -325,10 +350,7 @@ def _prepare_trade_params(
 
 
 def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
-    """
-    Execute trading logic for a symbol (single order)
-    Returns the number of successful trades placed (0 or 1).
-    """
+    """Execute trading logic for a symbol"""
     trade_params = _prepare_trade_params(
         symbol, balance, add_spacing=True, verbose=verbose
     )
@@ -341,7 +363,6 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
         trade_params["token_id"], trade_params["price"], trade_params["size"]
     )
 
-    # Only proceed if order was successful
     if not result["success"]:
         log(f"[{trade_params['symbol']}] ❌ Order failed, skipping trade tracking")
         return 0
@@ -350,7 +371,6 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
     actual_price = trade_params["price"]
     actual_status = result["status"]
 
-    # If already matched, try to get the actual execution details immediately
     if actual_status.upper() in ["FILLED", "MATCHED"]:
         try:
             o_data = get_order(result["order_id"])
@@ -361,7 +381,6 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
                     actual_size = sz_m
                     if pr_m > 0:
                         actual_price = pr_m
-                    # Recalculate bet_usd based on actual fill
                     trade_params["bet_usd"] = actual_size * actual_price
         except Exception as e:
             log(
@@ -396,7 +415,7 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
         )
         log("")
         log(
-            f"[{trade_params['symbol']}] 🚀 #{trade_id} {trade_params['side']} ${trade_params['bet_usd']:.2f} @ {trade_params['price']:.4f} | {result['status']} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
+            f"[{trade_params['symbol']}] 🚀 #{trade_id} {trade_params['side']} ${trade_params['bet_usd']:.2f} @ {actual_price:.4f} | {actual_status} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
         )
         return 1
     except Exception as e:
@@ -405,12 +424,7 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
 
 
 def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> int:
-    """
-    Execute trading logic for multiple symbols using batch orders
-    Returns the number of successful trades placed.
-    Returns -1 if all markets were skipped specifically due to spread == 1.0 (empty book).
-    """
-    # 1. Bulk get tokens and check spreads to pre-filter
+    """Execute trading logic for multiple symbols using batch orders"""
     market_tokens = {}
     all_token_ids = []
 
@@ -420,14 +434,11 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
             market_tokens[symbol] = (up_id, down_id)
             all_token_ids.extend([up_id, down_id])
 
-    # Register all tokens at once with WebSocket manager
     if all_token_ids:
         ws_manager.subscribe_to_prices(all_token_ids)
 
-    # Bulk check spreads
     spreads = get_bulk_spreads(all_token_ids)
 
-    # Filter symbols where either side has wide spread
     valid_symbols = []
     skipped_due_to_empty_book = 0
     for symbol in symbols:
@@ -435,8 +446,6 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
             continue
 
         up_id, down_id = market_tokens[symbol]
-
-        # Check liquidity from bulk spreads - default to single check if bulk missing
         up_spread = spreads.get(str(up_id))
         if up_spread is None:
             up_spread = get_spread(up_id)
@@ -445,12 +454,10 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         if down_spread is None:
             down_spread = get_spread(down_id)
 
-        # Fallback to 0 if still None (assume liquid rather than skip)
         up_spread = float(up_spread) if up_spread is not None else 0.0
         down_spread = float(down_spread) if down_spread is not None else 0.0
 
         if up_spread >= 1.0 or down_spread >= 1.0:
-            # Spread of 1.0 means NO orders on one side - typical at window start
             if verbose:
                 log(
                     f"[{symbol}] ⏳ No liquidity yet (Spread: 1.0). Waiting for market makers..."
@@ -473,7 +480,6 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
             return -1
         return 0
 
-    # 2. Prepare trades for remaining symbols
     trade_params_list = []
     for i, symbol in enumerate(valid_symbols):
         params = _prepare_trade_params(
@@ -482,14 +488,12 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         if params:
             trade_params_list.append(params)
 
-        # Add spacing between symbols
         if i < len(valid_symbols) - 1 and verbose:
             log("")
 
     if not trade_params_list:
         return 0
 
-    # 3. Execute batch placement
     orders = [
         {
             "token_id": p["token_id"],
@@ -502,7 +506,6 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
 
     results = place_batch_orders(orders)
 
-    # 4. Save successful trades
     placed_count = 0
     for i, result in enumerate(results):
         if i < len(trade_params_list) and result["success"]:
@@ -513,7 +516,6 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
             actual_price = p["price"]
             actual_status = result["status"]
 
-            # Sync execution details for matched orders
             if actual_status.upper() in ["FILLED", "MATCHED"]:
                 try:
                     o_data = get_order(result["order_id"])
@@ -573,29 +575,26 @@ def main():
     setup_api_creds()
     init_database()
 
-    # Start WebSocket Manager
     ws_manager.start()
     init_ws_callbacks()
 
     if FUNDER_PROXY and FUNDER_PROXY.startswith("0x"):
         addr = FUNDER_PROXY
-        log_addr_type = "Funder"
     else:
         addr = Account.from_key(PROXY_PK).address
-        log_addr_type = "Proxy"
 
     log("=" * 90)
     log(
         f"🤖 POLYASTRA | Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC"
     )
     log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: {BET_PERCENT}%")
+    log(f"⚙️  HEDGED REVERSAL: {'ENABLED' if ENABLE_HEDGED_REVERSAL else 'DISABLED'}")
+    log(f"⚙️  STOP LOSS: Midpoint <= ${STOP_LOSS_PRICE:.2f}")
     log("=" * 90)
 
-    # Recover and start monitoring any existing open positions
     recover_open_positions()
     sync_positions_with_exchange(addr)
 
-    # Immediately check positions to ensure stop loss/take profit monitoring is active
     log("🔍 Performing initial position check...")
     check_open_positions(verbose=True, check_orders=True)
 
@@ -603,7 +602,7 @@ def main():
     last_order_check = time.time()
     last_verbose_log = time.time()
     last_exit_stats_log = time.time()
-    last_entry_check = 0  # To control entry evaluation frequency
+    last_entry_check = 0
     last_settle_check = time.time()
 
     log("🏁 Bot initialized. Entering continuous monitoring loop...")
@@ -615,15 +614,12 @@ def main():
             is_verbose_cycle = now_ts - last_verbose_log >= 60
             is_order_check_cycle = now_ts - last_order_check >= 30
 
-            # 1. Check Positions (Every 1 second)
             if now_ts - last_position_check >= 1:
                 check_open_positions(
                     verbose=is_verbose_cycle, check_orders=is_order_check_cycle
                 )
                 last_position_check = now_ts
 
-            # 2. Check for New Entries (Every 20 seconds)
-            # Only if within MAX_ENTRY_LATENESS_SEC (10 mins) of any market window
             if now_ts - last_entry_check >= 20:
                 last_entry_check = now_ts
                 current_balance = get_balance(addr)
@@ -634,20 +630,21 @@ def main():
                     lateness = (now_et - w_start_et).total_seconds()
 
                     if 0 <= lateness <= MAX_ENTRY_LATENESS_SEC:
-                        if not has_trade_for_window(m, w_start_et.isoformat()):
+                        # If hedged reversal is on, we allow entering even if one trade exists
+                        # but _prepare_trade_params will ensure we don't double-up on the SAME side
+                        if ENABLE_HEDGED_REVERSAL or not has_trade_for_window(
+                            m, w_start_et.isoformat()
+                        ):
                             eligible_markets.append(m)
 
                 if eligible_markets:
                     current_balance = get_balance(addr)
-
-                    # Prevent trading with extremely low balance to avoid API errors
                     if current_balance < 1.0:
                         if is_verbose_cycle:
                             log(
                                 f"💰 Balance too low ({current_balance:.2f} USDC). Skipping trade evaluation."
                             )
                     else:
-                        # Use batch orders if multiple eligible
                         if len(eligible_markets) > 1:
                             trade_symbols_batch(
                                 eligible_markets,
@@ -661,7 +658,6 @@ def main():
                                 verbose=is_verbose_cycle,
                             )
 
-            # 3. Process Notifications and Settle Trades (Every 30-60 seconds)
             if is_order_check_cycle:
                 process_notifications()
                 last_order_check = now_ts
@@ -670,27 +666,20 @@ def main():
                 check_and_settle_trades()
                 last_settle_check = now_ts
 
-            # 4. Reporting and Maintenance
             if is_verbose_cycle:
                 last_verbose_log = now_ts
-                # Log exit plan stats every 15 minutes
                 if now_ts - last_exit_stats_log >= 900:
                     exit_stats = get_exit_plan_stats()
                     last_exit_stats_log = now_ts
-
-                # Performance report every ~4 hours
                 if int(now_ts) % 14400 < 60:
                     generate_statistics()
 
-            # Small sleep to prevent CPU spiking
             time.sleep(0.5)
 
         except KeyboardInterrupt:
             log("\n⛔ Bot stopped by user")
-            log("📊 Generating final report...")
             generate_statistics()
             break
-
         except Exception as e:
             log(f"❌ Critical error: {e}")
             import traceback

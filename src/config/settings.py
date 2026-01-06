@@ -25,9 +25,16 @@ WINDOW_START_PRICE_BUFFER_PCT = float(
 # Position Management
 ENABLE_STOP_LOSS = os.getenv("ENABLE_STOP_LOSS", "YES").upper() == "YES"
 STOP_LOSS_PERCENT = float(os.getenv("STOP_LOSS_PERCENT", "40.0"))
+STOP_LOSS_PRICE = float(
+    os.getenv("STOP_LOSS_PRICE", "0.30")
+)  # Sell if midpoint <= 30 cents
+LOSING_SIDE_MIN_CONFIDENCE = float(
+    os.getenv("LOSING_SIDE_MIN_CONFIDENCE", "0.40")
+)  # Min 40% confidence for losers
 ENABLE_TAKE_PROFIT = os.getenv("ENABLE_TAKE_PROFIT", "NO").upper() == "YES"
 TAKE_PROFIT_PERCENT = float(os.getenv("TAKE_PROFIT_PERCENT", "80.0"))
 ENABLE_REVERSAL = os.getenv("ENABLE_REVERSAL", "YES").upper() == "YES"
+ENABLE_HEDGED_REVERSAL = os.getenv("ENABLE_HEDGED_REVERSAL", "YES").upper() == "YES"
 
 # Unfilled Order Management (separate from stop loss)
 CANCEL_UNFILLED_ORDERS = os.getenv("CANCEL_UNFILLED_ORDERS", "NO").upper() == "YES"
