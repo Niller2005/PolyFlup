@@ -44,7 +44,9 @@ def _check_exit_plan(
     is_scoring=None,
 ):
     if not ENABLE_EXIT_PLAN or buy_status not in ["FILLED", "MATCHED"] or size == 0:
-        return
+        return False
+
+    repaired = False
     try:
         age = (now - datetime.fromisoformat(ts)).total_seconds()
     except:
@@ -127,6 +129,7 @@ def _check_exit_plan(
                 )
                 limit_sell_id = oid
                 _last_exit_attempt[trade_id] = now.timestamp()
+                repaired = True
             else:
                 err = res.get("error", "Unknown error")
                 log(f"   ❌ [{symbol}] Failed to place exit plan: {err}")
@@ -136,49 +139,69 @@ def _check_exit_plan(
                 else:
                     _last_exit_attempt[trade_id] = now.timestamp()
 
-    elif check_orders:
-        # Existing exit plan - verify it's correct and still active
+    elif limit_sell_id:
+        # 1-SECOND CYCLE HEALING: Ensure exit plan size matches current trade size
+        # We fetch the order info every cycle if it's not a check_orders cycle
+        # but only for size verification if needed.
+        # Optimization: We already have 'size' and 'limit_sell_id'.
+        # However, to know the order's size we MUST fetch it from exchange or cache.
         o_data = get_order(limit_sell_id)
         if o_data:
             o_status = o_data.get("status", "").upper()
-            if o_status in ["FILLED", "MATCHED"]:
-                # Will be handled by the next cycle's main loop check
-                pass
-            elif o_status == "LIVE":
-                # Self-healing: Ensure exit plan size matches current trade size
+            if o_status == "LIVE":
                 o_size = float(o_data.get("original_size", 0))
                 if truncate_float(o_size, 2) != truncate_float(size, 2):
-                    log(
-                        f"   🔧 [{symbol}] #{trade_id} Exit plan size mismatch: {o_size} != {size}. Repairing..."
-                    )
-                    # Clear from DB immediately to allow retry in next cycle, cancel fire-and-forget
+                    # Repair needed
                     cancel_order(limit_sell_id)
+                    res = place_limit_order(token_id, EXIT_PRICE_TARGET, size, SELL)
+                    if res["success"] or res.get("order_id"):
+                        new_oid = res.get("order_id")
+                        c.execute(
+                            "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                            (new_oid, trade_id),
+                        )
+                        log(
+                            f"   🔧 [{symbol}] #{trade_id} Exit plan size repaired: {o_size} -> {size}"
+                        )
+                        repaired = True
+                        limit_sell_id = new_oid
+                    else:
+                        # If replacement fails, clear from DB to allow retry in next cycle
+                        c.execute(
+                            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                            (trade_id,),
+                        )
+                        limit_sell_id = None
+
+                    _last_exit_attempt[trade_id] = now.timestamp()
+                    return repaired
+
+            elif check_orders:
+                # Other maintenance checks only on 10s cycle
+                if o_status in ["FILLED", "MATCHED"]:
+                    pass
+                elif o_status in ["CANCELED", "EXPIRED"]:
+                    log(
+                        f"   ⚠️ [{symbol}] #{trade_id} Exit plan order was {o_status}. Clearing from DB to allow retry."
+                    )
                     c.execute(
                         "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
                         (trade_id,),
                     )
-                    _last_exit_attempt.pop(trade_id, None)  # Retry immediately
-                    return  # Exit early to avoid further checks on cancelled order
-            elif o_status in ["CANCELED", "EXPIRED"]:
+                    limit_sell_id = None
+                    _last_exit_attempt.pop(trade_id, None)
+        else:
+            # Order not found on exchange
+            if check_orders:
                 log(
-                    f"   ⚠️ [{symbol}] #{trade_id} Exit plan order was {o_status}. Clearing from DB to allow retry."
+                    f"   ⚠️ [{symbol}] #{trade_id} Exit plan order {limit_sell_id[:10]}... not found on exchange. Clearing."
                 )
                 c.execute(
                     "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
                     (trade_id,),
                 )
                 limit_sell_id = None
-                _last_exit_attempt.pop(trade_id, None)  # Retry immediately
-        else:
-            # Order not found on exchange
-            log(
-                f"   ⚠️ [{symbol}] #{trade_id} Exit plan order {limit_sell_id[:10]}... not found on exchange. Clearing."
-            )
-            c.execute(
-                "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?", (trade_id,)
-            )
-            limit_sell_id = None
-            _last_exit_attempt.pop(trade_id, None)  # Retry immediately
+                _last_exit_attempt.pop(trade_id, None)
 
     if verbose and side:
         if buy_status == "EXIT_PLAN_PENDING_SETTLEMENT":
@@ -192,3 +215,5 @@ def _check_exit_plan(
         else:
             status += " | ⏳ Exit pending"
         log(f"  {'📈' if pnl_pct > 0 else '📉'} [{symbol}] {status}")
+
+    return repaired
