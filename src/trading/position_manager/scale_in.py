@@ -9,7 +9,6 @@ from src.config.settings import (
 )
 from src.utils.logger import log
 from src.trading.orders import get_order, place_order, place_market_order
-from .exit_plan import _update_exit_plan_after_scale_in
 
 from src.data.market_data import get_current_spot_price
 
@@ -56,9 +55,6 @@ def _check_scale_in(
                     )
                     log(
                         f"📈 [{symbol}] #{trade_id} Scale-in filled (delayed): +{s_matched:.2f} shares"
-                    )
-                    _update_exit_plan_after_scale_in(
-                        symbol, trade_id, token_id, new_size, l_sell_id, c, conn
                     )
                     return
             elif o_data and o_data.get("status", "").upper() in ["CANCELED", "EXPIRED"]:
@@ -147,11 +143,6 @@ def _check_scale_in(
             c.execute(
                 "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
                 (new_size, new_bet, new_bet / new_size, trade_id),
-            )
-
-            # CRITICAL: Update exit plan to cover the new total size
-            _update_exit_plan_after_scale_in(
-                symbol, trade_id, token_id, new_size, l_sell_id, c, conn
             )
         else:
             log(

@@ -8,7 +8,6 @@ from src.config.settings import (
 )
 from src.utils.logger import log
 from src.trading.orders import (
-    get_order_status,
     get_order,
     cancel_order,
     place_limit_order,
@@ -18,92 +17,6 @@ from src.trading.orders import (
     SELL,
 )
 from .shared import _last_exit_attempt
-
-
-def _update_exit_plan_after_scale_in(
-    symbol, trade_id, token_id, new_size, old_order_id, c, conn
-) -> bool:
-    """Updates exit plan order with new size after scale-in. Returns True if successful."""
-    if not old_order_id:
-        # This is fine, maybe exit plan wasn't placed yet (age < 60s)
-        return False
-
-    if not ENABLE_EXIT_PLAN:
-        return False
-
-    status = get_order_status(old_order_id)
-    if status in ["FILLED", "MATCHED"]:
-        log(
-            f"   ℹ️ [{symbol}] #{trade_id} Exit plan already filled, no need to update for scale-in."
-        )
-        return True
-
-    log(
-        f"   🔄 [{symbol}] #{trade_id} Updating exit plan: {old_order_id[:10]}... -> New size {new_size:.2f}"
-    )
-
-    # If we successfully cancel (or it's already gone), try to place new one
-    if cancel_order(old_order_id):
-        # Clear the old ID first to avoid being stuck if placement fails
-        c.execute(
-            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
-            (trade_id,),
-        )
-
-        # Ensure size is truncated correctly
-        truncated_size = truncate_float(new_size, 2)
-
-        res = place_limit_order(token_id, EXIT_PRICE_TARGET, truncated_size, SELL, True)
-        if res["success"]:
-            new_oid = res.get("order_id")
-            c.execute(
-                "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
-                (new_oid, trade_id),
-            )
-            oid_str = str(new_oid)[:10] if new_oid else "N/A"
-            log(
-                f"   ✅ [{symbol}] #{trade_id} Updated exit plan for new size: {truncated_size:.2f} (ID: {oid_str}...)"
-            )
-            return True
-        else:
-            log(
-                f"   ❌ [{symbol}] Failed to place new exit plan after cancel: {res.get('error')}"
-            )
-            return False
-    return False
-
-
-def _update_exit_plan_to_new_price(
-    symbol, trade_id, token_id, size, old_order_id, new_price, c, conn
-) -> bool:
-    """Updates exit plan order with new price. Returns True if successful."""
-    if not old_order_id:
-        return False
-
-    if get_order_status(old_order_id) in ["FILLED", "MATCHED"]:
-        return True
-
-    if cancel_order(old_order_id):
-        # Clear the old ID first
-        c.execute(
-            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
-            (trade_id,),
-        )
-
-        res = place_limit_order(token_id, new_price, size, SELL, True)
-        if res["success"]:
-            new_oid = res.get("order_id")
-            c.execute(
-                "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
-                (new_oid, trade_id),
-            )
-            return True
-        else:
-            log(
-                f"   ❌ [{symbol}] #{trade_id} Failed to update exit plan price: {res.get('error')}"
-            )
-            return False
-    return False
 
 
 def _check_exit_plan(
@@ -146,8 +59,6 @@ def _check_exit_plan(
                     )
                 return
 
-            _last_exit_attempt[trade_id] = now.timestamp()
-
             # Check for existing SELL orders on exchange before placing new one
             try:
                 open_orders = get_orders(asset_id=token_id)
@@ -168,6 +79,7 @@ def _check_exit_plan(
                                 "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
                                 (oid_str, trade_id),
                             )
+                            _last_exit_attempt[trade_id] = now.timestamp()
                             return
             except Exception as e:
                 if verbose:
@@ -204,12 +116,6 @@ def _check_exit_plan(
                         )
                     return
 
-                    if verbose:
-                        log(
-                            f"   ⏳ [{symbol}] #{trade_id} Exit pending: Balance is 0.0 (waiting for API sync...)"
-                        )
-                    return
-
             res = place_limit_order(token_id, EXIT_PRICE_TARGET, size, SELL)
             if res["success"] or res.get("order_id"):
                 oid = res.get("order_id")
@@ -218,6 +124,15 @@ def _check_exit_plan(
                     (oid, trade_id),
                 )
                 limit_sell_id = oid
+                _last_exit_attempt[trade_id] = now.timestamp()
+            else:
+                err = res.get("error", "Unknown error")
+                log(f"   ❌ [{symbol}] Failed to place exit plan: {err}")
+                if "Insufficient funds" in str(err):
+                    # Clear cooldown to retry immediately after balance re-sync in next cycle
+                    _last_exit_attempt.pop(trade_id, None)
+                else:
+                    _last_exit_attempt[trade_id] = now.timestamp()
 
     elif check_orders:
         # Existing exit plan - verify it's correct and still active
@@ -234,9 +149,12 @@ def _check_exit_plan(
                     log(
                         f"   🔧 [{symbol}] #{trade_id} Exit plan size mismatch: {o_size} != {size}. Repairing..."
                     )
-                    _update_exit_plan_after_scale_in(
-                        symbol, trade_id, token_id, size, limit_sell_id, c, conn
-                    )
+                    if cancel_order(limit_sell_id):
+                        c.execute(
+                            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                            (trade_id,),
+                        )
+                        _last_exit_attempt.pop(trade_id, None)  # Retry immediately
             elif o_status in ["CANCELED", "EXPIRED"]:
                 log(
                     f"   ⚠️ [{symbol}] #{trade_id} Exit plan order was {o_status}. Clearing from DB to allow retry."
@@ -246,6 +164,7 @@ def _check_exit_plan(
                     (trade_id,),
                 )
                 limit_sell_id = None
+                _last_exit_attempt.pop(trade_id, None)  # Retry immediately
         else:
             # Order not found on exchange
             log(
@@ -255,6 +174,7 @@ def _check_exit_plan(
                 "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?", (trade_id,)
             )
             limit_sell_id = None
+            _last_exit_attempt.pop(trade_id, None)  # Retry immediately
 
     if verbose and side:
         if buy_status == "EXIT_PLAN_PENDING_SETTLEMENT":

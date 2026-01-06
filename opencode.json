@@ -2,13 +2,5 @@
   "$schema": "https://opencode.ai/config.json",
   "instructions": [
     "instructions/*.md"
-  ],
-   "permission": {
-    "read": {
-      "*": "allow",
-      "*.env": "deny",
-      "*.env.*": "deny",
-      "*.env.example": "allow"
-    }
-  }
+  ]
 }
