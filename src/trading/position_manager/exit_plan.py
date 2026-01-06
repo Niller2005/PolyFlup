@@ -93,10 +93,11 @@ def _check_exit_plan(
             actual_bal = balance_info.get("balance", 0) if balance_info else 0
 
             # BI-DIRECTIONAL HEALING: Sync DB size with actual wallet balance
-            if abs(actual_bal - size) > 0.01:
+            # Use a much tighter threshold (0.0001) for 6-decimal precision tokens
+            if abs(actual_bal - size) > 0.0001:
                 if actual_bal > 0:
                     log(
-                        f"   🔧 [{symbol}] #{trade_id} Syncing size to match balance: {size:.2f} -> {actual_bal:.2f}"
+                        f"   🔧 [{symbol}] #{trade_id} Syncing size to match balance: {size:.4f} -> {actual_bal:.4f}"
                     )
                     c.execute(
                         "UPDATE trades SET size = ?, bet_usd = ? * entry_price WHERE id = ?",
@@ -120,7 +121,17 @@ def _check_exit_plan(
                         )
                     return
 
-            res = place_limit_order(token_id, EXIT_PRICE_TARGET, size, SELL)
+            # Ensure we don't try to sell more than we actually have, even if threshold didn't trigger
+            sell_size = truncate_float(min(size, actual_bal), 2)
+
+            if sell_size < 5.0:
+                if verbose:
+                    log(
+                        f"   ⚠️  [{symbol}] #{trade_id} size {sell_size} < 5.0 minimum. Cannot place exit plan."
+                    )
+                return
+
+            res = place_limit_order(token_id, EXIT_PRICE_TARGET, sell_size, SELL)
             if res["success"] or res.get("order_id"):
                 oid = res.get("order_id")
                 c.execute(

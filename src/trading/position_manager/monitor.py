@@ -91,6 +91,7 @@ def check_open_positions(verbose=True, check_orders=False):
                 rev_trig,
                 rev_trig_at,
             ) in open_positions:
+                bet = bet or 0.0
                 try:
                     c.execute("SELECT settled FROM trades WHERE id = ?", (tid,))
                     chk_res = c.fetchone()

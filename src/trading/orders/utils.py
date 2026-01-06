@@ -88,7 +88,7 @@ def _parse_api_error(error_str: str) -> str:
         if code in error_upper:
             return f"{code}: {desc}"
     if "BALANCE" in error_upper or "ALLOWANCE" in error_upper:
-        return "Insufficient funds"
+        return f"Insufficient funds ({error_str})"
     if "RATE" in error_upper and "LIMIT" in error_upper:
         return "Rate limit"
     return error_str

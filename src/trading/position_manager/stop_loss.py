@@ -301,9 +301,10 @@ def _check_stop_loss(
             )
             return True
 
-        if abs(actual_balance - size) > 0.01:
+        # Use a tighter threshold (0.0001) for 6-decimal precision tokens
+        if abs(actual_balance - size) > 0.0001:
             log(
-                f"   📊 [{symbol}] #{trade_id} Sync: Database size {size:.2f} != actual balance {actual_balance:.2f} - Updating sell size."
+                f"   📊 [{symbol}] #{trade_id} Sync: Database size {size:.4f} != actual balance {actual_balance:.4f} - Updating sell size."
             )
             size = actual_balance
             c.execute(
