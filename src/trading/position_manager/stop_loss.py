@@ -59,7 +59,7 @@ def _trigger_price_based_reversal(
 
         if has_side_for_window(symbol, window_start.isoformat(), rev_side):
             log(
-                f"   ℹ️ [{symbol}] Already have an open {rev_side} position for this window. Linking as hedge."
+                f"   ℹ️  [{symbol}] Already have an open {rev_side} position for this window. Linking as hedge."
             )
             return True
 
@@ -232,13 +232,13 @@ def _check_stop_loss(
             target_bias = "DOWN" if side == "UP" else "UP"
             if bias == target_bias and conf > 0.30:
                 log(
-                    f"🛡️ [{symbol}] #{trade_id} HEDGE CONFIRMED: Strategy favors {bias} @ {conf:.1%}. Clearing losing side."
+                    f"🛡️  [{symbol}] #{trade_id} HEDGE CONFIRMED: Strategy favors {bias} @ {conf:.1%}. Clearing losing side."
                 )
             else:
                 # Still holding hedge
                 if int(seconds_since_rev) % 60 == 0:
                     log(
-                        f"🛡️ [{symbol}] #{trade_id} HEDGE ACTIVE: Waiting for strategy flip (Current: {bias} @ {conf:.1%})"
+                        f"🛡️  [{symbol}] #{trade_id} HEDGE ACTIVE: Waiting for strategy flip (Current: {bias} @ {conf:.1%})"
                     )
                 return False
         except Exception as e:
@@ -272,12 +272,12 @@ def _check_stop_loss(
         if side == "UP" and current_spot >= target_price:
             is_on_losing_side = False
             log(
-                f"ℹ️ [{symbol}] Midpoint is weak ({current_price:.2f}) but Spot is ABOVE target - HOLDING"
+                f"ℹ️  [{symbol}] Midpoint is weak ({current_price:.2f}) but Spot is ABOVE target - HOLDING"
             )
         elif side == "DOWN" and current_spot <= target_price:
             is_on_losing_side = False
             log(
-                f"ℹ️ [{symbol}] Midpoint is weak ({current_price:.2f}) but Spot is BELOW target - HOLDING"
+                f"ℹ️  [{symbol}] Midpoint is weak ({current_price:.2f}) but Spot is BELOW target - HOLDING"
             )
 
     if not is_on_losing_side:
@@ -293,7 +293,7 @@ def _check_stop_loss(
         actual_balance = balance_info.get("balance", 0) if balance_info else 0
         if actual_balance < 0.1:
             log(
-                f"   ⚠️ [{symbol}] #{trade_id} Stop Loss: Balance is 0 or near 0. Settling as ghost trade."
+                f"   ⚠️  [{symbol}] #{trade_id} Stop Loss: Balance is 0 or near 0. Settling as ghost trade."
             )
             c.execute(
                 "UPDATE trades SET settled=1, final_outcome='STOP_LOSS_GHOST_FILL', scale_in_order_id=NULL, pnl_usd=0.0, roi_pct=0.0 WHERE id=?",
@@ -311,7 +311,7 @@ def _check_stop_loss(
                 (size, trade_id),
             )
     except Exception as e:
-        log(f"   ⚠️ [{symbol}] Could not verify balance before sell: {e}")
+        log(f"   ⚠️  [{symbol}] Could not verify balance before sell: {e}")
 
     log(
         f"🛑 [{symbol}] #{trade_id} {outcome}: Midpoint ${current_price:.2f} <= ${dynamic_trigger:.2f} trigger"
@@ -322,7 +322,7 @@ def _check_stop_loss(
         l_status = get_order_status(limit_sell_order_id)
         if l_status in ["FILLED", "MATCHED"]:
             log(
-                f"   ℹ️ [{symbol}] #{trade_id} Stop loss skipped: Exit plan already filled."
+                f"   ℹ️  [{symbol}] #{trade_id} Stop loss skipped: Exit plan already filled."
             )
             c.execute(
                 "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1, pnl_usd=?, roi_pct=? WHERE id=?",

@@ -121,7 +121,7 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
                 ),
             )
             if c.rowcount > 0:
-                log(f"   🛡️ [{symbol}] Original trade marked as reversal_triggered")
+                log(f"   🛡️  [{symbol}] Original trade marked as reversal_triggered")
 
     return 1 if trade_id else 0
 
@@ -171,7 +171,7 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         if up_spread > MAX_SPREAD or down_spread > MAX_SPREAD:
             if verbose:
                 log(
-                    f"[{symbol}] ⚠️ Spread too wide (UP: {up_spread:.3f}, DOWN: {down_spread:.3f}). SKIPPING."
+                    f"[{symbol}] ⚠️  Spread too wide (UP: {up_spread:.3f}, DOWN: {down_spread:.3f}). SKIPPING."
                 )
             continue
         valid_symbols.append(symbol)
@@ -296,7 +296,7 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                         )
                         if c.rowcount > 0:
                             log(
-                                f"   🛡️ [{p['symbol']}] Original trade marked as reversal_triggered"
+                                f"   🛡️  [{p['symbol']}] Original trade marked as reversal_triggered"
                             )
             except Exception as e:
                 log_error(f"[{p['symbol']}] Trade completion error: {e}")

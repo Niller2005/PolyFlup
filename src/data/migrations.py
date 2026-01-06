@@ -64,7 +64,7 @@ def migration_002_add_created_at_column(conn: Any) -> None:
     if "timestamp" in columns:
         log("    ✓ timestamp column exists (serves as created_at)")
     else:
-        log("    ⚠️ timestamp column missing - schema needs rebuild")
+        log("    ⚠️  timestamp column missing - schema needs rebuild")
 
 
 def migration_003_add_reversal_triggered_column(conn: Any) -> None:

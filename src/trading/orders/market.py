@@ -40,11 +40,11 @@ def place_market_order(
         if not silent_on_error:
             if "Insufficient funds" in emsg and side == "SELL":
                 log(
-                    f"   ⚠️ {side} Market Order: {emsg} (likely already filled or locked)"
+                    f"   ⚠️  {side} Market Order: {emsg} (likely already filled or locked)"
                 )
             elif "no orders found to match" in emsg.lower():
                 log(
-                    f"   ⚠️ {side} Market Order: No liquidity found to match (FAK order killed)"
+                    f"   ⚠️  {side} Market Order: No liquidity found to match (FAK order killed)"
                 )
             else:
                 log_error(f"{side} Market Order error: {emsg}")

@@ -150,7 +150,7 @@ def _check_scale_in(
             )
         else:
             log(
-                f"📈 [{symbol}] Trade #{trade_id} {side} | ⚠️ SCALE IN Market order filled 0 shares."
+                f"📈 [{symbol}] Trade #{trade_id} {side} | ⚠️  SCALE IN Market order filled 0 shares."
             )
     else:
         log(

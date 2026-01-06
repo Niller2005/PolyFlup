@@ -75,7 +75,7 @@ def place_limit_order(
             pass
         if not (silent_on_balance_error and "balance" in str(e).lower()):
             if "Insufficient funds" in emsg and side == "SELL":
-                log(f"   ⚠️ {side} Order: {emsg} (likely already filled or locked)")
+                log(f"   ⚠️  {side} Order: {emsg} (likely already filled or locked)")
             else:
                 log_error(f"{side} Order error: {emsg}")
         return {

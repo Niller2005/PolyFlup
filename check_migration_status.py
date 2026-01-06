@@ -24,7 +24,7 @@ def main():
     pending = [m for m in MIGRATIONS if m[0] > current_version]
 
     if pending:
-        print(f"\n⚠️  {len(pending)} pending migrations:")
+        print(f"\n⚠️   {len(pending)} pending migrations:")
         for version, description, _ in pending:
             print(f"  - v{version}: {description}")
     else:

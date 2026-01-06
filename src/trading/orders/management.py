@@ -17,7 +17,7 @@ def get_order_status(order_id: str) -> str:
     except Exception as e:
         if "404" in str(e):
             return "NOT_FOUND"
-        log(f"⚠️ Error checking order status {order_id}: {e}")
+        log(f"⚠️  Error checking order status {order_id}: {e}")
         return "ERROR"
 
 def get_order(order_id: str) -> Optional[dict]:
@@ -42,7 +42,7 @@ def get_order(order_id: str) -> Optional[dict]:
         return res if res else None
     except Exception as e:
         if "404" not in str(e):
-            log(f"⚠️ Error fetching order {order_id}: {e}")
+            log(f"⚠️  Error fetching order {order_id}: {e}")
         return None
 
 def get_orders(
@@ -53,7 +53,7 @@ def get_orders(
         orders = client.get_orders(params)
         return orders if isinstance(orders, list) else ([orders] if orders else [])
     except Exception as e:
-        log(f"⚠️ Error fetching orders: {e}")
+        log(f"⚠️  Error fetching orders: {e}")
         return []
 
 def cancel_order(order_id: str) -> bool:
@@ -66,7 +66,7 @@ def cancel_order(order_id: str) -> bool:
     except Exception as e:
         if "404" in str(e) or "not found" in str(e).lower():
             return True
-        log(f"⚠️ Error cancelling order {order_id}: {e}")
+        log(f"⚠️  Error cancelling order {order_id}: {e}")
         return False
 
 def cancel_orders(order_ids: List[str]) -> dict:
@@ -81,7 +81,7 @@ def cancel_orders(order_ids: List[str]) -> dict:
             }
         return {"canceled": [], "not_canceled": {}}
     except Exception as e:
-        log(f"⚠️ Error bulk cancelling: {e}")
+        log(f"⚠️  Error bulk cancelling: {e}")
         return {"canceled": [], "not_canceled": {o: str(e) for o in order_ids}}
 
 def cancel_market_orders(
@@ -100,12 +100,12 @@ def cancel_market_orders(
             }
         return {"canceled": [], "not_canceled": {}}
     except Exception as e:
-        log(f"⚠️ Error cancelling market orders: {e}")
+        log(f"⚠️  Error cancelling market orders: {e}")
         return {"canceled": [], "not_canceled": {}}
 
 def cancel_all() -> dict:
     try:
-        log("⚠️ CANCELLING ALL OPEN ORDERS...")
+        log("⚠️  CANCELLING ALL OPEN ORDERS...")
         resp: Any = client.cancel_all()
         if isinstance(resp, dict):
             return {
@@ -114,5 +114,5 @@ def cancel_all() -> dict:
             }
         return {"canceled": [], "not_canceled": {}}
     except Exception as e:
-        log(f"⚠️ Error cancelling all orders: {e}")
+        log(f"⚠️  Error cancelling all orders: {e}")
         return {"canceled": [], "not_canceled": {}}

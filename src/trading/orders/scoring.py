@@ -17,7 +17,7 @@ def check_order_scoring(order_id: str) -> bool:
         return False
     except Exception as e:
         if "404" not in str(e):
-            log(f"⚠️ Error checking scoring {order_id}: {e}")
+            log(f"⚠️  Error checking scoring {order_id}: {e}")
         return False
 
 def check_orders_scoring(order_ids: List[str]) -> Dict[str, bool]:
@@ -46,5 +46,5 @@ def check_orders_scoring(order_ids: List[str]) -> Dict[str, bool]:
             return resp
         return result
     except Exception as e:
-        log(f"⚠️ Error checking scoring: {e}")
+        log(f"⚠️  Error checking scoring: {e}")
         return {o_id: False for o_id in order_ids}

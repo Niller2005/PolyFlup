@@ -66,7 +66,7 @@ def check_open_positions(verbose=True, check_orders=False):
                 try:
                     scoring_map = check_orders_scoring(sell_order_ids)
                 except Exception as e:
-                    log(f"⚠️ Error in batch scoring check: {e}")
+                    log(f"⚠️  Error in batch scoring check: {e}")
 
             if verbose:
                 log(f"👀 Monitoring {len(open_positions)} positions...")

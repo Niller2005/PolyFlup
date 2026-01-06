@@ -87,7 +87,7 @@ def _check_exit_plan(
                             return
             except Exception as e:
                 if verbose:
-                    log(f"   ⚠️ [{symbol}] Error checking existing orders: {e}")
+                    log(f"   ⚠️  [{symbol}] Error checking existing orders: {e}")
 
             balance_info = get_balance_allowance(token_id)
             actual_bal = balance_info.get("balance", 0) if balance_info else 0
@@ -107,7 +107,7 @@ def _check_exit_plan(
                     # Balance is 0
                     if age > 300:
                         log(
-                            f"   ⚠️ [{symbol}] #{trade_id} has 0 balance after 5m. Settling as ghost trade."
+                            f"   ⚠️  [{symbol}] #{trade_id} has 0 balance after 5m. Settling as ghost trade."
                         )
                         c.execute(
                             "UPDATE trades SET settled=1, final_outcome='GHOST_TRADE_ZERO_BAL', pnl_usd=0.0, roi_pct=0.0 WHERE id=?",
@@ -182,7 +182,7 @@ def _check_exit_plan(
                     pass
                 elif o_status in ["CANCELED", "EXPIRED"]:
                     log(
-                        f"   ⚠️ [{symbol}] #{trade_id} Exit plan order was {o_status}. Clearing from DB to allow retry."
+                        f"   ⚠️  [{symbol}] #{trade_id} Exit plan order was {o_status}. Clearing from DB to allow retry."
                     )
                     c.execute(
                         "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
@@ -194,7 +194,7 @@ def _check_exit_plan(
             # Order not found on exchange
             if check_orders:
                 log(
-                    f"   ⚠️ [{symbol}] #{trade_id} Exit plan order {limit_sell_id[:10]}... not found on exchange. Clearing."
+                    f"   ⚠️  [{symbol}] #{trade_id} Exit plan order {limit_sell_id[:10]}... not found on exchange. Clearing."
                 )
                 c.execute(
                     "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",

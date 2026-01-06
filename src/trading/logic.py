@@ -59,7 +59,7 @@ def _check_target_price_alignment(
     if is_underdog:
         if verbose:
             log(
-                f"[{symbol}] ⚠️ {side} is UNDERDOG (${current_price:.2f}). Only entering WINNING side positions. SKIPPING."
+                f"[{symbol}] ⚠️  {side} is UNDERDOG (${current_price:.2f}). Only entering WINNING side positions. SKIPPING."
             )
         return False
 
@@ -78,7 +78,7 @@ def _check_target_price_alignment(
         if not is_winning_side_on_spot:
             if verbose:
                 log(
-                    f"[{symbol}] ⚠️ {side} is losing on SPOT (${current_spot:,.2f} vs Target ${target_price:,.2f}). SKIPPING."
+                    f"[{symbol}] ⚠️  {side} is losing on SPOT (${current_spot:,.2f} vs Target ${target_price:,.2f}). SKIPPING."
                 )
             return False
 
@@ -193,7 +193,7 @@ def _prepare_trade_params(
     if lateness > MAX_ENTRY_LATENESS_SEC:
         if verbose:
             log(
-                f"[{symbol}] ⚠️  Cycle is TOO LATE ({lateness:.0f}s into window, {time_left:.0f}s left). SKIPPING."
+                f"[{symbol}] ⚠️   Cycle is TOO LATE ({lateness:.0f}s into window, {time_left:.0f}s left). SKIPPING."
             )
             if add_spacing:
                 log("")

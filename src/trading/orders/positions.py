@@ -33,7 +33,7 @@ def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
             }
         return None
     except Exception as e:
-        log(f"⚠️ Error getting balance/allowance: {e}")
+        log(f"⚠️  Error getting balance/allowance: {e}")
         return None
 
 
@@ -69,7 +69,7 @@ def get_current_positions(user_address: str) -> List[dict]:
         log(f"   ✅ Data API returned {len(valid_positions)} active positions")
         return valid_positions
     except Exception as e:
-        log(f"⚠️ Error getting positions from Data API: {e}")
+        log(f"⚠️  Error getting positions from Data API: {e}")
         return []
 
 
@@ -87,7 +87,7 @@ def get_closed_positions(user: str, limit: int = 100) -> List[dict]:
             return data
         return data.get("positions", []) if isinstance(data, dict) else []
     except Exception as e:
-        log(f"⚠️ Error getting closed positions: {e}")
+        log(f"⚠️  Error getting closed positions: {e}")
         return []
 
 
@@ -168,7 +168,7 @@ def sell_position(
                 else:
                     # Partial fill - allow loop to retry with remaining
                     log(
-                        f"   ⚠️ Partial sell fill: {matched:.2f}/{remaining_size:.2f} matched."
+                        f"   ⚠️  Partial sell fill: {matched:.2f}/{remaining_size:.2f} matched."
                     )
                     continue
 

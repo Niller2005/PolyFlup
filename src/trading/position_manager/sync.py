@@ -101,7 +101,7 @@ def sync_positions_with_exchange(user_address: str):
 
                         if age_mins > 2.0:
                             log(
-                                f"   ⚠️ [{symbol}] #{trade_id} exists in DB but not on exchange (size 0). Marking as settled/unfilled."
+                                f"   ⚠️  [{symbol}] #{trade_id} exists in DB but not on exchange (size 0). Marking as settled/unfilled."
                             )
                             c.execute(
                                 "UPDATE trades SET settled = 1, final_outcome = 'SYNC_MISSING', pnl_usd = 0.0, roi_pct = 0.0 WHERE id = ?",
@@ -143,7 +143,7 @@ def sync_positions_with_exchange(user_address: str):
                             continue
 
                         log(
-                            f"   ⚠️ Found UNTRACKED position: {size} shares of {t_id_str[:10]}..."
+                            f"   ⚠️  Found UNTRACKED position: {size} shares of {t_id_str[:10]}..."
                         )
                         log(
                             f"   📥 Adopting untracked position: {symbol} ({side}) {size} shares @ ${avg_price}"
@@ -175,7 +175,7 @@ def sync_positions_with_exchange(user_address: str):
 
         log("✓ Position sync complete")
     except Exception as e:
-        log(f"⚠️ Error during position sync: {e}")
+        log(f"⚠️  Error during position sync: {e}")
 
 
 def recover_open_positions():

@@ -45,7 +45,7 @@ def get_multiple_market_prices(token_ids: List[str]) -> Dict[str, float]:
 
         now = time.time()
         if now - _last_midpoint_error_time > 60:  # Log other errors once per minute
-            log(f"⚠️ Error getting bulk midpoints (falling back to single calls): {e}")
+            log(f"⚠️  Error getting bulk midpoints (falling back to single calls): {e}")
             _last_midpoint_error_time = now
         return {}
 
@@ -65,7 +65,7 @@ def get_midpoint(token_id: str) -> Optional[float]:
         return None
     except Exception as e:
         if not is_404_error(e):
-            log(f"⚠️ Error getting midpoint for {token_id[:10]}...: {e}")
+            log(f"⚠️  Error getting midpoint for {token_id[:10]}...: {e}")
         return None
 
 
@@ -82,7 +82,7 @@ def get_tick_size(token_id: str) -> float:
         from .constants import MIN_TICK_SIZE
 
         if not is_404_error(e):
-            log(f"⚠️ Error getting tick size for {token_id[:10]}...: {e}")
+            log(f"⚠️  Error getting tick size for {token_id[:10]}...: {e}")
         return MIN_TICK_SIZE
 
 
@@ -101,7 +101,7 @@ def get_spread(token_id: str) -> Optional[float]:
         return None
     except Exception as e:
         if not is_404_error(e):
-            log(f"⚠️ Error getting spread for {token_id[:10]}...: {e}")
+            log(f"⚠️  Error getting spread for {token_id[:10]}...: {e}")
         return None
 
 
@@ -134,7 +134,7 @@ def get_bulk_spreads(token_ids: List[str]) -> Dict[str, float]:
         return result
     except Exception as e:
         if not is_404_error(e):
-            log(f"⚠️ Error getting bulk spreads: {e}")
+            log(f"⚠️  Error getting bulk spreads: {e}")
         return {}
 
 
@@ -146,7 +146,7 @@ def get_server_time() -> Optional[int]:
             return int(timestamp)
         return None
     except Exception as e:
-        log(f"⚠️ Error getting server time: {e}")
+        log(f"⚠️  Error getting server time: {e}")
         return None
 
 
@@ -161,7 +161,7 @@ def get_trades(
             trades = [trades] if trades else []
         return trades[:limit]
     except Exception as e:
-        log(f"⚠️ Error getting trades: {e}")
+        log(f"⚠️  Error getting trades: {e}")
         return []
 
 
@@ -191,7 +191,7 @@ def get_trades_for_user(
             return data
         return data.get("trades", []) if isinstance(data, dict) else []
     except Exception as e:
-        log(f"⚠️ Error getting user trades: {e}")
+        log(f"⚠️  Error getting user trades: {e}")
         return []
 
 
@@ -200,6 +200,6 @@ def check_liquidity(token_id: str, size: float, warn_threshold: float = 0.05) ->
     if spread is None:
         return True
     if spread > warn_threshold:
-        log(f"⚠️ Wide spread detected: {spread:.3f} - Low liquidity!")
+        log(f"⚠️  Wide spread detected: {spread:.3f} - Low liquidity!")
         return False
     return True

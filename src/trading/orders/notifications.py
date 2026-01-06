@@ -26,7 +26,7 @@ def get_notifications() -> List[dict]:
                 result.append(notif_dict)
         return result
     except Exception as e:
-        log(f"⚠️ Error getting notifications: {e}")
+        log(f"⚠️  Error getting notifications: {e}")
         return []
 
 def drop_notifications(notification_ids: List[str]) -> bool:
@@ -36,5 +36,5 @@ def drop_notifications(notification_ids: List[str]) -> bool:
         client.drop_notifications(params)
         return True
     except Exception as e:
-        log(f"⚠️ Error dropping notifications: {e}")
+        log(f"⚠️  Error dropping notifications: {e}")
         return False

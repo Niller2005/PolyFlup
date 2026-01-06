@@ -44,5 +44,5 @@ def get_exit_plan_stats():
                     }
             return None
     except Exception as e:
-        log(f"⚠️ Error getting exit plan stats: {e}")
+        log(f"⚠️  Error getting exit plan stats: {e}")
         return None
