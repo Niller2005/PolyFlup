@@ -130,32 +130,52 @@ def _check_scale_in(
                 )
             return
 
+    # Use MAKER order (limit) for scale-in to avoid fees and earn rebates
+    from src.utils.websocket_manager import ws_manager
+
+    bid, _ = ws_manager.get_bid_ask(token_id)
+
+    # Fallback to current_price (midpoint) if WS bid not available
+    maker_price = bid if bid else current_price
+    maker_price = max(0.01, min(0.99, round(maker_price, 2)))
+
     log(
-        f"📈 [{symbol}] Trade #{trade_id} {side} | 📈 SCALE IN triggered (Market Order): size={s_size:.2f}, {t_left:.0f}s left"
+        f"📈 [{symbol}] Trade #{trade_id} {side} | 📈 SCALE IN triggered (Maker Order): size={s_size:.2f}, price=${maker_price:.2f}, {t_left:.0f}s left"
     )
 
-    # Use MARKET order for scale-in to ensure immediate fill and exit plan update
-    res = place_market_order(token_id, s_size, side="BUY", order_type="FAK")
+    # Use LIMIT order for scale-in to ensure maker fill
+    res = place_order(token_id, maker_price, s_size)
 
     if res["success"]:
-        # Market orders fill immediately (FAK fills what it can)
-        # We need to get the actual filled details
         oid = res.get("order_id")
-        actual_s_size = s_size
-        actual_s_price = current_price
+        actual_s_size = 0.0
+        actual_s_price = maker_price
 
         if oid:
             try:
+                # Check if it filled immediately (limit orders can hit the spread)
                 o_data = get_order(oid)
                 if o_data:
-                    actual_s_size = float(o_data.get("size_matched", s_size))
-                    actual_s_price = float(o_data.get("price", current_price))
+                    actual_s_size = float(o_data.get("size_matched", 0))
+                    actual_s_price = float(o_data.get("price", maker_price))
+                    status = o_data.get("status", "").upper()
+
+                    if status not in ["FILLED", "MATCHED"] and actual_s_size < s_size:
+                        # Order is pending on the book (MAKER)
+                        c.execute(
+                            "UPDATE trades SET scale_in_order_id = ? WHERE id = ?",
+                            (oid, trade_id),
+                        )
+                        log(
+                            f"📈 [{symbol}] Trade #{trade_id} {side} | ⏳ SCALE IN order pending on book (Maker): {s_size:.2f} shares @ ${maker_price:.2f}"
+                        )
+                        return
             except:
                 pass
 
         if actual_s_size > 0:
             log(
-                f"📈 [{symbol}] Trade #{trade_id} {side} | ✅ SCALE IN Market order filled: {actual_s_size:.2f} shares @ ${actual_s_price:.4f}"
+                f"📈 [{symbol}] Trade #{trade_id} {side} | ✅ SCALE IN order filled: {actual_s_size:.2f} shares @ ${actual_s_price:.4f}"
             )
             new_size, new_bet = (
                 size + actual_s_size,
@@ -172,29 +192,13 @@ def _check_scale_in(
                     trade_id,
                 ),
             )
-
-            new_size, new_bet = (
-                size + actual_s_size,
-                bet + (actual_s_size * actual_s_price),
-            )
-
-            c.execute(
-                "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL, last_scale_in_at=? WHERE id=?",
-                (
-                    new_size,
-                    new_bet,
-                    new_bet / new_size,
-                    datetime.now(tz=ZoneInfo("UTC")).isoformat()
-                    if "ZoneInfo" in globals()
-                    else datetime.utcnow().isoformat(),
-                    trade_id,
-                ),
-            )
         else:
-            log(
-                f"📈 [{symbol}] Trade #{trade_id} {side} | ⚠️  SCALE IN Market order filled 0 shares."
-            )
+            # If not filled immediately and we have an ID, it's already handled above
+            if not oid:
+                log(
+                    f"📈 [{symbol}] Trade #{trade_id} {side} | ⚠️  SCALE IN order failed to return ID."
+                )
     else:
         log(
-            f"📈 [{symbol}] Trade #{trade_id} {side} | ❌ SCALE IN Market order failed: {res.get('error')}"
+            f"📈 [{symbol}] Trade #{trade_id} {side} | ❌ SCALE IN order failed: {res.get('error')}"
         )

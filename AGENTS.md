@@ -54,3 +54,4 @@ cd ui && npm run dev    # Start dashboard development server
 3. **Logging**: Start log lines with relevant emojis (🚀, ✅, ❌, 👀) and include `[SYMBOL]` context.
 4. **Precision**: Use `0.0001` threshold for share balance comparisons.
 5. **Min Size**: Enforce 5.0 share minimum for all limit orders.
+6. **Fees**: Taker fees apply to 15m crypto markets (BUY=Tokens, SELL=USDC). Prefer Maker orders to avoid fees and earn rebates.

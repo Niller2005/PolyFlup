@@ -24,6 +24,21 @@ description: Polymarket-specific terminology, trading strategies, and API refere
 - **Precision**: Use strict 0.0001 threshold for balance syncing.
 - **Minimum Size**: Polymarket enforces a 5.0 share minimum for limit orders.
 
+## Fees & Rebates (15-Minute Crypto Markets)
+
+- **Taker Fees**: Applied ONLY to 15-minute crypto markets.
+- **Fee Deduction**: 
+    - **BUY**: Fee is taken in **Tokens** from the proceeds.
+    - **SELL**: Fee is taken in **USDC** from the proceeds.
+- **Effective Rates**: 
+    - **Buying**: Peaks at ~1.6% at $0.50 price.
+    - **Selling**: Peaks at ~3.7% at $0.30 price. Selling is generally more expensive because USDC is taken directly.
+- **Fee Precision**: Rounded to 4 decimal places (min 0.0001 USDC). Small trades at extremes might be fee-free.
+- **Maker Rebates**: Distributed daily in USDC to makers who provide liquidity that gets filled.
+- **Strategy Implications**: 
+    - Prefer **Maker orders** (Limit orders that add liquidity) to avoid fees and potentially earn rebates.
+    - Selling at low prices as a taker is particularly costly.
+
 ## Common Code Patterns
 
 ### Market Data

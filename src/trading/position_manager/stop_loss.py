@@ -63,7 +63,12 @@ def _trigger_price_based_reversal(
             )
             return True
 
-        rev_price = 1.0 - p_up if original_side == "UP" else p_up
+        if original_side == "UP":
+            # Buying DOWN tokens: Join the bid (1 - UP best ask)
+            rev_price = 1.0 - float(best_ask) if best_ask is not None else (1.0 - p_up)
+        else:
+            # Buying UP tokens: Join the bid
+            rev_price = float(best_bid) if best_bid is not None else p_up
 
         # Clamp and round
         rev_price = max(0.01, min(0.99, round(rev_price, 2)))

@@ -21,6 +21,8 @@ class WebSocketManager:
         # Base URL from settings: wss://ws-subscriptions-clob.polymarket.com
         self.wss_base_url = CLOB_WSS_HOST.rstrip("/")
         self.prices: Dict[str, float] = {}  # token_id -> midpoint_price
+        self.bids: Dict[str, float] = {}  # token_id -> best_bid
+        self.asks: Dict[str, float] = {}  # token_id -> best_ask
         self.token_to_symbol: Dict[str, str] = {}
         self.callbacks: Dict[str, List[Callable]] = {
             "price": [],
@@ -212,6 +214,8 @@ class WebSocketManager:
                     b, a = data.get("best_bid"), data.get("best_ask")
                     if b and a:
                         self.prices[str(asset_id)] = (float(b) + float(a)) / 2.0
+                        self.bids[str(asset_id)] = float(b)
+                        self.asks[str(asset_id)] = float(a)
                 elif event_type == "price_change":
                     for c in data.get("price_changes", []):
                         aid, b, a = (
@@ -221,6 +225,8 @@ class WebSocketManager:
                         )
                         if aid and b and a and float(b) > 0:
                             self.prices[str(aid)] = (float(b) + float(a)) / 2.0
+                            self.bids[str(aid)] = float(b)
+                            self.asks[str(aid)] = float(a)
                             await self._trigger_price_callbacks(
                                 str(aid), self.prices[str(aid)]
                             )
@@ -277,6 +283,10 @@ class WebSocketManager:
     def get_price(self, token_id: str) -> Optional[float]:
         """Get the latest cached price for a token"""
         return self.prices.get(str(token_id))
+
+    def get_bid_ask(self, token_id: str) -> tuple[Optional[float], Optional[float]]:
+        """Get the latest cached bid and ask for a token"""
+        return self.bids.get(str(token_id)), self.asks.get(str(token_id))
 
     def register_callback(self, event_type: str, callback: Callable):
         """Register a function to be called on WSS events"""

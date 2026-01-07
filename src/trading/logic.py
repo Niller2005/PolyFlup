@@ -129,9 +129,12 @@ def _prepare_trade_params(
         symbol, up_id, client
     )
 
-    if bias == "NEUTRAL":
+    if bias == "NEUTRAL" or best_bid is None or best_ask is None:
         if verbose:
-            log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
+            if bias == "NEUTRAL":
+                log(f"[{symbol}] ⚪ Confidence: {confidence:.1%} ({bias}) - NO TRADE")
+            else:
+                log(f"[{symbol}] ⚪ Liquidity not ready (Bid/Ask missing)")
             if add_spacing:
                 log("")
         return
@@ -152,9 +155,11 @@ def _prepare_trade_params(
         return
 
     if actual_side == "UP":
-        token_id, side, price = up_id, "UP", p_up
+        # MAKER PRICING: Join the best bid for UP tokens
+        token_id, side, price = up_id, "UP", float(best_bid)
     else:
-        token_id, side, price = down_id, "DOWN", 1.0 - p_up
+        # MAKER PRICING: Join the best bid for DOWN tokens (which is 1 - UP best ask)
+        token_id, side, price = down_id, "DOWN", 1.0 - float(best_ask)
 
     # NEW: Check if we already have a trade for THIS SIDE in this window
     window_start, window_end = get_window_times(symbol)

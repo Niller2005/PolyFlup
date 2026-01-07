@@ -6,6 +6,7 @@ description: Chronological log of system improvements and session summaries for 
 ## Session Improvements Summary
 
 ### 2026-01-07
+- **Knowledge Update**: Added Polymarket Maker Rebates and Taker Fee details to `polymarket-trading` skill. Noted that taker fees are token-based for BUYS and USDC-based for SELLS, with higher effective rates for low-price sells.
 - **Scale-In**: Enhanced with confidence-weighted dynamic timing. Expanded default window to 7.5m (450s) and implemented tiered early entry (up to 12m) for high-confidence (>=90%) and high-price (>=0.80) winners.
 - **Precision**: Reduced balance sync threshold to 0.0001.
 - **Min Size**: Added pre-flight check for 5.0 share minimum.
