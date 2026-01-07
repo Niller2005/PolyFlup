@@ -8,6 +8,7 @@ from src.config.settings import (
     CONTRARIAN_THRESHOLD,
     BET_PERCENT,
     CONFIDENCE_SCALING_FACTOR,
+    MAX_SIZE,
     MAX_ENTRY_LATENESS_SEC,
     ENABLE_BFXD,
 )
@@ -112,6 +113,11 @@ def _calculate_bet_size(
             bet_usd_effective = target_bet
     else:
         bet_usd_effective = target_bet
+
+    # Cap at MAX_SIZE (if configured)
+    if MAX_SIZE and size > MAX_SIZE:
+        size = MAX_SIZE
+        bet_usd_effective = size * price
 
     return size, bet_usd_effective
 

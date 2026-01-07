@@ -20,6 +20,11 @@ MAX_SPREAD = float(os.getenv("MAX_SPREAD", "0.15"))
 WINDOW_START_PRICE_BUFFER_PCT = float(
     os.getenv("WINDOW_START_PRICE_BUFFER_PCT", "0.05")
 )
+MAX_SIZE = os.getenv("MAX_SIZE", "500.0")
+if MAX_SIZE.upper() not in ["NONE", "NO", ""]:
+    MAX_SIZE = float(MAX_SIZE)
+else:
+    MAX_SIZE = None  # No cap
 
 
 # Position Management
