@@ -1,0 +1,24 @@
+services:
+  polyflup:
+    image: ghcr.io/niller2005/polyflup-bot:latest
+    container_name: polyflup-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./trades.db:/app/trades.db
+      - ./logs:/app/logs
+
+  dashboard:
+    image: ghcr.io/niller2005/polyflup-ui:latest
+    container_name: polyflup-dashboard
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - DB_PATH=/trades.db
+    volumes:
+      - ./trades.db:/trades.db:ro
