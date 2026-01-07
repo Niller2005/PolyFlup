@@ -261,6 +261,14 @@ def _prepare_trade_params(
 
     size, bet_usd_effective = _calculate_bet_size(balance, price, sizing_confidence)
 
+    if size < MIN_SIZE:
+        log(
+            f"   ⏭️  [{symbol}] size {size:.2f} < {MIN_SIZE}. Skipping, trying again next window."
+        )
+        if add_spacing:
+            log("")
+        return None
+
     return {
         "symbol": symbol,
         "token_id": token_id,
