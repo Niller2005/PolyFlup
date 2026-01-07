@@ -48,6 +48,9 @@ def _check_exit_plan(
         return False
 
     repaired = False
+    balance_info = get_balance_allowance(token_id)
+    actual_bal = balance_info.get("balance", 0) if balance_info else 0
+
     try:
         age = (now - datetime.fromisoformat(ts)).total_seconds()
     except:
@@ -90,11 +93,9 @@ def _check_exit_plan(
                 if verbose:
                     log(f"   ⚠️  [{symbol}] Error checking existing orders: {e}")
 
-            balance_info = get_balance_allowance(token_id)
-            actual_bal = balance_info.get("balance", 0) if balance_info else 0
-
             # BI-DIRECTIONAL HEALING: Sync DB size with actual wallet balance
             # Add 60s cooldown after buy/scale-in to allow API to sync balance
+            # BUT: If balance is HIGHER than size, we can sync immediately (we bought more)
             scale_in_age = 999
             if last_scale_in_at:
                 try:
@@ -104,7 +105,13 @@ def _check_exit_plan(
                 except:
                     pass
 
-            if age > 60 and scale_in_age > 60 and abs(actual_bal - size) > 0.0001:
+            needs_sync = False
+            if actual_bal > size + 0.0001:
+                needs_sync = True  # Always sync if we have more tokens than DB thinks
+            elif age > 60 and scale_in_age > 60 and abs(actual_bal - size) > 0.0001:
+                needs_sync = True  # Periodic sync for other cases
+
+            if needs_sync:
                 if actual_bal > 0:
                     log(
                         f"   🔧 [{symbol}] #{trade_id} Syncing size to match balance: {size:.4f} -> {actual_bal:.4f}"
@@ -162,19 +169,57 @@ def _check_exit_plan(
 
     elif limit_sell_id:
         # 1-SECOND CYCLE HEALING: Ensure exit plan size matches current trade size
-        # We fetch the order info every cycle if it's not a check_orders cycle
-        # but only for size verification if needed.
-        # Optimization: We already have 'size' and 'limit_sell_id'.
-        # However, to know the order's size we MUST fetch it from exchange or cache.
         o_data = get_order(limit_sell_id)
         if o_data:
             o_status = o_data.get("status", "").upper()
             if o_status == "LIVE":
                 o_size = float(o_data.get("original_size", 0))
+
+                # BI-DIRECTIONAL HEALING: Sync DB size with actual wallet balance
+                scale_in_age = 999
+                if last_scale_in_at:
+                    try:
+                        scale_in_age = (
+                            now - datetime.fromisoformat(last_scale_in_at)
+                        ).total_seconds()
+                    except:
+                        pass
+
+                needs_sync = False
+                if actual_bal > size + 0.0001:
+                    needs_sync = (
+                        True  # Always sync if we have more tokens than DB thinks
+                    )
+                elif age > 60 and scale_in_age > 60 and abs(actual_bal - size) > 0.0001:
+                    needs_sync = (
+                        True  # Periodic sync for other cases (e.g. fewer tokens)
+                    )
+
+                if needs_sync and actual_bal > 0:
+                    log(
+                        f"   🔧 [{symbol}] #{trade_id} Syncing size to match balance (active order): {size:.4f} -> {actual_bal:.4f}"
+                    )
+                    c.execute(
+                        "UPDATE trades SET size = ?, bet_usd = ? * entry_price WHERE id = ?",
+                        (actual_bal, actual_bal, trade_id),
+                    )
+                    size = actual_bal
+
                 if truncate_float(o_size, 2) != truncate_float(size, 2):
                     # Repair needed
                     cancel_order(limit_sell_id)
-                    res = place_limit_order(token_id, EXIT_PRICE_TARGET, size, SELL)
+                    # We use min(size, actual_bal) to be safe against double-sell errors
+                    sell_size = truncate_float(min(size, actual_bal), 2)
+                    if sell_size < 5.0:
+                        c.execute(
+                            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                            (trade_id,),
+                        )
+                        return True
+
+                    res = place_limit_order(
+                        token_id, EXIT_PRICE_TARGET, sell_size, SELL
+                    )
                     if res["success"] or res.get("order_id"):
                         new_oid = res.get("order_id")
                         c.execute(
@@ -182,7 +227,7 @@ def _check_exit_plan(
                             (new_oid, trade_id),
                         )
                         log(
-                            f"   🔧 [{symbol}] #{trade_id} Exit plan size repaired: {o_size} -> {size}"
+                            f"   🔧 [{symbol}] #{trade_id} Exit plan size repaired: {o_size} -> {sell_size}"
                         )
                         repaired = True
                         limit_sell_id = new_oid

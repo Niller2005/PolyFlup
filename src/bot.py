@@ -1,6 +1,9 @@
 """Main bot loop"""
 
 import time
+import os
+import sys
+import fcntl
 from typing import Optional, List, Tuple
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -197,18 +200,11 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
             trade_params_list.append(params)
             last_symbol_logged = True
         elif verbose:
-            # If _prepare_trade_params logged something (Wait zone, etc), it returns None
-            # We don't have a perfect way to know if it logged, but we can assume
-            # if it was verbose it might have.
-            # Actually, let's only spacing if params was found to keep it compact.
             pass
 
     if not trade_params_list:
         return 0
 
-    # For batch orders, we still use the old place_batch_orders logic for now
-    # to keep it efficient, but we manually save them using a similar logic to execute_trade.
-    # TODO: In future, refactor batch saving into a utility as well.
     orders = [
         {
             "token_id": p["token_id"],
@@ -311,6 +307,15 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
 
 def main():
     """Main bot loop"""
+    # PID lock to prevent duplicate processes
+    lock_file = "/tmp/polyflup.lock"
+    try:
+        f = open(lock_file, "w")
+        fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, OSError):
+        print("❌ Another instance of PolyFlup is already running. Exiting.")
+        sys.exit(1)
+
     setup_api_creds()
     init_database()
 
@@ -406,8 +411,6 @@ def main():
                     lateness = (now_et - w_start_et).total_seconds()
 
                     if 0 <= lateness <= MAX_ENTRY_LATENESS_SEC:
-                        # If hedged reversal is on, we allow entering even if one trade exists
-                        # but _prepare_trade_params will ensure we don't double-up on the SAME side
                         if ENABLE_HEDGED_REVERSAL or not has_trade_for_window(
                             m, w_start_et.isoformat()
                         ):

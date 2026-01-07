@@ -49,13 +49,13 @@ def _check_scale_in(
                 s_price = float(o_data.get("price", current_price))
                 s_matched = float(o_data.get("size_matched", 0))
                 if s_matched > 0:
-                    new_size, new_bet = size + s_matched, bet + (s_matched * s_price)
                     c.execute(
-                        "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL, last_scale_in_at=? WHERE id=?",
+                        "UPDATE trades SET size=size+?, bet_usd=bet_usd+?, entry_price=(bet_usd+?)/(size+?), scaled_in=1, scale_in_order_id=NULL, last_scale_in_at=? WHERE id=?",
                         (
-                            new_size,
-                            new_bet,
-                            new_bet / new_size,
+                            s_matched,
+                            s_matched * s_price,
+                            s_matched * s_price,
+                            s_matched,
                             datetime.now(tz=ZoneInfo("UTC")).isoformat(),
                             trade_id,
                         ),
@@ -177,17 +177,13 @@ def _check_scale_in(
             log(
                 f"📈 [{symbol}] Trade #{trade_id} {side} | ✅ SCALE IN order filled: {actual_s_size:.2f} shares @ ${actual_s_price:.4f}"
             )
-            new_size, new_bet = (
-                size + actual_s_size,
-                bet + (actual_s_size * actual_s_price),
-            )
-
             c.execute(
-                "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL, last_scale_in_at=? WHERE id=?",
+                "UPDATE trades SET size=size+?, bet_usd=bet_usd+?, entry_price=(bet_usd+?)/(size+?), scaled_in=1, scale_in_order_id=NULL, last_scale_in_at=? WHERE id=?",
                 (
-                    new_size,
-                    new_bet,
-                    new_bet / new_size,
+                    actual_s_size,
+                    actual_s_size * actual_s_price,
+                    actual_s_size * actual_s_price,
+                    actual_s_size,
                     datetime.now(tz=ZoneInfo("UTC")).isoformat(),
                     trade_id,
                 ),
