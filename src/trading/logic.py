@@ -104,10 +104,6 @@ def _calculate_bet_size(
 
     bet_usd_effective = target_bet
 
-    if size < MIN_SIZE:
-        size = MIN_SIZE
-        bet_usd_effective = round(size * price, 4)
-
     return size, bet_usd_effective
 
 

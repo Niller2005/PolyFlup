@@ -143,10 +143,9 @@ def _check_exit_plan(
             sell_size = truncate_float(min(size, actual_bal), 2)
 
             if sell_size < MIN_SIZE:
-                if verbose:
-                    log(
-                        f"   ⚠️  [{symbol}] #{trade_id} size {sell_size} < {MIN_SIZE} minimum. Cannot place exit plan."
-                    )
+                log(
+                    f"   ⏭️  [{symbol}] #{trade_id} size {sell_size} < {MIN_SIZE}. Skipping, trying again next window."
+                )
                 return
 
             res = place_limit_order(token_id, EXIT_PRICE_TARGET, sell_size, SELL)
@@ -212,6 +211,9 @@ def _check_exit_plan(
                     cancel_order(limit_sell_id)
                     sell_size = target_size
                     if sell_size < MIN_SIZE:
+                        log(
+                            f"   ⏭️  [{symbol}] #{trade_id} size {sell_size} < {MIN_SIZE}. Skipping, trying again next window."
+                        )
                         c.execute(
                             "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
                             (trade_id,),

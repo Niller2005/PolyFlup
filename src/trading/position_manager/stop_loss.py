@@ -33,6 +33,7 @@ from src.trading import (
     _calculate_bet_size,
     _determine_trade_side,
 )
+from src.trading.logic import MIN_SIZE
 
 
 def _trigger_price_based_reversal(
@@ -93,6 +94,13 @@ def _trigger_price_based_reversal(
         balance = get_balance(addr)
 
         size, bet_usd = _calculate_bet_size(balance, rev_price, sizing_confidence)
+
+        # MIN_SIZE check for reversal
+        if size < MIN_SIZE:
+            log(
+                f"   ⏭️  [{symbol}] reversal size {size:.2f} < {MIN_SIZE}. Skipping, trying again next window."
+            )
+            return False
 
         # Pre-flight balance check
         if balance < bet_usd:

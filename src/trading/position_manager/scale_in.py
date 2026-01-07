@@ -17,6 +17,7 @@ from src.trading.orders import (
     get_balance_allowance,
 )
 from src.data.market_data import get_current_spot_price
+from src.trading.logic import MIN_SIZE
 
 
 def _check_scale_in(
@@ -117,6 +118,13 @@ def _check_scale_in(
                 return
 
     s_size = size * SCALE_IN_MULTIPLIER
+
+    # MIN_SIZE check for scale-in
+    if s_size < MIN_SIZE:
+        log(
+            f"   ⏭️  [{symbol}] #{trade_id} scale-in size {s_size:.2f} < {MIN_SIZE}. Skipping, trying again next window."
+        )
+        return
 
     # Pre-flight balance check to prevent insufficient funds loop
     est_cost = s_size * current_price
