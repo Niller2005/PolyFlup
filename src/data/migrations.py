@@ -97,6 +97,21 @@ def migration_004_add_reversal_triggered_at_column(conn: Any) -> None:
         log("    ✓ reversal_triggered_at column already exists")
 
 
+def migration_005_add_last_scale_in_at_column(conn: Any) -> None:
+    """Add last_scale_in_at column to track when the last scale-in occurred"""
+    c = conn.cursor()
+
+    c.execute("PRAGMA table_info(trades)")
+    columns = [row[1] for row in c.fetchall()]
+
+    if "last_scale_in_at" not in columns:
+        log("  - Adding last_scale_in_at column...")
+        c.execute("ALTER TABLE trades ADD COLUMN last_scale_in_at TEXT")
+        log("    ✓ Column added")
+    else:
+        log("    ✓ last_scale_in_at column already exists")
+
+
 # Migration registry: version -> migration function
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
@@ -106,6 +121,11 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
         4,
         "Add reversal_triggered_at column",
         migration_004_add_reversal_triggered_at_column,
+    ),
+    (
+        5,
+        "Add last_scale_in_at column",
+        migration_005_add_last_scale_in_at_column,
     ),
 ]
 

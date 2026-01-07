@@ -32,7 +32,7 @@ def check_open_positions(verbose=True, check_orders=False):
             c = conn.cursor()
             now = datetime.now(tz=ZoneInfo("UTC"))
             c.execute(
-                "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status, timestamp, scale_in_order_id, reversal_triggered, reversal_triggered_at, edge FROM trades WHERE settled = 0 AND exited_early = 0 AND datetime(window_end) > datetime(?)",
+                "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status, timestamp, scale_in_order_id, reversal_triggered, reversal_triggered_at, edge, last_scale_in_at FROM trades WHERE settled = 0 AND exited_early = 0 AND datetime(window_end) > datetime(?)",
                 (now.isoformat(),),
             )
             open_positions = c.fetchall()
@@ -91,6 +91,7 @@ def check_open_positions(verbose=True, check_orders=False):
                 rev_trig,
                 rev_trig_at,
                 edge,
+                last_sc_at,
             ) in open_positions:
                 bet = bet or 0.0
                 edge = edge or 0.0
@@ -239,12 +240,12 @@ def check_open_positions(verbose=True, check_orders=False):
 
                     # Refresh data after scale-in check
                     c.execute(
-                        "SELECT size, entry_price, bet_usd, scaled_in, limit_sell_order_id, scale_in_order_id FROM trades WHERE id = ?",
+                        "SELECT size, entry_price, bet_usd, scaled_in, limit_sell_order_id, scale_in_order_id, last_scale_in_at FROM trades WHERE id = ?",
                         (tid,),
                     )
                     row_data_f = c.fetchone()
                     if row_data_f:
-                        size, entry, bet, sc_in, l_sell, sc_id = row_data_f
+                        size, entry, bet, sc_in, l_sell, sc_id, last_sc_at = row_data_f
 
                     _check_exit_plan(
                         sym,
@@ -267,6 +268,7 @@ def check_open_positions(verbose=True, check_orders=False):
                         cur_p,
                         check_orders=check_orders,
                         is_scoring=scoring_map.get(l_sell) if l_sell else None,
+                        last_scale_in_at=last_sc_at,
                     )
                 except Exception as e:
                     log_error(f"[{sym}] #{tid} Position monitoring error: {e}")

@@ -39,9 +39,10 @@ def _check_exit_plan(
     scaled_in,
     scale_in_id,
     entry,
-    current_price,
+    cur_p,
     check_orders=False,
     is_scoring=None,
+    last_scale_in_at=None,
 ):
     if not ENABLE_EXIT_PLAN or buy_status not in ["FILLED", "MATCHED"] or size == 0:
         return False
@@ -93,8 +94,17 @@ def _check_exit_plan(
             actual_bal = balance_info.get("balance", 0) if balance_info else 0
 
             # BI-DIRECTIONAL HEALING: Sync DB size with actual wallet balance
-            # Use a much tighter threshold (0.0001) for 6-decimal precision tokens
-            if abs(actual_bal - size) > 0.0001:
+            # Add 60s cooldown after buy/scale-in to allow API to sync balance
+            scale_in_age = 999
+            if last_scale_in_at:
+                try:
+                    scale_in_age = (
+                        now - datetime.fromisoformat(last_scale_in_at)
+                    ).total_seconds()
+                except:
+                    pass
+
+            if age > 60 and scale_in_age > 60 and abs(actual_bal - size) > 0.0001:
                 if actual_bal > 0:
                     log(
                         f"   🔧 [{symbol}] #{trade_id} Syncing size to match balance: {size:.4f} -> {actual_bal:.4f}"

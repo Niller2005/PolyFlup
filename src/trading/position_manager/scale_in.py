@@ -1,5 +1,7 @@
 """Position scaling logic"""
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from src.config.settings import (
     ENABLE_SCALE_IN,
     SCALE_IN_MIN_PRICE,
@@ -49,8 +51,14 @@ def _check_scale_in(
                 if s_matched > 0:
                     new_size, new_bet = size + s_matched, bet + (s_matched * s_price)
                     c.execute(
-                        "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
-                        (new_size, new_bet, new_bet / new_size, trade_id),
+                        "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL, last_scale_in_at=? WHERE id=?",
+                        (
+                            new_size,
+                            new_bet,
+                            new_bet / new_size,
+                            datetime.now(tz=ZoneInfo("UTC")).isoformat(),
+                            trade_id,
+                        ),
                     )
                     log(
                         f"📈 [{symbol}] #{trade_id} Scale-in filled (delayed): +{s_matched:.2f} shares"
@@ -155,8 +163,32 @@ def _check_scale_in(
             )
 
             c.execute(
-                "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
-                (new_size, new_bet, new_bet / new_size, trade_id),
+                "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL, last_scale_in_at=? WHERE id=?",
+                (
+                    new_size,
+                    new_bet,
+                    new_bet / new_size,
+                    datetime.now(tz=ZoneInfo("UTC")).isoformat(),
+                    trade_id,
+                ),
+            )
+
+            new_size, new_bet = (
+                size + actual_s_size,
+                bet + (actual_s_size * actual_s_price),
+            )
+
+            c.execute(
+                "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL, last_scale_in_at=? WHERE id=?",
+                (
+                    new_size,
+                    new_bet,
+                    new_bet / new_size,
+                    datetime.now(tz=ZoneInfo("UTC")).isoformat()
+                    if "ZoneInfo" in globals()
+                    else datetime.utcnow().isoformat(),
+                    trade_id,
+                ),
             )
         else:
             log(
