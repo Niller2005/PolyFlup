@@ -17,8 +17,8 @@ from src.trading.settlement import force_settle_trade
 from .shared import _position_check_lock
 from .pnl import _get_position_pnl
 from .stop_loss import _check_stop_loss
-from .scale_in import _check_scale_in
-from .exit_plan import _check_exit_plan
+from .scale import _check_scale_in
+from .exit import _check_exit_plan
 
 _failed_pnl_checks = {}
 

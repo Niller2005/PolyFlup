@@ -87,7 +87,8 @@ from src.trading.position_manager import (
     check_open_positions,
     get_exit_plan_stats,
     recover_open_positions,
-    sync_with_exchange,
+    sync_positions_with_exchange,
+    execute_first_entry,
 )
 from src.utils.notifications import process_notifications, init_ws_callbacks
 from src.trading.settlement import check_and_settle_trades
@@ -96,35 +97,36 @@ from src.utils.websocket_manager import ws_manager
 
 def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
     """Execute trading logic for a symbol"""
-    trade_params = _prepare_trade_params(
-        symbol, balance, add_spacing=True, verbose=verbose
-    )
+    trade_id = execute_first_entry(symbol, balance, verbose=verbose)
 
-    if not trade_params:
-        return 0
-
-    is_reversal = "HEDGED REVERSAL" in str(trade_params.get("core_summary", ""))
-
-    trade_id = execute_trade(trade_params, is_reversal=is_reversal)
-
-    if trade_id and is_reversal:
-        # Mark the original trade for this window as reversal_triggered
+    if trade_id:
+        # Check if this was a hedged reversal and mark the original trade
         from src.data.db_connection import db_connection
 
         with db_connection() as conn:
             c = conn.cursor()
-            now_iso = datetime.now(tz=ZoneInfo("UTC")).isoformat()
             c.execute(
-                "UPDATE trades SET reversal_triggered = 1, reversal_triggered_at = ? WHERE symbol = ? AND window_start = ? AND side != ? AND settled = 0",
-                (
-                    now_iso,
-                    symbol,
-                    trade_params["window_start"].isoformat(),
-                    trade_params["side"],
-                ),
+                "SELECT is_reversal, side, window_start FROM trades WHERE id = ?",
+                (trade_id,),
             )
-            if c.rowcount > 0:
-                log(f"   🛡️  [{symbol}] Original trade marked as reversal_triggered")
+            row = c.fetchone()
+            if row and row[0]:
+                is_reversal = row[0]
+                side = row[1]
+                window_start = row[2]
+
+                now_iso = datetime.now(tz=ZoneInfo("UTC")).isoformat()
+                c.execute(
+                    "UPDATE trades SET reversal_triggered = 1, reversal_triggered_at = ? WHERE symbol = ? AND window_start = ? AND side != ? AND settled = 0",
+                    (
+                        now_iso,
+                        symbol,
+                        window_start,
+                        side,
+                    ),
+                )
+                if c.rowcount > 0:
+                    log(f"   🛡️  [{symbol}] Original trade marked as reversal_triggered")
 
     return 1 if trade_id else 0
 

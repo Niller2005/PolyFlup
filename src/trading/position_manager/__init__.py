@@ -8,6 +8,8 @@ from .sync import (
 )
 from .stats import get_exit_plan_stats
 from .monitor import check_open_positions
+from .entry import execute_first_entry
+from .reversal import check_and_trigger_reversal
 
 __all__ = [
     "sync_orders_with_exchange",
@@ -16,4 +18,6 @@ __all__ = [
     "recover_open_positions",
     "get_exit_plan_stats",
     "check_open_positions",
+    "execute_first_entry",
+    "check_and_trigger_reversal",
 ]
