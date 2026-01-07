@@ -14,11 +14,9 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MAX_SPREAD` | 0.12 | Only enter liquid markets with tight spreads |
 | `CONFIDENCE_SCALING_FACTOR` | 3.0 | Moderate scaling (max 3x base bet) |
 | `STOP_LOSS_PRICE` | 0.40 | Conservative stop loss trigger |
-| `ENABLE_TAKE_PROFIT` | YES | Lock in profits at 60% gain |
-| `TAKE_PROFIT_PERCENT` | 60% | Conservative profit target |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
 | `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
-| `SCALE_IN_MULTIPLIER` | 0.5 | Add 50% more (1.5x total position) |
+| `SCALE_IN_MULTIPLIER` | 1.0 | Add 100% more (2.0x total position) |
 
 **Expected Results:**
 - Lower volatility
@@ -38,8 +36,6 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MAX_SPREAD` | 0.15 | Accept reasonable spreads |
 | `CONFIDENCE_SCALING_FACTOR` | 5.0 | Standard scaling (max 5x base bet) |
 | `STOP_LOSS_PRICE` | 0.30 | Standard stop loss trigger ($0.30) |
-| `ENABLE_TAKE_PROFIT` | NO | Let winners run |
-| `TAKE_PROFIT_PERCENT` | 80% | Not used (take profit disabled) |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
 | `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
 | `SCALE_IN_MULTIPLIER` | 1.5 | Scale in by 150% (2.5x total) |
@@ -62,8 +58,6 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MAX_SPREAD` | 0.18 | Accept wider spreads for more opportunities |
 | `CONFIDENCE_SCALING_FACTOR` | 7.0 | Aggressive scaling (max 7x base bet) |
 | `STOP_LOSS_PRICE` | 0.20 | Wider stop loss to avoid noise |
-| `ENABLE_TAKE_PROFIT` | NO | Let all winners run |
-| `TAKE_PROFIT_PERCENT` | 100% | Not used |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
 | `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
 | `SCALE_IN_MULTIPLIER` | 2.0 | Double position size on scale-in (3x total) |
@@ -86,11 +80,9 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MAX_SPREAD` | 0.20 | Enter almost any liquid market |
 | `CONFIDENCE_SCALING_FACTOR` | 10.0 | Extreme scaling (max 10x base bet) |
 | `STOP_LOSS_PRICE` | 0.10 | Very wide stop loss |
-| `ENABLE_TAKE_PROFIT` | NO | Never cap upside |
-| `TAKE_PROFIT_PERCENT` | 150% | Not used |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
 | `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
-| `SCALE_IN_MULTIPLIER` | 3.0 | Quadruple position size on scale-in (4x total) |
+| `SCALE_IN_MULTIPLIER` | 2.5 | Scale in by 250% (3.5x total) |
 
 **Expected Results:**
 - Extreme volatility
@@ -147,9 +139,9 @@ All profiles use **Confidence-Based Sizing**:
 
 ### Dynamic Scale-In
 All profiles utilize an intelligent scale-in mechanism for winners:
-- **Dynamic Timing**: Scales in between 7.5 and 12 minutes before expiry based on confidence.
+- **Dynamic Timing**: Scales in when between 7.5 (baseline) and 12 minutes remain, depending on confidence.
 - **Winner-Focus**: Only adds to positions that are already in profit.
-- **Configurable Multiplier**: Adjusts the size of the secondary entry (0.5x to 3.0x).
+- **Configurable Multiplier**: Adjusts the size of the secondary entry (1.0x to 2.5x).
 
 ### Portfolio Risk Management
 All profiles enforce **Maximum Portfolio Exposure**:
@@ -166,7 +158,7 @@ Want to create your own profile? Key principles:
 1. **Position Sizing:** Keep `BET_PERCENT × CONFIDENCE_SCALING_FACTOR × 3` ≤ 50% of balance
 2. **Edge Threshold:** Lower `MIN_EDGE` = more trades but lower win rate
 3. **Portfolio Cap:** `MAX_PORTFOLIO_EXPOSURE` should be 2-4x your `BET_PERCENT`
-4. **Stop Loss:** Tighter = less drawdown but more false exits
+4. **Stop Loss:** Tighter (e.g., $0.40) = less drawdown but more false exits
 5. **Scaling Factor:** Higher = more aggressive on high-confidence signals
 
 **Example Custom Profile (Medium-Aggressive):**
@@ -175,8 +167,7 @@ BET_PERCENT=6.0
 MIN_EDGE=0.56
 MAX_SPREAD=0.16
 CONFIDENCE_SCALING_FACTOR=6.0
-STOP_LOSS_PERCENT=55.0
-ENABLE_TAKE_PROFIT=NO
+STOP_LOSS_PRICE=0.25
 ENABLE_EXIT_PLAN=YES
 EXIT_PRICE_TARGET=0.99
 SCALE_IN_MULTIPLIER=1.2
