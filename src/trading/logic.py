@@ -102,7 +102,16 @@ def _calculate_bet_size(
 
     size = round(target_bet / price, 4)
 
-    bet_usd_effective = target_bet
+    # Bump to MIN_SIZE if calculated size is below minimum and we can afford it
+    if size < MIN_SIZE:
+        min_size_cost = MIN_SIZE * price
+        if balance >= min_size_cost:
+            size = MIN_SIZE
+            bet_usd_effective = min_size_cost
+        else:
+            bet_usd_effective = target_bet
+    else:
+        bet_usd_effective = target_bet
 
     return size, bet_usd_effective
 
@@ -262,12 +271,18 @@ def _prepare_trade_params(
     size, bet_usd_effective = _calculate_bet_size(balance, price, sizing_confidence)
 
     if size < MIN_SIZE:
+        min_size_cost = MIN_SIZE * price
         log(
-            f"   ⏭️  [{symbol}] size {size:.2f} < {MIN_SIZE}. Skipping, trying again next window."
+            f"   💸 [{symbol}] Cannot afford {MIN_SIZE} shares (${min_size_cost:.2f}). Balance: ${balance:.2f}. Skipping."
         )
         if add_spacing:
             log("")
         return None
+
+    if size == MIN_SIZE:
+        log(
+            f"   📈 [{symbol}] Bumping size to {MIN_SIZE} shares (${bet_usd_effective:.2f})"
+        )
 
     return {
         "symbol": symbol,
