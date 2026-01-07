@@ -268,6 +268,27 @@ Bias = UP
 
 ---
 
+## Dynamic Scale-In Mechanism
+
+The bot includes an intelligent scale-in mechanism that adds to winning positions as they approach expiry. This allows the bot to maximize profit on high-conviction trades while minimizing risk early in the window.
+
+### Tiered Entry Timing
+
+Instead of a fixed timer, the scale-in window is dynamically determined by the trade's confidence and current price:
+
+- **Aggressive (High Confidence)**: If confidence $\ge 90\%$ and price $\ge \$0.80$, the bot can scale in as early as **12 minutes** before expiry.
+- **Moderate**: If confidence $\ge 80\%$ and price $\ge \$0.70$, scale-in begins at **10 minutes**.
+- **Default**: The standard scale-in window is **7.5 minutes** (450s) for any winning position meeting the minimum price threshold (default \$0.60).
+
+### Scale-In Logic
+
+1. **Verification**: The bot ensures the position is already in profit (Price > `SCALE_IN_MIN_PRICE`).
+2. **Timing**: Checks if the remaining time in the 15-minute window is within the dynamically calculated threshold.
+3. **Multiplier**: Applies `SCALE_IN_MULTIPLIER` (default 1.5x) to the base bet size for the additional entry.
+4. **Safety**: Only scales in if no other active orders are pending for that market.
+
+---
+
 ## Configuration
 
 All features can be toggled in `.env`:

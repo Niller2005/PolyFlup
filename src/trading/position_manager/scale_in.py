@@ -33,6 +33,7 @@ def _check_scale_in(
     conn,
     side,
     price_change_pct,
+    confidence=0.0,
     target_price=None,
     verbose=False,
 ):
@@ -66,8 +67,17 @@ def _check_scale_in(
     if scaled_in or scale_in_id:
         return
 
+    # Dynamic time threshold based on confidence and midpoint (current_price)
+    effective_time_left = SCALE_IN_TIME_LEFT
+    if confidence >= 0.9 and current_price >= 0.8:
+        effective_time_left = max(effective_time_left, 720)  # Up to 12 minutes left
+    elif confidence >= 0.8 and current_price >= 0.7:
+        effective_time_left = max(effective_time_left, 540)  # Up to 9 minutes left
+    elif confidence >= 0.7 and current_price >= 0.65:
+        effective_time_left = max(effective_time_left, 420)  # Up to 7 minutes left
+
     # Check if we are in the time window for scale-in
-    if t_left > SCALE_IN_TIME_LEFT:
+    if t_left > effective_time_left:
         return  # Too early to scale in
 
     if t_left <= 0:

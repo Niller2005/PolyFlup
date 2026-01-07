@@ -145,6 +145,12 @@ All profiles use **Confidence-Based Sizing**:
 - Higher edge = larger position (up to 5x base in Balanced)
 - Automatically scales back on weaker signals
 
+### Dynamic Scale-In
+All profiles utilize an intelligent scale-in mechanism for winners:
+- **Dynamic Timing**: Scales in between 7.5 and 12 minutes before expiry based on confidence.
+- **Winner-Focus**: Only adds to positions that are already in profit.
+- **Configurable Multiplier**: Adjusts the size of the secondary entry (0.5x to 3.0x).
+
 ### Portfolio Risk Management
 All profiles enforce **Maximum Portfolio Exposure**:
 - Prevents over-concentration in correlated markets

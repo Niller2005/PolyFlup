@@ -32,7 +32,7 @@ def check_open_positions(verbose=True, check_orders=False):
             c = conn.cursor()
             now = datetime.now(tz=ZoneInfo("UTC"))
             c.execute(
-                "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status, timestamp, scale_in_order_id, reversal_triggered, reversal_triggered_at FROM trades WHERE settled = 0 AND exited_early = 0 AND datetime(window_end) > datetime(?)",
+                "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status, timestamp, scale_in_order_id, reversal_triggered, reversal_triggered_at, edge FROM trades WHERE settled = 0 AND exited_early = 0 AND datetime(window_end) > datetime(?)",
                 (now.isoformat(),),
             )
             open_positions = c.fetchall()
@@ -90,8 +90,10 @@ def check_open_positions(verbose=True, check_orders=False):
                 sc_id,
                 rev_trig,
                 rev_trig_at,
+                edge,
             ) in open_positions:
                 bet = bet or 0.0
+                edge = edge or 0.0
                 try:
                     c.execute("SELECT settled FROM trades WHERE id = ?", (tid,))
                     chk_res = c.fetchone()
@@ -230,6 +232,7 @@ def check_open_positions(verbose=True, check_orders=False):
                         conn,
                         side,
                         p_chg_val,
+                        confidence=edge,
                         target_price=target,
                         verbose=verbose,
                     )

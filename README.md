@@ -21,11 +21,12 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 - **Exit Plan**: Places limit sell orders at 99 cents for near-guaranteed profitable exits
 - **🛑 Midpoint Stop Loss**: Primary safety net triggers at $0.30 midpoint price (configurable)
 - **🔄 Hedged Reversal**: Supports holding both sides during trend flips, clearing losers via stop loss
-- **📈 Scale In**: Adds to winning positions near expiry (60-90% probability, configurable multiplier)
+- **📈 Dynamic Scale-In**: Adds to winning positions with confidence-weighted timing (up to 12m early for high-conviction trades)
 - **⚡ Real-Time Monitoring**: 10-second position checking with robust order status tracking
 - **🛡️ Self-Healing Logic**: Automatically force-settles "ghost" trades if price data is unavailable for 3+ cycles
 
 ### 🚀 Recent Improvements (Jan 2026)
+- **Enhanced Scale-In**: Implemented confidence-weighted dynamic timing, allowing high-conviction winners to be scaled as early as 12 minutes before expiry.
 - **Modular Backend**: Fully refactored `src/trading/orders` and `src/data/market_data` for better maintainability.
 - **WebSocket Integration**: Near-instant P&L and order fill updates via Polymarket's real-time sockets.
 - **Intelligent Position Sync**: Startup logic verifies market resolution and prevents re-adopting settled positions.
@@ -94,7 +95,7 @@ ENABLE_REWARD_OPTIMIZATION=YES       # Optimize exit orders for liquidity reward
 ENABLE_SCALE_IN=YES                  # Add to winners near expiry
 SCALE_IN_MIN_PRICE=0.60              # Min price to scale (60%)
 SCALE_IN_MAX_PRICE=0.90              # Max price to scale (90%)
-SCALE_IN_TIME_LEFT=300               # Scale in when ≤5 minutes left
+SCALE_IN_TIME_LEFT=450               # Default scale-in at ≤7.5m (Dynamic up to 12m)
 SCALE_IN_MULTIPLIER=1.5              # Add 150% more (2.5x total position)
 
 # Order Management

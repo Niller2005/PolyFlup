@@ -56,8 +56,8 @@ SCALE_IN_MIN_PRICE = float(
 )  # Min 60 cents (60%+ win probability)
 SCALE_IN_MAX_PRICE = float(os.getenv("SCALE_IN_MAX_PRICE", "0.90"))  # Max 90 cents
 SCALE_IN_TIME_LEFT = int(
-    os.getenv("SCALE_IN_TIME_LEFT", "300")
-)  # 5 minutes (300 seconds)
+    os.getenv("SCALE_IN_TIME_LEFT", "450")
+)  # 7.5 minutes (450 seconds)
 SCALE_IN_MULTIPLIER = float(
     os.getenv("SCALE_IN_MULTIPLIER", "1.5")
 )  # Add 150% more (2.5x total position)
