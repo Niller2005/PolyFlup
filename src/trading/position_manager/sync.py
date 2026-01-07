@@ -1,14 +1,69 @@
-"""Position synchronization and recovery"""
+"""Position and order synchronization and recovery"""
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from src.data.db_connection import db_connection
 from src.utils.logger import log
-from src.trading.orders import get_current_positions, normalize_token_id
+from src.trading.orders import get_current_positions, normalize_token_id, get_orders
 from src.utils.websocket_manager import ws_manager
 from src.data.market_data import get_token_ids, get_window_times, get_current_slug
 from src.data.database import save_trade
 from src.trading.settlement import get_market_resolution
+
+
+def sync_orders_with_exchange():
+    """
+    Sync order status with the exchange.
+    Updates order_status for entry orders.
+    """
+    log("🔄 Syncing open orders with exchange...")
+
+    try:
+        exchange_orders = get_orders()
+
+        if not exchange_orders:
+            log("   ℹ No open orders on exchange")
+            return
+
+        log(f"   ✅ Exchange returned {len(exchange_orders)} open orders")
+
+        with db_connection() as conn:
+            c = conn.cursor()
+
+            orders_map = {}
+            for o in exchange_orders:
+                o_id = o.get("id") or o.get("orderID") or getattr(o, "id", None)
+                if o_id:
+                    orders_map[str(o_id)] = o
+
+            c.execute(
+                """SELECT id, symbol, order_id, order_status
+                   FROM trades WHERE settled = 0 AND order_id IS NOT NULL"""
+            )
+            db_trades = c.fetchall()
+
+            updated_count = 0
+            for trade_id, symbol, order_id, current_status in db_trades:
+                if order_id and order_id in orders_map:
+                    o = orders_map[order_id]
+                    status = o.get("status", "").upper()
+                    size_matched = float(
+                        o.get("size_matched") or getattr(o, "size_matched", 0)
+                    )
+
+                    if current_status != status:
+                        log(
+                            f"   📊 [{symbol}] #{trade_id} Order {order_id[:10]}: {current_status} -> {status} | Matched: {size_matched:.2f}"
+                        )
+                        c.execute(
+                            "UPDATE trades SET order_status = ? WHERE id = ?",
+                            (status, trade_id),
+                        )
+                        updated_count += 1
+
+            log(f"✓ Order sync complete: {updated_count} updated")
+    except Exception as e:
+        log(f"⚠️  Error during order sync: {e}")
 
 
 def sync_positions_with_exchange(user_address: str):
@@ -19,12 +74,11 @@ def sync_positions_with_exchange(user_address: str):
     log(f"🔄 Syncing positions with exchange for {user_address[:10]}...")
 
     try:
-        # 1. Get positions from Data API
         exchange_positions = get_current_positions(user_address)
 
         # Create a map of token_id -> position_data for easy lookup
         # We normalize to decimal string for the primary key
-        pos_map = {}
+        position_map = {}
         for p in exchange_positions:
             aid = (
                 p.get("asset")
@@ -34,7 +88,7 @@ def sync_positions_with_exchange(user_address: str):
             )
             if aid:
                 norm_aid = normalize_token_id(aid)
-                pos_map[norm_aid] = p
+                position_map[norm_aid] = p
 
         with db_connection() as conn:
             c = conn.cursor()
@@ -59,9 +113,9 @@ def sync_positions_with_exchange(user_address: str):
             for trade_id, symbol, side, db_size, token_id, db_entry in db_trades:
                 tid_str = normalize_token_id(token_id)
 
-                # Check match in pos_map
-                if tid_str and tid_str in pos_map:
-                    pos = pos_map[tid_str]
+                # Check match in position_map
+                if tid_str and tid_str in position_map:
+                    pos = position_map[tid_str]
                     matched_exchange_ids.add(tid_str)
 
                     actual_size = float(pos.get("size", 0))
@@ -109,7 +163,7 @@ def sync_positions_with_exchange(user_address: str):
                             )
 
             # 3. Check for untracked positions
-            for t_id_str, p_data in pos_map.items():
+            for t_id_str, p_data in position_map.items():
                 if t_id_str and t_id_str not in all_tracked_token_ids:
                     size = float(p_data.get("size", 0))
                     if size < 0.001:
@@ -176,6 +230,22 @@ def sync_positions_with_exchange(user_address: str):
         log("✓ Position sync complete")
     except Exception as e:
         log(f"⚠️  Error during position sync: {e}")
+
+
+def sync_with_exchange(user_address: str):
+    """
+    Master sync function that syncs both orders and positions with the exchange.
+    """
+    log("=" * 90)
+    log("🔄 MASTER SYNC: Orders and Positions")
+    log("=" * 90)
+
+    sync_orders_with_exchange()
+    sync_positions_with_exchange(user_address)
+
+    log("=" * 90)
+    log("✓ Master sync complete")
+    log("=" * 90)
 
 
 def recover_open_positions():

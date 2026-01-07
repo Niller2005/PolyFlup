@@ -55,3 +55,16 @@ cd ui && npm run dev    # Start dashboard development server
 4. **Precision**: Use `0.0001` threshold for share balance comparisons.
 5. **Min Size**: Enforce 5.0 share minimum for all limit orders.
 6. **Fees**: Taker fees apply to 15m crypto markets (BUY=Tokens, SELL=USDC). Prefer Maker orders to avoid fees and earn rebates.
+
+## Glossary
+
+- **Orders**: Buy/sell orders to enter/modify/exit a position. These are submitted to the exchange and can be open (unfilled) or closed (filled).
+- **Position**: The net exposure from all filled orders on a given side during a trading window. Represents the actual shares held.
+
+## Sync Functions
+
+The bot uses a three-tier sync system on startup:
+
+1. **`sync_with_exchange(user_address)`**: Master sync function that calls both order and position syncs
+2. **`sync_orders_with_exchange()`**: Syncs open order status from the CLOB order book
+3. **`sync_positions_with_exchange(user_address)`**: Syncs position sizes and entry prices from Data API

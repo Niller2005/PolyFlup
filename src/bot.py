@@ -87,7 +87,7 @@ from src.trading.position_manager import (
     check_open_positions,
     get_exit_plan_stats,
     recover_open_positions,
-    sync_positions_with_exchange,
+    sync_with_exchange,
 )
 from src.utils.notifications import process_notifications, init_ws_callbacks
 from src.trading.settlement import check_and_settle_trades
@@ -354,7 +354,7 @@ def main():
     log("=" * 90)
 
     recover_open_positions()
-    sync_positions_with_exchange(addr)
+    sync_with_exchange(addr)
 
     log("🔍 Performing initial position check...")
     check_open_positions(verbose=True, check_orders=True)

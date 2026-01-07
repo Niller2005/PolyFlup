@@ -38,38 +38,38 @@ def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
 
 
 def get_current_positions(user_address: str) -> List[dict]:
-    """Get current positions for a user from Data API"""
+    """Get current orders for a user from Data API"""
     try:
         if not user_address:
-            log("   ❌ Error: user_address is empty for position fetch")
+            log("   ❌ Error: user_address is empty for order fetch")
             return []
 
         url = f"{DATA_API_BASE}/positions?user={user_address}"
-        log(f"   🔍 Fetching positions from Data API for {user_address[:10]}...")
+        log(f"   🔍 Fetching orders from Data API for {user_address[:10]}...")
 
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
 
-        positions = []
+        orders = []
         if isinstance(data, list):
-            positions = data
+            orders = data
         elif isinstance(data, dict):
-            positions = data.get("positions", [])
+            orders = data.get("positions", [])
 
-        valid_positions = []
-        for p in positions:
+        valid_orders = []
+        for p in orders:
             try:
                 size = float(p.get("size", 0))
                 if size > 0.001:  # Filter out dust
-                    valid_positions.append(p)
+                    valid_orders.append(p)
             except:
                 continue
 
-        log(f"   ✅ Data API returned {len(valid_positions)} active positions")
-        return valid_positions
+        log(f"   ✅ Data API returned {len(valid_orders)} open orders")
+        return valid_orders
     except Exception as e:
-        log(f"⚠️  Error getting positions from Data API: {e}")
+        log(f"⚠️  Error getting orders from Data API: {e}")
         return []
 
 
