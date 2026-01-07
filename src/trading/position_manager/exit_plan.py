@@ -205,11 +205,11 @@ def _check_exit_plan(
                     )
                     size = actual_bal
 
-                if truncate_float(o_size, 2) != truncate_float(size, 2):
+                target_size = truncate_float(min(size, actual_bal), 2)
+                if truncate_float(o_size, 2) != target_size:
                     # Repair needed
                     cancel_order(limit_sell_id)
-                    # We use min(size, actual_bal) to be safe against double-sell errors
-                    sell_size = truncate_float(min(size, actual_bal), 2)
+                    sell_size = target_size
                     if sell_size < 5.0:
                         c.execute(
                             "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
