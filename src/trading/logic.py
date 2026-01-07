@@ -169,13 +169,18 @@ def _prepare_trade_params(
 
     # NEW: Check if we already have a trade for THIS SIDE in this window
     window_start, window_end = get_window_times(symbol)
+    window_start_str = window_start.isoformat()
 
     # Check if ANY trade exists for this window
     other_side_exists = False
-    if has_trade_for_window(symbol, window_start.isoformat()):
+    if has_trade_for_window(symbol, window_start_str):
         other_side_exists = True
 
-    if has_side_for_window(symbol, window_start.isoformat(), side):
+    if has_side_for_window(symbol, window_start_str, side):
+        if verbose:
+            log(
+                f"   ⏭️  [{symbol}] Already have {side} position for this window. Skipping."
+            )
         return None
 
     if actual_side == bias:
