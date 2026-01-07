@@ -20,6 +20,15 @@ This project uses **OpenCode Skills** for detailed instructions. Agents should l
 - `polyflup-ops`: Operational commands (Docker, uv, npm) and environment configuration.
 - `polyflup-history`: Chronological log of recent system improvements.
 
+## Subagents
+
+Specialized subagents are available for complex, multi-step tasks. Use the `task` tool with the appropriate `subagent_type`:
+
+- `log-analyzer`: Specialized in syncing logs and finding requested information.
+- `database-analyzer`: Specialized in syncing the database and looking for requested data.
+- `trainer`: Responsible for keeping skills and internal knowledge base up to date.
+- `bookkeeper`: Responsible for keeping project documentation and summaries up-to-date.
+
 ## Quick Start (Core Commands)
 
 ### Backend
