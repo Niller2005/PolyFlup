@@ -233,6 +233,7 @@ def check_open_positions(verbose=True, check_orders=False):
                         conn,
                         side,
                         p_chg_val,
+                        curr_b_status,
                         confidence=edge,
                         target_price=target,
                         verbose=verbose,

@@ -177,6 +177,10 @@ def _check_stop_loss(
     if (row := c.fetchone()) and row[0] == 1:
         return True
 
+    # Early exit: Do not check stop loss for unfilled orders
+    if buy_order_status not in ["FILLED", "MATCHED"]:
+        return False
+
     # STOP LOSS / REVERSAL TRIGGER: Dynamic Headroom
     # We use the $0.30 floor, but ensure at least $0.10 headspace for low-priced entries
     dynamic_trigger = min(STOP_LOSS_PRICE, entry_price - 0.10)
@@ -262,9 +266,6 @@ def _check_stop_loss(
     if not ENABLE_STOP_LOSS:
         return False
 
-    if buy_order_status not in ["FILLED", "MATCHED"]:
-        return False
-
     c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
     if row := c.fetchone():
         try:
@@ -299,6 +300,8 @@ def _check_stop_loss(
     outcome = "STOP_LOSS"
     if is_reversal:
         outcome = "REVERSAL_STOP_LOSS"
+
+    # Redundant check - already done at top of function
 
     # Robust size check: fetch actual balance to ensure we sell everything
     try:

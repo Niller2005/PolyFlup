@@ -36,11 +36,16 @@ def _check_scale_in(
     conn,
     side,
     price_change_pct,
+    buy_order_status,
     confidence=0.0,
     target_price=None,
     verbose=False,
 ):
     if not ENABLE_SCALE_IN:
+        return
+
+    # Early exit: Do not scale in to unfilled orders
+    if buy_order_status not in ["FILLED", "MATCHED"]:
         return
     if scale_in_id:
         try:
