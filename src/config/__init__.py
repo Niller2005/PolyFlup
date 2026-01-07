@@ -15,7 +15,6 @@ __all__ = [
     "SCALE_IN_TIME_LEFT",
     "SCALE_IN_MULTIPLIER",
     "ADX_ENABLED",
-    "ADX_THRESHOLD",
     "ADX_INTERVAL",
     "ADX_PERIOD",
     "WINDOW_DELAY_SEC",
