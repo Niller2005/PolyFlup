@@ -23,6 +23,8 @@ from src.data.market_data import (
 from src.trading.strategy import calculate_confidence, bfxd_allows_trade
 from src.trading.orders import get_clob_client
 
+MIN_SIZE = 5.0
+
 
 def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
     """
@@ -100,7 +102,6 @@ def _calculate_bet_size(
 
     size = round(target_bet / price, 4)
 
-    MIN_SIZE = 5.0
     bet_usd_effective = target_bet
 
     if size < MIN_SIZE:

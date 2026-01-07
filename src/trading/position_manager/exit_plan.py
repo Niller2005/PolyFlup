@@ -16,6 +16,7 @@ from src.trading.orders import (
     truncate_float,
     SELL,
 )
+from src.trading.logic import MIN_SIZE
 
 
 from .shared import _last_exit_attempt
@@ -141,10 +142,10 @@ def _check_exit_plan(
             # Ensure we don't try to sell more than we actually have, even if threshold didn't trigger
             sell_size = truncate_float(min(size, actual_bal), 2)
 
-            if sell_size < 5.0:
+            if sell_size < MIN_SIZE:
                 if verbose:
                     log(
-                        f"   ⚠️  [{symbol}] #{trade_id} size {sell_size} < 5.0 minimum. Cannot place exit plan."
+                        f"   ⚠️  [{symbol}] #{trade_id} size {sell_size} < {MIN_SIZE} minimum. Cannot place exit plan."
                     )
                 return
 
@@ -210,7 +211,7 @@ def _check_exit_plan(
                     # Repair needed
                     cancel_order(limit_sell_id)
                     sell_size = target_size
-                    if sell_size < 5.0:
+                    if sell_size < MIN_SIZE:
                         c.execute(
                             "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
                             (trade_id,),
