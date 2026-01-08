@@ -115,26 +115,24 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
 
                             # Build aligned position details with trade ID, scaled-in and exit plan status
                             # Use fixed width formatting for consistent alignment
-                            position_details = (
-                                f"#{tid:<6} 📦{size:>5.1f} 🧮{pnl_pct:>+6.1f}%"
-                            )
-
-                            if sc_in:  # Scaled in
-                                position_details += " | 📊 Scaled in"
-
-                            if l_sell:  # Exit plan active
-                                position_details += " | ⏰ Exit active"
-                            else:  # Exit pending
-                                position_details += " | ⏳ Exit pending"
-
-                            positions_by_symbol[sym][side]["filled"].append(
-                                position_details
-                            )
+                            pnl_result = _get_position_pnl(sym, side, entry, size)
+                            if (
+                                pnl_result
+                                and isinstance(pnl_result, dict)
+                                and "pnl_pct" in pnl_result
+                            ):
+                                pnl_pct_val = pnl_result["pnl_pct"]
+                                position_details = f"#{str(tid):<6} 📦{size:>5.1f} 🧮{pnl_pct_val:+6.1f}%"
+                            else:
+                                # Fallback if PnL calculation fails
+                                position_details = (
+                                    f"#{str(tid):<6} 📦{size:>5.1f} 🧮  +0.0%"
+                                )
 
                         elif b_status in ["LIVE", "OPEN", "PENDING"] and b_id:
                             # Waiting for fill positions with trade ID - aligned format
                             waiting_details = (
-                                f"#{tid:<6} 📦{size:>5.1f} | ⏳ Waiting for fill"
+                                f"#{str(tid):<6} 📦{size:>5.1f} | ⏳ Waiting for fill"
                             )
                             positions_by_symbol[sym][side]["waiting"].append(
                                 waiting_details
