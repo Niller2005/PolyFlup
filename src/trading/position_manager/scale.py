@@ -124,12 +124,30 @@ def _check_scale_in(
 
     s_size = size * SCALE_IN_MULTIPLIER
 
-    # MIN_SIZE check for scale-in
+    # MIN_SIZE check for scale-in - try bumping to MIN_SIZE if affordable
     if s_size < MIN_SIZE:
-        log(
-            f"   ⏭️  [{symbol}] #{trade_id} scale-in size {s_size:.2f} < {MIN_SIZE}. Skipping, trying again next window."
-        )
-        return
+        min_size_cost = MIN_SIZE * current_price
+        bal_info = get_balance_allowance()
+        if bal_info:
+            usdc_balance = bal_info.get("balance", 0)
+            if usdc_balance >= min_size_cost:
+                if verbose:
+                    log(
+                        f"   📈 [{symbol}] #{trade_id} Bumping scale-in to {MIN_SIZE} shares (${min_size_cost:.2f})"
+                    )
+                s_size = MIN_SIZE
+            else:
+                if verbose:
+                    log(
+                        f"   ⏭️  [{symbol}] #{trade_id} scale-in size {s_size:.2f} < {MIN_SIZE}. Cannot afford ${min_size_cost:.2f}. Have ${usdc_balance:.2f}. Skipping."
+                    )
+                return
+        else:
+            if verbose:
+                log(
+                    f"   ⏭️  [{symbol}] #{trade_id} scale-in size {s_size:.2f} < {MIN_SIZE}. Skipping, trying again next window."
+                )
+            return
 
     # Pre-flight balance check to prevent insufficient funds loop
     est_cost = s_size * current_price
