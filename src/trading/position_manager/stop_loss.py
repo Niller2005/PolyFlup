@@ -148,24 +148,23 @@ def _check_stop_loss(
         except:
             pass
 
-    current_spot = get_current_spot_price(symbol)
-
-    # Secondary Safety: Check if we are winning on spot even if midpoint is low
+    # Secondary Safety: Check if we are winning side using Polymarket outcome prices
     is_on_losing_side = True
-    if current_price >= 0.50:
-        is_on_losing_side = False
 
-    if is_on_losing_side and current_spot > 0 and target_price:
-        if side == "UP" and current_spot >= target_price:
-            is_on_losing_side = False
-            log(
-                f"ℹ️  [{symbol}] Midpoint is weak ({current_price:.2f}) but Spot is ABOVE target - HOLDING"
-            )
-        elif side == "DOWN" and current_spot <= target_price:
-            is_on_losing_side = False
-            log(
-                f"ℹ️  [{symbol}] Midpoint is weak ({current_price:.2f}) but Spot is BELOW target - HOLDING"
-            )
+    # Use Polymarket outcome prices for accurate winning side detection
+    from src.data.market_data import get_outcome_prices
+
+    outcome_data = get_outcome_prices(symbol)
+
+    if outcome_data:
+        # Use specific winning status for this side
+        if side == "UP":
+            is_on_losing_side = not outcome_data.get("up_wins", False)
+        elif side == "DOWN":
+            is_on_losing_side = not outcome_data.get("down_wins", False)
+        else:
+            # Unknown side, assume losing for safety
+            is_on_losing_side = True
 
     if not is_on_losing_side:
         return False

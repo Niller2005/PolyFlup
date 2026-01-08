@@ -288,6 +288,57 @@ class WebSocketManager:
         """Get the latest cached bid and ask for a token"""
         return self.bids.get(str(token_id)), self.asks.get(str(token_id))
 
+    def is_winning_side(
+        self, token_id: str, side: str, target_price: float = None
+    ) -> Optional[bool]:
+        """
+        Determine if a position side is winning based on Polymarket outcome prices.
+
+        UP and DOWN tokens have SEPARATE midpoint prices.
+        Uses get_outcome_prices() which caches bestBid/bestAsk from market API.
+
+        Args:
+            token_id: The token ID to check (UP or DOWN token)
+            side: "UP" or "DOWN" (must match to token type)
+            target_price: Target price from spot (for logging only)
+
+        Returns:
+            True if winning side, False if losing, None if price unavailable
+        """
+        from src.data.market_data import get_outcome_prices
+        from src.utils.logger import log
+
+        # Get outcome prices (caches bestBid/bestAsk from market API)
+        symbol = self.token_to_symbol.get(str(token_id))
+        if not symbol:
+            return None
+
+        try:
+            outcome_data = get_outcome_prices(symbol)
+        except:
+            return None
+
+        # Use specific winning status for token we're checking
+        if side == "UP":
+            return outcome_data.get("up_wins")
+        elif side == "DOWN":
+            return outcome_data.get("down_wins")
+
+        return None
+
+        try:
+            outcome_data = get_outcome_prices(symbol)
+        except:
+            return None
+
+        # Use the specific price for the token we're checking
+        if side == "UP":
+            return outcome_data.get("up_wins")
+        elif side == "DOWN":
+            return outcome_data.get("down_wins")
+
+        return None
+
     def register_callback(self, event_type: str, callback: Callable):
         """Register a function to be called on WSS events"""
         if event_type in self.callbacks:

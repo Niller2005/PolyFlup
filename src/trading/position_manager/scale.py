@@ -105,22 +105,41 @@ def _check_scale_in(
             )
         return
 
-    # Winning side check (Spot price confirmation)
+    # Winning side check using Polymarket outcome prices (separate for UP/DOWN tokens)
+    is_on_winning_side = False
     if target_price:
-        current_spot = get_current_spot_price(symbol)
-        if current_spot > 0:
-            is_on_winning_side = False
-            if side == "UP" and current_spot >= target_price:
-                is_on_winning_side = True
-            elif side == "DOWN" and current_spot <= target_price:
-                is_on_winning_side = True
+        from src.data.market_data import get_outcome_prices
+        from src.utils.websocket_manager import ws_manager
 
-            if not is_on_winning_side:
-                if verbose:
+        # Get outcome prices for both UP and DOWN tokens
+        outcome_data = get_outcome_prices(symbol)
+        if not outcome_data:
+            if verbose:
+                log(
+                    f"   ⏳ [{symbol}] Scale-in skipped: Could not fetch outcome prices"
+                )
+            return
+
+        # Use the specific price for the side we're checking
+        if side == "UP":
+            is_on_winning_side = outcome_data.get("up_wins", False)
+        elif side == "DOWN":
+            is_on_winning_side = outcome_data.get("down_wins", False)
+
+        # Only scale in if we're on winning side
+        if not is_on_winning_side:
+            if verbose:
+                up_price = outcome_data.get("up_price")
+                down_price = outcome_data.get("down_price")
+                if side == "UP":
                     log(
-                        f"   ⏳ [{symbol}] Scale-in skipped: Midpoint range OK (${current_price:.2f}) but Spot (${current_spot:.2f}) on LOSING side of target (${target_price:.2f})"
+                        f"   ⏳ [{symbol}] Scale-in skipped: UP price ${up_price:.2f} on LOSING side (UP needs >= $0.50)"
                     )
-                return
+                else:
+                    log(
+                        f"   ⏳ [{symbol}] Scale-in skipped: DOWN price ${down_price:.2f} on LOSING side (DOWN needs <= $0.50)"
+                    )
+            return
 
     s_size = size * SCALE_IN_MULTIPLIER
 
