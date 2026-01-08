@@ -126,8 +126,7 @@ def get_position_from_data_api(
     try:
         url = f"{DATA_API_BASE}/positions?user={user_address}&asset_id={token_id}"
 
-        # DEBUG: Log the exact API call being made
-        log(f"   🔍 POSITION API CALL: {url[:100]}... for symbol={symbol}")
+        # Removed POSITION API CALL debug spam - was causing excessive logging
 
         resp = requests.get(url, timeout=15)  # Longer timeout for reliability
         resp.raise_for_status()
@@ -137,10 +136,7 @@ def get_position_from_data_api(
             position = data[0]
             position_size = float(position.get("size", 0))
 
-            # DEBUG: Log what we got back
-            log(
-                f"   🔍 POSITION API RESULT: Got position with size={position_size:.4f} for token={token_id[:20]}..."
-            )
+            # Removed POSITION API RESULT debug spam - was causing excessive logging
 
             return {
                 "size": position_size,
@@ -150,10 +146,7 @@ def get_position_from_data_api(
                 "condition_id": position.get("conditionId", ""),
             }
 
-        # DEBUG: Log when no position data is found
-        log(
-            f"   🔍 POSITION API RESULT: No position data found for token={token_id[:20]}... (symbol={symbol})"
-        )
+        # Removed POSITION API RESULT debug spam - was causing excessive logging
         return None
 
     except Exception as e:
@@ -342,10 +335,7 @@ def get_enhanced_balance_allowance(
 
     call_id = str(uuid.uuid4())[:8]
 
-    # DEBUG: Detailed entry logging with call ID to track symbol mix-ups
-    log(
-        f"   🔍 BALANCE ENTRY [{call_id}]: symbol={symbol}, token={token_id[:20]}..., user={user_address[:10]}..., age={trade_age_seconds:.0f}s"
-    )
+    # Removed BALANCE ENTRY debug spam - was causing excessive logging
 
     # Store original symbol to detect any mix-ups during processing
     original_symbol = symbol

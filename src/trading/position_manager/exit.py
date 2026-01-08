@@ -92,20 +92,17 @@ def _check_exit_plan(
         (now - trade_timestamp).total_seconds() if trade_timestamp else 0
     )
 
-    # DEBUG: Log exactly what we're passing to balance validation to catch symbol mix-ups
-    log(
-        f"   🔍 EXIT DEBUG: Trade #{trade_id} - Symbol={symbol}, Token={token_id[:20]}..., Side={side}, Size={size}"
-    )
+    # Concise position debug: symbol, side, size only
+    log(f"   🔍 POSITION: {symbol} {side} {size}")
+
+    # Removed EXIT DEBUG spam - was causing excessive logging
 
     enhanced_balance_info = get_enhanced_balance_allowance(
         token_id, symbol, user_address, trade_age_seconds
     )
     actual_bal = enhanced_balance_info.get("balance", 0)
 
-    # DEBUG: Log the balance result to verify it matches the expected symbol
-    log(
-        f"   🔍 EXIT DEBUG: Trade #{trade_id} - Balance={actual_bal:.4f}, Source={enhanced_balance_info.get('source', 'unknown')}"
-    )
+    # Removed EXIT DEBUG spam - was causing excessive logging
 
     try:
         age = (now - datetime.fromisoformat(ts)).total_seconds()
