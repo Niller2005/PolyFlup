@@ -112,12 +112,12 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             position_details = f"📦{size:.1f} 🧮{pnl_pct:+.1f}%"
 
                             if sc_in:  # Scaled in
-                                position_details += " 📊"
+                                position_details += " | 📊 Scaled in"
 
                             if l_sell:  # Exit plan active
-                                position_details += " ⏰"
+                                position_details += " | ⏰ Exit active"
                             else:  # Exit pending
-                                position_details += " ⏳"
+                                position_details += " | ⏳ Exit pending"
 
                             positions_by_symbol[sym][side].append(position_details)
 
