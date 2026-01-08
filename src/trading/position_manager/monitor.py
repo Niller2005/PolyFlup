@@ -73,6 +73,222 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
 
             if verbose:
                 log(f"👀 Monitoring {len(open_positions)} positions...")
+
+                # Simple position report every minute
+                if len(open_positions) > 0:
+                    position_summary = []
+                    for pos in open_positions[:6]:  # Show max 6 positions
+                        (
+                            tid,
+                            sym,
+                            slug,
+                            tok,
+                            side,
+                            entry,
+                            size,
+                            bet,
+                            w_end,
+                            sc_in,
+                            rev,
+                            target,
+                            l_sell,
+                            b_id,
+                            b_status,
+                            ts,
+                            sc_id,
+                            rev_trig,
+                            rev_trig_at,
+                            edge,
+                            last_sc_at,
+                        ) = pos
+                        if b_status in ["FILLED", "MATCHED"]:
+                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            position_summary.append(
+                                f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
+                            )
+
+                    if position_summary:
+                        log(f"📈 Positions: {' | '.join(position_summary)}")
+
+                # Simple position report every minute
+                if len(open_positions) > 0:
+                    position_summary = []
+                    for pos in open_positions[:6]:  # Show max 6 positions
+                        (
+                            tid,
+                            sym,
+                            slug,
+                            tok,
+                            side,
+                            entry,
+                            size,
+                            bet,
+                            w_end,
+                            sc_in,
+                            rev,
+                            target,
+                            l_sell,
+                            b_id,
+                            b_status,
+                            ts,
+                            sc_id,
+                            rev_trig,
+                            rev_trig_at,
+                            edge,
+                            last_sc_at,
+                        ) = pos
+                        if b_status in ["FILLED", "MATCHED"]:
+                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            position_summary.append(
+                                f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
+                            )
+
+                    if position_summary:
+                        log(f"📈 Positions: {' | '.join(position_summary)}")
+
+                # Simple position report every minute
+                if len(open_positions) > 0:
+                    position_summary = []
+                    for pos in open_positions[:6]:  # Show max 6 positions
+                        (
+                            tid,
+                            sym,
+                            slug,
+                            tok,
+                            side,
+                            entry,
+                            size,
+                            bet,
+                            w_end,
+                            sc_in,
+                            rev,
+                            target,
+                            l_sell,
+                            b_id,
+                            b_status,
+                            ts,
+                            sc_id,
+                            rev_trig,
+                            rev_trig_at,
+                            edge,
+                            last_sc_at,
+                        ) = pos
+                        if b_status in ["FILLED", "MATCHED"]:
+                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            position_summary.append(
+                                f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
+                            )
+
+                    if position_summary:
+                        log(f"📈 Positions: {' | '.join(position_summary)}")
+
+                # Simple position report every minute
+                if len(open_positions) > 0:
+                    position_summary = []
+                    for pos in open_positions[:6]:  # Show max 6 positions
+                        (
+                            tid,
+                            sym,
+                            slug,
+                            tok,
+                            side,
+                            entry,
+                            size,
+                            bet,
+                            w_end,
+                            sc_in,
+                            rev,
+                            target,
+                            l_sell,
+                            b_id,
+                            b_status,
+                            ts,
+                            sc_id,
+                            rev_trig,
+                            rev_trig_at,
+                            edge,
+                            last_sc_at,
+                        ) = pos
+                        if b_status in ["FILLED", "MATCHED"]:
+                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            position_summary.append(
+                                f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
+                            )
+
+                    if position_summary:
+                        log(f"📈 Positions: {' | '.join(position_summary)}")
+
+                # Simple position report every minute
+                if len(open_positions) > 0:
+                    position_summary = []
+                    for pos in open_positions[:6]:  # Show max 6 positions
+                        (
+                            tid,
+                            sym,
+                            slug,
+                            tok,
+                            side,
+                            entry,
+                            size,
+                            bet,
+                            w_end,
+                            sc_in,
+                            rev,
+                            target,
+                            l_sell,
+                            b_id,
+                            b_status,
+                            ts,
+                            sc_id,
+                            rev_trig,
+                            rev_trig_at,
+                            edge,
+                            last_sc_at,
+                        ) = pos
+                        if b_status in ["FILLED", "MATCHED"]:
+                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            position_summary.append(
+                                f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
+                            )
+
+                    if position_summary:
+                        log(f"📈 Positions: {' | '.join(position_summary)}")
+
+                # Simple position report every minute
+                if len(open_positions) > 0:
+                    position_summary = []
+                    for pos in open_positions[:6]:  # Show max 6 positions
+                        (
+                            tid,
+                            sym,
+                            slug,
+                            tok,
+                            side,
+                            entry,
+                            size,
+                            bet,
+                            w_end,
+                            sc_in,
+                            rev,
+                            target,
+                            l_sell,
+                            b_id,
+                            b_status,
+                            ts,
+                            sc_id,
+                            rev_trig,
+                            rev_trig_at,
+                            edge,
+                            last_sc_at,
+                        ) = pos
+                        if b_status in ["FILLED", "MATCHED"]:
+                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            position_summary.append(
+                                f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
+                            )
+
+                    if position_summary:
+                        log(f"📈 Positions: {' | '.join(position_summary)}")
             for (
                 tid,
                 sym,
