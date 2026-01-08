@@ -116,30 +116,48 @@ def retry_balance_api_call(
 
 
 def get_position_from_data_api(
-    user_address: str, token_id: str
+    user_address: str, token_id: str, symbol: str = ""
 ) -> Optional[Dict[str, float]]:
     """
     Get position data from Data API as cross-validation source
+
+    DEBUG: Added symbol parameter to track which symbol this position data belongs to
     """
     try:
         url = f"{DATA_API_BASE}/positions?user={user_address}&asset_id={token_id}"
+
+        # DEBUG: Log the exact API call being made
+        log(f"   🔍 POSITION API CALL: {url[:100]}... for symbol={symbol}")
+
         resp = requests.get(url, timeout=15)  # Longer timeout for reliability
         resp.raise_for_status()
         data = resp.json()
 
         if isinstance(data, list) and len(data) > 0:
             position = data[0]
+            position_size = float(position.get("size", 0))
+
+            # DEBUG: Log what we got back
+            log(
+                f"   🔍 POSITION API RESULT: Got position with size={position_size:.4f} for token={token_id[:20]}..."
+            )
+
             return {
-                "size": float(position.get("size", 0)),
+                "size": position_size,
                 "avg_price": float(
                     position.get("avg_price", position.get("avgPrice", 0))
                 ),
                 "condition_id": position.get("conditionId", ""),
             }
+
+        # DEBUG: Log when no position data is found
+        log(
+            f"   🔍 POSITION API RESULT: No position data found for token={token_id[:20]}... (symbol={symbol})"
+        )
         return None
 
     except Exception as e:
-        log(f"   ⚠️  Error getting position from Data API: {e}")
+        log(f"   ⚠️  Error getting position from Data API for {symbol}: {e}")
         return None
 
 
@@ -319,6 +337,34 @@ def get_enhanced_balance_allowance(
         - retry_count: Number of API retries attempted
         - cross_validated: Whether cross-validation was performed (for logging)
     """
+    # Create a unique ID for this call to track it through logs
+    import uuid
+
+    call_id = str(uuid.uuid4())[:8]
+
+    # DEBUG: Detailed entry logging with call ID to track symbol mix-ups
+    log(
+        f"   🔍 BALANCE ENTRY [{call_id}]: symbol={symbol}, token={token_id[:20]}..., user={user_address[:10]}..., age={trade_age_seconds:.0f}s"
+    )
+
+    # Store original symbol to detect any mix-ups during processing
+    original_symbol = symbol
+    """
+    Enhanced balance validation with retry logic, cross-validation, and symbol-specific tolerance
+
+    CRITICAL: Always returns BALANCE API data for trading to prevent insufficient funds errors.
+    Position data is used only for logging and monitoring discrepancies.
+
+    Returns:
+        Dict containing:
+        - balance: Actual tradable balance from CLOB API (ALWAYS used for trading)
+        - allowance: Allowance value from CLOB API
+        - source: Data source used (always balance_api for trading)
+        - confidence: Confidence level in the balance value
+        - discrepancy: Difference between balance and position data (for monitoring)
+        - retry_count: Number of API retries attempted
+        - cross_validated: Whether cross-validation was performed (for logging)
+    """
     config = get_symbol_config(symbol)
 
     # Step 1: Get balance with retries - THIS IS THE SOURCE OF TRUTH FOR TRADING
@@ -366,14 +412,70 @@ def get_enhanced_balance_allowance(
     market_type = market_info["type"]
 
     if enable_cross_validation:
-        position_data = get_position_from_data_api(user_address, token_id)
+        position_data = get_position_from_data_api(
+            user_address, token_id, original_symbol
+        )
 
         # Get position data for discrepancy logging
         position_val = position_data.get("size", 0) if position_data else 0
 
+        # DEBUG: Verify symbol consistency before logging discrepancies
+        if symbol != original_symbol:
+            log(
+                f"   🚨 BALANCE SYMBOL MISMATCH [{call_id}]: Original={original_symbol}, Current={symbol}, Token={token_id[:20]}..."
+            )
+
+        # Use the original symbol for consistency
+        symbol = original_symbol
+
+        # DEBUG: Log the final comparison being made with call ID
+        log(
+            f"   🔍 BALANCE COMPARISON [{call_id}]: Symbol={original_symbol}, Balance={actual_balance:.4f}, Position={position_val:.4f}, Diff={abs(actual_balance - position_val):.4f}"
+        )
+
         # Log significant discrepancies for monitoring with market type context
         log_balance_discrepancy(
-            symbol,
+            original_symbol,
+            actual_balance,
+            position_val,
+            "balance_validation",
+            "routine_check",
+            market_type,
+        )
+
+        # Use the original symbol for consistency
+        symbol = original_symbol
+
+        # DEBUG: Log the final comparison being made with call ID
+        log(
+            f"   🔍 BALANCE COMPARISON [{call_id}]: Symbol={original_symbol}, Balance={actual_balance:.4f}, Position={position_val:.4f}, Diff={abs(actual_balance - position_val):.4f}"
+        )
+
+        # Log significant discrepancies for monitoring with market type context
+        log_balance_discrepancy(
+            original_symbol,
+            actual_balance,
+            position_val,
+            "balance_validation",
+            "routine_check",
+            market_type,
+        )
+        # Use the original symbol for consistency
+        symbol = original_symbol
+
+        # DEBUG: Log the final comparison being made
+        log(
+            f"   🔍 BALANCE COMPARISON: Symbol={original_symbol}, Balance={actual_balance:.4f}, Position={position_val:.4f}, Diff={abs(actual_balance - position_val):.4f}"
+        )
+
+        # DEBUG: Log the final comparison being made
+        log(
+            f"   🔍 BALANCE COMPARISON: Symbol={original_symbol}, Balance={actual_balance:.4f}, Position={position_val:.4f}, Diff={abs(actual_balance - position_val):.4f}"
+        )
+
+        # Log significant discrepancies for monitoring with market type context
+        log_balance_discrepancy(
+            original_symbol,
             actual_balance,
             position_val,
             "balance_validation",
