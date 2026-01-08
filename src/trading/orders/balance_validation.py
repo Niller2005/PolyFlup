@@ -461,26 +461,32 @@ def get_enhanced_balance_allowance(
             f"   🔍 BALANCE COMPARISON [{call_id}]: Symbol={original_symbol}, Balance={actual_balance:.4f}, Position={position_val:.4f}, Diff={abs(actual_balance - position_val):.4f}"
         )
 
-        # ENHANCED: For SELL orders, provide both position and balance data for smart decision making
-        # Balance = what's available for trading, Position = what you actually own
-        if position_val > actual_balance * 1.3 and position_val >= 1.0:
+        # SIMPLIFIED: For SELL orders, use database position size - it's already correct!
+        # Database shows what you actually own, balance shows what's available for new trades
+        # Stop comparing them - it's just confusing
+
+        # Only log significant discrepancies for monitoring, but don't change the logic
+        if discrepancy > 1.0:
             log(
-                f"   ⚠️  [{original_symbol}] POSITION >> BALANCE: Position={position_val:.4f}, Balance={actual_balance:.4f}. For SELL orders, use POSITION data."
+                f"   ℹ️  [{original_symbol}] Position vs Balance: Position={position_val:.4f}, Balance={actual_balance:.4f}, Diff={discrepancy:.4f}"
             )
-            # Return position size for exit orders, but include balance for safety checks
-            result = {
-                "balance": position_val,  # Use position size for exit orders (what you can actually sell)
-                "allowance": balance_info.get("allowance", 0),
-                "source": "position_data_for_exit_orders",
-                "confidence": config["api_reliability_weight"],
-                "discrepancy": discrepancy,
-                "retry_count": retry_count,
-                "cross_validated": True,
-                "reason": "position_larger_than_balance_use_position_for_exit",
-                "api_response_time": time.time() - balance_start_time,
-                "actual_balance": actual_balance,  # Include actual balance for safety reference
-            }
-            return result
+            log(
+                f"   ℹ️  [{original_symbol}] Using database position size for exit orders (what you actually own)"
+            )
+
+        # Always return database position size for exit orders - it's the source of truth
+        result = {
+            "balance": size,  # Use database position size (what you actually own)
+            "allowance": balance_info.get("allowance", 0),
+            "source": "database_position_size",
+            "confidence": 0.9,  # High confidence in database data
+            "discrepancy": discrepancy,
+            "retry_count": retry_count,
+            "cross_validated": True,
+            "reason": "using_database_position_size_for_exit_orders",
+            "api_response_time": time.time() - balance_start_time,
+        }
+        return result
 
         # Log significant discrepancies for monitoring with market type context
         log_balance_discrepancy(

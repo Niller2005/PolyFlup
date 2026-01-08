@@ -209,33 +209,9 @@ def _check_exit_plan(
                 # Use DB size for the actual sell (this fixes the scaled-in exit plan repair issue)
                 sell_size = truncate_float(size, 2)
 
-            # CRITICAL FIX: For SELL orders, POSITION is what matters, not balance
-            # You're selling from existing position, not buying more
-            # However, when there's a significant discrepancy, use enhanced balance validation
-            elif (
-                size >= MIN_SIZE
-                and (actual_bal < 0.1 or abs(size - actual_bal) > size * 0.5)
-                and age < 600
-            ):
-                # Check if enhanced balance validation detected significant position > balance
-                if (
-                    enhanced_balance_info.get("source")
-                    == "position_data_for_exit_orders"
-                    and enhanced_balance_info.get("reason")
-                    == "position_larger_than_balance_use_position_for_exit"
-                ):
-                    # Use the position size from enhanced validation (which should be the actual position)
-                    position_from_api = enhanced_balance_info.get("balance", actual_bal)
-                    log(
-                        f"   ⚠️  [{symbol}] #{trade_id} Using POSITION data for exit: {position_from_api:.2f} (Balance shows {actual_bal:.2f}). Data API position > balance."
-                    )
-                    sell_size = truncate_float(position_from_api, 2)
-                else:
-                    # Use database position size for normal discrepancies
-                    log(
-                        f"   ⚠️  [{symbol}] #{trade_id} Position vs Balance mismatch: Position ({size:.2f}) vs Balance ({actual_bal:.2f}). Using POSITION data for exit order (age: {age:.0f}s)."
-                    )
-                    sell_size = truncate_float(size, 2)
+            # SIMPLIFIED: For SELL orders, use database position size - it's already correct!
+            # Database shows what you actually own, no need to compare to balance for exit orders
+            # Just use the database size directly - it's the source of truth for what you can sell
 
             if sell_size < MIN_SIZE:
                 if actual_bal >= MIN_SIZE:
