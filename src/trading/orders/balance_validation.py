@@ -438,10 +438,9 @@ def get_enhanced_balance_allowance(
             # Use the original symbol for consistency
             symbol = original_symbol
 
-        # DEBUG: Log the final comparison being made with call ID
-        log(
-            f"   🔍 BALANCE COMPARISON [{call_id}]: Symbol={original_symbol}, Balance={actual_balance:.4f}, Position={position_val:.4f}, Diff={abs(actual_balance - position_val):.4f}"
-        )
+        # ULTRA-SIMPLIFIED: Stop all the confusing logging and comparisons!
+        # Just return balance data directly - no position API calls, no comparisons
+        # Database has correct position size, use that for exit orders, not this enhanced balance
 
         # Log significant discrepancies for monitoring with market type context
         log_balance_discrepancy(
