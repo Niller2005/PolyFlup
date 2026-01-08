@@ -18,27 +18,29 @@ from src.trading.orders import (
 )
 from src.trading.logic import MIN_SIZE
 
-
 from .shared import _last_exit_attempt
 
-n
-def get_optimal_exit_price(entry_price: float, confidence: float, current_price: float, side: str) -> float:
+
+def get_optimal_exit_price(
+    entry_price: float, confidence: float, current_price: float, side: str
+) -> float:
     """
     Calculate optimal exit price based on confidence and market conditions.
     For high confidence trades, use 0.999 to maximize profit.
     """
     # High confidence threshold for 0.999 exit price
     HIGH_CONFIDENCE_THRESHOLD = 0.85
-    
+
     # Only use 0.999 for high confidence trades that are winning
     if confidence >= HIGH_CONFIDENCE_THRESHOLD:
         if side == "UP" and current_price >= entry_price:
             return 0.999  # High confidence UP trade thats winning
         elif side == "DOWN" and current_price <= entry_price:
             return 0.999  # High confidence DOWN trade thats winning
-    
+
     # Default to standard exit price target
     return EXIT_PRICE_TARGET
+
 
 def _check_exit_plan(
     symbol,
@@ -54,7 +56,6 @@ def _check_exit_plan(
     verbose,
     side,
     pnl_pct,
-    
     price_change_pct,
     scaled_in,
     scale_in_id,
@@ -162,9 +163,11 @@ def _check_exit_plan(
             # Ensure we don't try to sell more than we actually have, even if threshold didn't trigger
             sell_size = truncate_float(min(size, actual_bal), 2)
             # CRITICAL FIX: Validate balance data before using it
-            # If we have a significant position in DB but balance shows near zero, 
+            # If we have a significant position in DB but balance shows near zero,
             # it is likely a timing/API issue - use DB size instead
-            if size >= MIN_SIZE and actual_bal < 0.1 and age < 300:  # 5 minute grace period
+            if (
+                size >= MIN_SIZE and actual_bal < 0.1 and age < 300
+            ):  # 5 minute grace period
                 log(
                     f"   ⚠️  [{symbol}] #{trade_id} Balance sync shows near-zero ({actual_bal:.4f}) "
                     f"for active position ({size:.2f}). Using DB size (age: {age:.0f}s)."
@@ -183,7 +186,12 @@ def _check_exit_plan(
                     )
                     return
 
-            res = place_limit_order(token_id, get_optimal_exit_price(entry, confidence, cur_p, side), sell_size, SELL)
+            res = place_limit_order(
+                token_id,
+                get_optimal_exit_price(entry, confidence, cur_p, side),
+                sell_size,
+                SELL,
+            )
             if res["success"] or res.get("order_id"):
                 oid = res.get("order_id")
                 c.execute(
@@ -207,9 +215,11 @@ def _check_exit_plan(
         o_data = get_order(limit_sell_id)
         if o_data:
             o_status = o_data.get("status", "").upper()
-            if o_status == "LIVE":
-                o_size = float(o_data.get("original_size", 0))
+            o_size = float(
+                o_data.get("original_size", 0)
+            )  # Define o_size for all cases
 
+            if o_status == "LIVE":
                 # BI-DIRECTIONAL HEALING: Sync DB size with actual wallet balance
                 scale_in_age = 999
                 if last_scale_in_at:
@@ -241,6 +251,10 @@ def _check_exit_plan(
                     size = actual_bal
 
                 target_size = truncate_float(min(size, actual_bal), 2)
+            else:
+                # For non-LIVE orders, use current size as target
+                target_size = truncate_float(size, 2)
+
             # CRITICAL FIX: Validate balance data before using it for active orders
             # If balance shows near zero for active position, likely API timing issue
             if size >= MIN_SIZE and actual_bal < 0.1 and age < 300:
@@ -270,7 +284,10 @@ def _check_exit_plan(
                             return True
 
                     res = place_limit_order(
-                        token_id, get_optimal_exit_price(entry, confidence, cur_p, side), sell_size, SELL
+                        token_id,
+                        get_optimal_exit_price(entry, confidence, cur_p, side),
+                        sell_size,
+                        SELL,
                     )
                     if res["success"] or res.get("order_id"):
                         new_oid = res.get("order_id")
@@ -279,7 +296,7 @@ def _check_exit_plan(
                             (new_oid, trade_id),
                         )
                         log(
-                            f"   🔧 [{symbol}] #{trade_id} Exit plan size repaired: {o_size} -> {sell_size}"
+                            f"   🔧 [{symbol}] #{trade_id} Exit plan size repaired: {target_size} -> {sell_size}"
                         )
                         repaired = True
                         limit_sell_id = new_oid
