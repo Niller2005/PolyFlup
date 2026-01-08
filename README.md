@@ -26,6 +26,7 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 - **🛡️ Self-Healing Logic**: Automatically force-settles "ghost" trades if price data is unavailable for 3+ cycles
 
 ### 🚀 Recent Improvements (Jan 2026)
+- **Enhanced Position Reports** (v0.4.3): Clean, aligned format with directional emojis (📈📉) and status indicators (⏰⏳📊)
 - **Enhanced Scale-In**: Implemented confidence-weighted dynamic timing, allowing high-conviction winners to be scaled as early as 12 minutes before expiry.
 - **Modular Backend**: Fully refactored `src/trading/orders` and `src/data/market_data` for better maintainability.
 - **WebSocket Integration**: Near-instant P&L and order fill updates via Polymarket's real-time sockets.
