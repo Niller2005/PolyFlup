@@ -74,9 +74,10 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
             if verbose:
                 log(f"👀 Monitoring {len(open_positions)} positions...")
 
-                # Simple position report every minute - show ALL positions
+                # Detailed position report every minute - one line per position, grouped by symbol
                 if len(open_positions) > 0:
-                    position_summary = []
+                    # Group positions by symbol
+                    positions_by_symbol = {}
                     for pos in open_positions:
                         (
                             tid,
@@ -102,13 +103,19 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             last_sc_at,
                         ) = pos
                         if b_status in ["FILLED", "MATCHED"]:
+                            if sym not in positions_by_symbol:
+                                positions_by_symbol[sym] = []
                             pnl_pct = _get_position_pnl(sym, side, entry, size)
-                            position_summary.append(
-                                f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
+                            positions_by_symbol[sym].append(
+                                f"{side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
                             )
 
-                    if position_summary:
-                        log(f"📈 Positions: {' | '.join(position_summary)}")
+                    # Log positions grouped by symbol
+                    if positions_by_symbol:
+                        log("📈 POSITIONS:")
+                        for sym in sorted(positions_by_symbol.keys()):
+                            sym_positions = positions_by_symbol[sym]
+                            log(f"  [{sym}] {' | '.join(sym_positions)}")
 
                 # Simple position report every minute
                 if len(open_positions) > 0:
