@@ -74,10 +74,10 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
             if verbose:
                 log(f"👀 Monitoring {len(open_positions)} positions...")
 
-                # Simple position report every minute
+                # Simple position report every minute - show ALL positions
                 if len(open_positions) > 0:
                     position_summary = []
-                    for pos in open_positions[:6]:  # Show max 6 positions
+                    for pos in open_positions:
                         (
                             tid,
                             sym,
