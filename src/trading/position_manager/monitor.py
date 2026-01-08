@@ -111,11 +111,11 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
 
                         if b_status in ["FILLED", "MATCHED"]:
                             # Filled/Matched positions with PnL
-                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            pnl_pct = _get_position_pnl(tok, entry, size)
 
                             # Build aligned position details with trade ID, scaled-in and exit plan status
                             # Use fixed width formatting for consistent alignment
-                            pnl_result = _get_position_pnl(sym, side, entry, size)
+                            pnl_result = _get_position_pnl(tok, entry, size)
                             if (
                                 pnl_result
                                 and isinstance(pnl_result, dict)
@@ -192,7 +192,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             last_sc_at,
                         ) = pos
                         if b_status in ["FILLED", "MATCHED"]:
-                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            pnl_pct = _get_position_pnl(tok, entry, size)
                             position_summary.append(
                                 f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
                             )
@@ -228,7 +228,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             last_sc_at,
                         ) = pos
                         if b_status in ["FILLED", "MATCHED"]:
-                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            pnl_pct = _get_position_pnl(tok, entry, size)
                             position_summary.append(
                                 f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
                             )
@@ -264,7 +264,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             last_sc_at,
                         ) = pos
                         if b_status in ["FILLED", "MATCHED"]:
-                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            pnl_pct = _get_position_pnl(tok, entry, size)
                             position_summary.append(
                                 f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
                             )
@@ -300,7 +300,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             last_sc_at,
                         ) = pos
                         if b_status in ["FILLED", "MATCHED"]:
-                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            pnl_pct = _get_position_pnl(tok, entry, size)
                             position_summary.append(
                                 f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
                             )
@@ -336,7 +336,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             last_sc_at,
                         ) = pos
                         if b_status in ["FILLED", "MATCHED"]:
-                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+                            pnl_pct = _get_position_pnl(tok, entry, size)
                             position_summary.append(
                                 f"{sym} {side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
                             )
