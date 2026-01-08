@@ -26,6 +26,18 @@ client = ClobClient(
 if not hasattr(client, "builder_config"):
     setattr(client, "builder_config", None)
 
+# Hotfix: ensure client has heartbeat method for API connection maintenance
+if not hasattr(client, "heartbeat"):
+    def heartbeat_shim():
+        """Health check to maintain API connection - uses get_ok() for compatibility"""
+        try:
+            return client.get_ok()
+        except Exception as e:
+            # If get_ok fails, return None to indicate heartbeat failure
+            return None
+    
+    setattr(client, "heartbeat", heartbeat_shim)
+
 
 def get_clob_client() -> ClobClient:
     """Get the initialized CLOB client"""
