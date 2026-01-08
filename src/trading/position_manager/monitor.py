@@ -8,6 +8,7 @@ from src.utils.logger import log, log_error
 from src.config.settings import EXIT_PRICE_TARGET
 from src.trading.orders import (
     get_order_status,
+    cancel_order,
     get_order,
     get_multiple_market_prices,
     check_orders_scoring,
@@ -151,7 +152,6 @@ def check_open_positions(verbose=True, check_orders=False):
                                 )
                                 # CANCEL ANY PENDING SCALE-IN ORDER - WITH COMPREHENSIVE AUDIT TRAIL
                                 if sc_id:
-                                    from src.trading.orders import cancel_order, get_order_status
 
                                     # AUDIT: Starting scale-in cancellation process
                                     log(
