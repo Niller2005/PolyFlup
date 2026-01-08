@@ -140,7 +140,6 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
 
                 # Clean position report with status indicators - matches desired format
                 if len(open_positions) > 0:
-                    log("📈 POSITIONS:")
                     for pos in open_positions[:10]:  # Show max 10 positions
                         (
                             tid,
