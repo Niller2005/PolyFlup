@@ -16,6 +16,7 @@ from src.trading import (
     calculate_confidence,
     _calculate_bet_size,
     _determine_trade_side,
+    get_clob_client,
 )
 
 
