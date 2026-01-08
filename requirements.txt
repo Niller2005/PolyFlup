@@ -24,3 +24,6 @@ pandas>=2.0.0
 # Database
 # sqlite3 is built-in for local dev
 
+# System Monitoring
+psutil>=5.9.0
+
