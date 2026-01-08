@@ -173,17 +173,34 @@ def sync_positions_with_exchange(user_address: str):
                         avg_price = float(
                             p_data.get("avg_price") or p_data.get("avgPrice") or 0.5
                         )
-                        symbol = (
-                            p_data.get("symbol")
-                            or p_data.get("market")
-                            or p_data.get("title")
-                            or "ADOPTED"
-                        )
                         slug = (
                             p_data.get("slug")
                             or p_data.get("market_slug")
                             or "adopted-market"
                         )
+
+                        # Extract symbol from slug (e.g., "btc-updown-15m-123456" -> "BTC")
+                        if slug and slug.startswith("-adopted-market"):
+                            slug = "adopted-market"
+                        if slug and "-" in slug:
+                            extracted = slug.split("-")[0].upper()
+                            if extracted in ["BTC", "ETH", "SOL", "XRP"]:
+                                symbol = extracted
+                            else:
+                                symbol = (
+                                    p_data.get("symbol")
+                                    or p_data.get("market")
+                                    or p_data.get("title")
+                                    or "ADOPTED"
+                                )
+                        else:
+                            symbol = (
+                                p_data.get("symbol")
+                                or p_data.get("market")
+                                or p_data.get("title")
+                                or "ADOPTED"
+                            )
+
                         side = p_data.get("outcome", "UNKNOWN").upper()
 
                         # Check if already resolved before adopting
