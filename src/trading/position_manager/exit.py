@@ -87,9 +87,13 @@ def _check_exit_plan(
             trade_timestamp = datetime.fromisoformat(row[0])
         except:
             pass
-    
-    trade_age_seconds = (now - trade_timestamp).total_seconds() if trade_timestamp else 0
-    enhanced_balance_info = get_enhanced_balance_allowance(token_id, symbol, user_address, trade_age_seconds)
+
+    trade_age_seconds = (
+        (now - trade_timestamp).total_seconds() if trade_timestamp else 0
+    )
+    enhanced_balance_info = get_enhanced_balance_allowance(
+        token_id, symbol, user_address, trade_age_seconds
+    )
     actual_bal = enhanced_balance_info.get("balance", 0)
 
     try:
@@ -184,12 +188,26 @@ def _check_exit_plan(
             # CRITICAL FIX: Validate balance data before using it
             # If we have a significant position in DB but balance shows near zero,
             # it is likely a timing/API issue - use DB size instead
-            if size >= MIN_SIZE and actual_bal < 0.1 and age < 600:  # 10 minute grace period (increased from 5 minutes)
+            if (
+                size >= MIN_SIZE and actual_bal < 0.1 and age < 600
+            ):  # 10 minute grace period (increased from 5 minutes)
                 log(
                     f"   ⚠️  [{symbol}] #{trade_id} Balance sync shows near-zero ({actual_bal:.4f}) "
                     f"for active position ({size:.2f}). Using DB size (age: {age:.0f}s)."
                 )
                 # Use DB size for the actual sell (this fixes the scaled-in exit plan repair issue)
+                sell_size = truncate_float(size, 2)
+
+            # Additional protection: Handle significant mismatches between position and balance
+            # When position shows 25.41 but balance shows 10.00, use position data to prevent insufficient funds
+            elif (
+                size >= MIN_SIZE
+                and (actual_bal < 0.1 or abs(size - actual_bal) > size * 0.5)
+                and age < 600
+            ):
+                log(
+                    f"   ⚠️  [{symbol}] #{trade_id} Significant mismatch: Position ({size:.2f}) vs Balance ({actual_bal:.2f}). Using DB size (age: {age:.0f}s)."
+                )
                 sell_size = truncate_float(size, 2)
 
             if sell_size < MIN_SIZE:
