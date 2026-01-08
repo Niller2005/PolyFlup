@@ -456,34 +456,18 @@ def get_enhanced_balance_allowance(
         # Use the original symbol for consistency
         symbol = original_symbol
 
-        # DEBUG: Log the final comparison being made with call ID
-        log(
-            f"   🔍 BALANCE COMPARISON [{call_id}]: Symbol={original_symbol}, Balance={actual_balance:.4f}, Position={position_val:.4f}, Diff={abs(actual_balance - position_val):.4f}"
-        )
+        # ULTRA-SIMPLIFIED: Stop all the confusing logging and comparisons!
+        # Just return balance data directly - no position API calls, no comparisons
+        # Database has correct position size, use that for exit orders, not this enhanced balance
 
-        # SIMPLIFIED: For SELL orders, use database position size - it's already correct!
-        # Database shows what you actually own, balance shows what's available for new trades
-        # Stop comparing them - it's just confusing
-
-        # Only log significant discrepancies for monitoring, but don't change the logic
-        if discrepancy > 1.0:
-            log(
-                f"   ℹ️  [{original_symbol}] Position vs Balance: Position={position_val:.4f}, Balance={actual_balance:.4f}, Diff={discrepancy:.4f}"
-            )
-            log(
-                f"   ℹ️  [{original_symbol}] Using database position size for exit orders (what you actually own)"
-            )
-
-        # Always return database position size for exit orders - it's the source of truth
         result = {
-            "balance": size,  # Use database position size (what you actually own)
+            "balance": actual_balance,  # Use actual balance from CLOB API
             "allowance": balance_info.get("allowance", 0),
-            "source": "database_position_size",
-            "confidence": 0.9,  # High confidence in database data
-            "discrepancy": discrepancy,
+            "source": "simple_balance_api",
+            "confidence": config["api_reliability_weight"],
             "retry_count": retry_count,
-            "cross_validated": True,
-            "reason": "using_database_position_size_for_exit_orders",
+            "cross_validated": False,
+            "reason": "simple_balance_api",
             "api_response_time": time.time() - balance_start_time,
         }
         return result
