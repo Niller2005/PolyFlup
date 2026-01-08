@@ -1,4 +1,4 @@
-"""Core position monitoring loop"""
+"""Core position monitoring loop with comprehensive audit trail"""
 
 import time
 from datetime import datetime
@@ -15,6 +15,8 @@ from src.trading.orders import (
 from src.utils.websocket_manager import ws_manager
 from src.trading.settlement import force_settle_trade
 from .shared import _position_check_lock
+from .shared import _scale_in_order_lock
+from .reconciliation import safe_cancel_order, is_recently_filled, track_recent_fill
 from .pnl import _get_position_pnl
 from .stop_loss import _check_stop_loss
 from .scale import _check_scale_in
@@ -147,14 +149,55 @@ def check_open_positions(verbose=True, check_orders=False):
                                 log(
                                     f"💰 [{sym}] #{tid} {side} EXIT SUCCESS: MATCHED at {ex_p}! (size: {sz_m:.2f}) | {pnl_val_f:+.2f}$ ({roi_val_f:+.1f}%)"
                                 )
-                                # CANCEL ANY PENDING SCALE-IN ORDER
+                                # CANCEL ANY PENDING SCALE-IN ORDER - WITH COMPREHENSIVE AUDIT TRAIL
                                 if sc_id:
-                                    from src.trading.orders import cancel_order
+                                    from src.trading.orders import cancel_order, get_order_status
 
+                                    # AUDIT: Starting scale-in cancellation process
                                     log(
-                                        f"   🧹 [{sym}] #{tid} Exiting: Cancelling orphan scale-in order {sc_id[:10]}..."
+                                        f"   🧹 [{sym}] #{tid} EXIT AUDIT: Starting scale-in order cancellation process for order {sc_id[:10]}"
                                     )
-                                    cancel_order(sc_id)
+                                    
+                                    # CRITICAL FIX: Check if scale-in order is actually unfilled before cancelling
+                                    sc_status = get_order_status(sc_id)
+                                    
+                                    # AUDIT: Scale-in order status check
+                                    log(
+                                        f"   🔍 [{sym}] #{tid} EXIT AUDIT: Scale-in order {sc_id[:10]} status: {sc_status}"
+                                    )
+                                    
+                                    if sc_status not in ["FILLED", "MATCHED"]:
+                                        # Check for race condition - track this as a recent fill attempt
+                                        if is_recently_filled(sc_id):
+                                            # AUDIT: Race condition detected - order was recently filled
+                                            fill_data = get_order(sc_id)
+                                            fill_size = fill_data.get('size_matched', 0) if fill_data else 'unknown'
+                                            log(
+                                                f"   ⚠️  [{sym}] #{tid} EXIT AUDIT: RACE CONDITION DETECTED! Order {sc_id[:10]} was recently filled (size: {fill_size}), skipping cancellation"
+                                            )
+                                        else:
+                                            # AUDIT: Safe to cancel - order confirmed unfilled
+                                            log(
+                                                f"   🧹 [{sym}] #{tid} EXIT AUDIT: Confirmed scale-in order {sc_id[:10]} unfilled (Status: {sc_status}), proceeding with cancellation"
+                                            )
+                                            cancel_result = cancel_order(sc_id)
+                                            if cancel_result:
+                                                # AUDIT: Scale-in cancellation successful
+                                                log(
+                                                    f"   ✅ [{sym}] #{tid} EXIT AUDIT: Successfully cancelled scale-in order {sc_id[:10]}"
+                                                )
+                                            else:
+                                                # AUDIT: Scale-in cancellation failed
+                                                log(
+                                                    f"   ❌ [{sym}] #{tid} EXIT AUDIT: Failed to cancel scale-in order {sc_id[:10]}"
+                                                )
+                                    else:
+                                        # AUDIT: Scale-in order already filled, update database
+                                        log(
+                                            f"   ✅ [{sym}] #{tid} EXIT AUDIT: Scale-in order {sc_id[:10]} already filled (Status: {sc_status}), updating database and skipping cancellation"
+                                        )
+                                        # Track this fill to prevent future race conditions
+                                        track_recent_fill(sc_id)
 
                                 c.execute(
                                     "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, settled_at=?, scale_in_order_id=NULL WHERE id=?",

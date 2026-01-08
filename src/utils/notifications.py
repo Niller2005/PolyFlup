@@ -6,6 +6,7 @@ from src.utils.logger import log, log_error, send_discord
 from src.trading.orders import get_notifications, drop_notifications, SELL
 from src.data.db_connection import db_connection
 from src.trading.position_manager.shared import _position_check_lock
+from src.trading.position_manager.reconciliation import track_recent_fill
 from .websocket_manager import ws_manager
 
 
@@ -161,11 +162,27 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     ) = row
                     new_scale_price = float(fill_price) if fill_price else db_price
                     new_scale_size = float(fill_size) if fill_size else 0
+                if row:
+                    (
+                        trade_id,
+                        symbol,
+                        trade_side,
+                        db_size,
+                        db_price,
+                        db_bet,
+                        token_id,
+                        l_sell_id,
+                    ) = row
+                    new_scale_price = float(fill_price) if fill_price else db_price
+                    new_scale_size = float(fill_size) if fill_size else 0
 
                     if new_scale_size > 0:
                         log(
                             f"📈 [{symbol}] Scale-in filled: #{trade_id} (+{new_scale_size:.2f} @ ${new_scale_price:.4f})"
                         )
+
+                        # Track this fill to prevent race condition cancellations
+                        track_recent_fill(order_id, new_scale_price, new_scale_size, timestamp)
 
                         # Immediate update of averages
                         new_total_size = db_size + new_scale_size

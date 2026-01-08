@@ -1,4 +1,4 @@
-"""Position scaling logic"""
+"""Position scaling logic with comprehensive audit trail"""
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -55,6 +55,10 @@ def _check_scale_in(
                 s_price = float(o_data.get("price", current_price))
                 s_matched = float(o_data.get("size_matched", 0))
                 if s_matched > 0:
+                    # AUDIT: Scale-in order filled (delayed detection)
+                    log(
+                        f"📈 [{symbol}] Trade #{trade_id} {side} | 🎯 SCALE-IN FILLED (Delayed): +{s_matched:.2f} shares @ ${s_price:.4f} | OrderID: {scale_in_id[:10]}"
+                    )
                     c.execute(
                         "UPDATE trades SET size=size+?, bet_usd=bet_usd+?, entry_price=(bet_usd+?)/(size+?), scaled_in=1, scale_in_order_id=NULL, last_scale_in_at=? WHERE id=?",
                         (
@@ -66,16 +70,21 @@ def _check_scale_in(
                             trade_id,
                         ),
                     )
-                    log(
-                        f"📈 [{symbol}] #{trade_id} Scale-in filled (delayed): +{s_matched:.2f} shares"
-                    )
                     return
             elif o_data and o_data.get("status", "").upper() in ["CANCELED", "EXPIRED"]:
+                # AUDIT: Scale-in order cancelled/expired
+                log(
+                    f"📈 [{symbol}] Trade #{trade_id} {side} | 🧹 SCALE-IN CANCELLED: Order {scale_in_id[:10]} status changed to {o_data.get('status', '').upper()}"
+                )
                 c.execute(
                     "UPDATE trades SET scale_in_order_id = NULL WHERE id = ?",
                     (trade_id,),
                 )
-        except:
+        except Exception as e:
+            # AUDIT: Error checking scale-in order status
+            log(
+                f"📈 [{symbol}] Trade #{trade_id} {side} | ⚠️ SCALE-IN STATUS ERROR: Failed to check order {scale_in_id[:10]}: {e}"
+            )
             pass
 
     if scaled_in or scale_in_id:
@@ -189,8 +198,9 @@ def _check_scale_in(
     maker_price = bid if bid else current_price
     maker_price = max(0.01, min(0.99, round(maker_price, 2)))
 
+    # AUDIT: Scale-in order placement initiated
     log(
-        f"📈 [{symbol}] Trade #{trade_id} {side} | 📈 SCALE IN triggered (Maker Order): size={s_size:.2f}, price=${maker_price:.2f}, {t_left:.0f}s left"
+        f"📈 [{symbol}] Trade #{trade_id} {side} | 🎯 SCALE-IN PLACEMENT: Initiating maker order | size={s_size:.2f}, price=${maker_price:.2f}, time_left={t_left:.0f}s, confidence={confidence:.2f}"
     )
 
     # Use LIMIT order for scale-in to ensure maker fill
@@ -216,16 +226,22 @@ def _check_scale_in(
                             "UPDATE trades SET scale_in_order_id = ? WHERE id = ?",
                             (oid, trade_id),
                         )
+                        # AUDIT: Scale-in order placed on book
                         log(
-                            f"📈 [{symbol}] Trade #{trade_id} {side} | ⏳ SCALE IN order pending on book (Maker): {s_size:.2f} shares @ ${maker_price:.2f}"
+                            f"📈 [{symbol}] Trade #{trade_id} {side} | ⏳ SCALE-IN PLACED: Maker order pending on book | OrderID: {oid[:10]}, size={s_size:.2f}, price=${maker_price:.2f}, status={status}"
                         )
                         return
-            except:
+            except Exception as e:
+                # AUDIT: Error checking immediate fill status
+                log(
+                    f"📈 [{symbol}] Trade #{trade_id} {side} | ⚠️ SCALE-IN IMMEDIATE CHECK ERROR: Failed to verify order {oid[:10]} status: {e}"
+                )
                 pass
 
         if actual_s_size > 0:
+            # AUDIT: Scale-in order filled immediately
             log(
-                f"📈 [{symbol}] Trade #{trade_id} {side} | ✅ SCALE IN order filled: {actual_s_size:.2f} shares @ ${actual_s_price:.4f}"
+                f"📈 [{symbol}] Trade #{trade_id} {side} | ✅ SCALE-IN FILLED (Immediate): {actual_s_size:.2f} shares @ ${actual_s_price:.4f} | OrderID: {oid[:10]}"
             )
             c.execute(
                 "UPDATE trades SET size=size+?, bet_usd=bet_usd+?, entry_price=(bet_usd+?)/(size+?), scaled_in=1, scale_in_order_id=NULL, last_scale_in_at=? WHERE id=?",
@@ -241,10 +257,13 @@ def _check_scale_in(
         else:
             # If not filled immediately and we have an ID, it's already handled above
             if not oid:
+                # AUDIT: Scale-in order placement failed - no order ID
                 log(
-                    f"📈 [{symbol}] Trade #{trade_id} {side} | ⚠️  SCALE IN order failed to return ID."
+                    f"📈 [{symbol}] Trade #{trade_id} {side} | ❌ SCALE-IN PLACEMENT FAILED: No order ID returned"
                 )
     else:
+        # AUDIT: Scale-in order placement failed
+        error_msg = res.get('error', 'Unknown error')
         log(
-            f"📈 [{symbol}] Trade #{trade_id} {side} | ❌ SCALE IN order failed: {res.get('error')}"
+            f"📈 [{symbol}] Trade #{trade_id} {side} | ❌ SCALE-IN PLACEMENT FAILED: {error_msg}"
         )

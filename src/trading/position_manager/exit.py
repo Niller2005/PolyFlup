@@ -21,6 +21,24 @@ from src.trading.logic import MIN_SIZE
 
 from .shared import _last_exit_attempt
 
+n
+def get_optimal_exit_price(entry_price: float, confidence: float, current_price: float, side: str) -> float:
+    """
+    Calculate optimal exit price based on confidence and market conditions.
+    For high confidence trades, use 0.999 to maximize profit.
+    """
+    # High confidence threshold for 0.999 exit price
+    HIGH_CONFIDENCE_THRESHOLD = 0.85
+    
+    # Only use 0.999 for high confidence trades that are winning
+    if confidence >= HIGH_CONFIDENCE_THRESHOLD:
+        if side == "UP" and current_price >= entry_price:
+            return 0.999  # High confidence UP trade thats winning
+        elif side == "DOWN" and current_price <= entry_price:
+            return 0.999  # High confidence DOWN trade thats winning
+    
+    # Default to standard exit price target
+    return EXIT_PRICE_TARGET
 
 def _check_exit_plan(
     symbol,
@@ -36,12 +54,14 @@ def _check_exit_plan(
     verbose,
     side,
     pnl_pct,
+    
     price_change_pct,
     scaled_in,
     scale_in_id,
     entry,
     cur_p,
     check_orders=False,
+    confidence=0.0,
     is_scoring=None,
     last_scale_in_at=None,
 ):
@@ -163,7 +183,7 @@ def _check_exit_plan(
                     )
                     return
 
-            res = place_limit_order(token_id, EXIT_PRICE_TARGET, sell_size, SELL)
+            res = place_limit_order(token_id, get_optimal_exit_price(entry, confidence, cur_p, side), sell_size, SELL)
             if res["success"] or res.get("order_id"):
                 oid = res.get("order_id")
                 c.execute(
@@ -250,7 +270,7 @@ def _check_exit_plan(
                             return True
 
                     res = place_limit_order(
-                        token_id, EXIT_PRICE_TARGET, sell_size, SELL
+                        token_id, get_optimal_exit_price(entry, confidence, cur_p, side), sell_size, SELL
                     )
                     if res["success"] or res.get("order_id"):
                         new_oid = res.get("order_id")
