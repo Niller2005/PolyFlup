@@ -179,8 +179,20 @@ def _check_stop_loss(
 
     # Robust size check: fetch actual balance to ensure we sell everything
     try:
-        enhanced_balance = get_balance_allowance(token_id)
-        actual_balance = balance_info.get("balance", 0) if balance_info else 0
+        # Calculate trade age for enhanced balance validation
+        c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+        trade_timestamp = None
+        if row := c.fetchone():
+            try:
+                trade_timestamp = datetime.fromisoformat(row[0])
+            except:
+                pass
+        
+        trade_age_seconds = (now - trade_timestamp).total_seconds() if trade_timestamp else 0
+        
+        # Use enhanced balance validation for better reliability
+        enhanced_balance_info = get_enhanced_balance_allowance(token_id, symbol, user_address, trade_age_seconds)
+        actual_balance = enhanced_balance_info.get("balance", 0)
         if actual_balance < 0.1:
             log(
                 f"   ⚠️  [{symbol}] #{trade_id} Stop Loss: Balance is 0 or near 0. Settling as ghost trade."
@@ -225,8 +237,18 @@ def _check_stop_loss(
             log(
                 f"   🔓 [{symbol}] #{trade_id} Cancelled existing exit plan to execute stop loss."
             )
-            time.sleep(1)  # Short wait for exchange to unlock tokens
-
+            # Use enhanced balance validation for better reliability
+            c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+            trade_timestamp = None
+            if row := c.fetchone():
+                try:
+                    trade_timestamp = datetime.fromisoformat(row[0])
+                except:
+                    pass
+            
+            trade_age_seconds = (now - trade_timestamp).total_seconds() if trade_timestamp else 0
+            enhanced_balance_info = get_enhanced_balance_allowance(token_id, symbol, user_address, trade_age_seconds)
+            actual_balance = enhanced_balance_info.get("balance", 0)
     if scale_in_order_id:
         log(
             f"   Sweep [{symbol}] #{trade_id} Stop Loss: Cancelling pending scale-in order {scale_in_order_id[:10]}..."
@@ -237,8 +259,18 @@ def _check_stop_loss(
     if not sell_result["success"]:
         err = sell_result.get("error", "").lower()
         if "balance" in err or "allowance" in err:
-            balance_info = get_balance_allowance(token_id)
-            actual_balance = balance_info.get("balance", 0) if balance_info else 0
+            # Use enhanced balance validation for better reliability
+            c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+            trade_timestamp = None
+            if row := c.fetchone():
+                try:
+                    trade_timestamp = datetime.fromisoformat(row[0])
+                except:
+                    pass
+            
+            trade_age_seconds = (now - trade_timestamp).total_seconds() if trade_timestamp else 0
+            enhanced_balance_info = get_enhanced_balance_allowance(token_id, symbol, user_address, trade_age_seconds)
+            actual_balance = enhanced_balance_info.get("balance", 0)
             if actual_balance >= 1.0:
                 c.execute(
                     "UPDATE trades SET size = ? WHERE id = ?",

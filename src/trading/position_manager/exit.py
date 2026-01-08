@@ -43,7 +43,7 @@ def get_optimal_exit_price(
 
 
 def _check_exit_plan(
-    symbol,
+    user_address,
     trade_id,
     token_id,
     size,
@@ -70,8 +70,18 @@ def _check_exit_plan(
         return False
 
     repaired = False
-    balance_info = get_balance_allowance(token_id)
-    actual_bal = balance_info.get("balance", 0) if balance_info else 0
+    # Use enhanced balance validation for better reliability
+    c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+    trade_timestamp = None
+    if row := c.fetchone():
+        try:
+            trade_timestamp = datetime.fromisoformat(row[0])
+        except:
+            pass
+    
+    trade_age_seconds = (now - trade_timestamp).total_seconds() if trade_timestamp else 0
+    enhanced_balance_info = get_enhanced_balance_allowance(token_id, symbol, user_address, trade_age_seconds)
+    actual_bal = enhanced_balance_info.get("balance", 0)
 
     try:
         age = (now - datetime.fromisoformat(ts)).total_seconds()

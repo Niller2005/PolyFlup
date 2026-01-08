@@ -33,6 +33,7 @@ from .market_info import (
 )
 from .scoring import check_order_scoring, check_orders_scoring
 from .utils import truncate_float, normalize_token_id
+from .balance_validation import get_enhanced_balance_allowance, get_symbol_config
 
 __all__ = [
     "setup_api_creds",
@@ -69,5 +70,7 @@ __all__ = [
     "MIN_TICK_SIZE",
     "MIN_ORDER_SIZE",
     "truncate_float",
+    "get_enhanced_balance_allowance",
+    "get_symbol_config",
     "normalize_token_id",
 ]
