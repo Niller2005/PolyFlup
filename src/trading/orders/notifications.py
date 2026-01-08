@@ -1,6 +1,6 @@
 """Order notifications management with comprehensive audit trail"""
 
-from typing import List
+from typing import List, Any
 from py_clob_client.clob_types import DropNotificationParams
 from src.utils.logger import log
 from .client import client
@@ -23,17 +23,15 @@ def _extract_order_id_from_payload(payload: dict) -> str:
 
 
 def get_notifications() -> List[dict]:
-    """Get all notifications with audit trail"""
+    """Get all notifications with simplified audit trail"""
     try:
-        # AUDIT: Starting notification retrieval
-        log("🔍 NOTIFICATION AUDIT: Starting notification retrieval process")
-
         notifications = client.get_notifications()
         if not isinstance(notifications, list):
             notifications = [notifications] if notifications else []
 
-        # AUDIT: Notification retrieval results
-        log(f"🔍 NOTIFICATION AUDIT: Retrieved {len(notifications)} notifications")
+        # Only log if there are notifications to process
+        if len(notifications) > 0:
+            log(f"🔍 NOTIFICATIONS: {len(notifications)} new")
 
         result = []
         notification_summary = []
@@ -65,58 +63,36 @@ def get_notifications() -> List[dict]:
                     f"#{i + 1}: Type {notification_type}, Order {order_id[:10] if order_id != 'unknown' else 'unknown'}"
                 )
 
-        # AUDIT: Batch notification processing summary
-        if len(notifications) <= 3:
-            # For small batches, log each notification
-            for summary in notification_summary:
-                log(f"🔍 NOTIFICATION AUDIT: Processed notification {summary}")
-        else:
-            # For large batches, log summary only
-            log(
-                f"🔍 NOTIFICATION AUDIT: Processed {len(notifications)} notifications - {len([s for s in notification_summary if 'Type' in s])} processed successfully"
-            )
-
-        # AUDIT: Notification processing complete
-        log(
-            f"✅ NOTIFICATION AUDIT: Successfully processed {len(result)} notifications"
-        )
+        # Only log processing details if there are notifications
+        if len(notifications) > 0:
+            if len(notifications) <= 3:
+                # For small batches, log each notification
+                for summary in notification_summary:
+                    log(f"🔍 NOTIFICATION: {summary}")
+            else:
+                # For large batches, log summary only
+                log(f"🔍 NOTIFICATIONS: Processed {len(notifications)}")
         return result
 
     except Exception as e:
-        # AUDIT: Notification retrieval error
-        log(f"❌ NOTIFICATION AUDIT ERROR: Failed to get notifications: {e}")
+        log(f"❌ NOTIFICATION ERROR: {e}")
         return []
 
 
 def drop_notifications(notification_ids: List[str]) -> bool:
-    """Mark notifications as read with audit trail"""
+    """Mark notifications as read with simplified logging"""
     if not notification_ids:
-        # AUDIT: No notifications to drop
-        log("🔍 NOTIFICATION AUDIT: No notification IDs provided for dropping")
         return True
 
     try:
-        # AUDIT: Starting notification drop process
-        log(
-            f"🧹 NOTIFICATION AUDIT: Starting to drop {len(notification_ids)} notifications"
-        )
-
-        # Log first few notification IDs for audit (don't log all for privacy/security)
-        sample_ids = [nid[:10] for nid in notification_ids[:3]]
-        log(
-            f"🧹 NOTIFICATION AUDIT: Sample notification IDs to drop: {', '.join(sample_ids)}{'...' if len(notification_ids) > 3 else ''}"
-        )
-
         params: Any = DropNotificationParams(ids=notification_ids)
         result = client.drop_notifications(params)
 
-        # AUDIT: Notification drop successful
-        log(
-            f"✅ NOTIFICATION AUDIT: Successfully dropped {len(notification_ids)} notifications"
-        )
+        # Only log if there are notifications to drop
+        if len(notification_ids) > 0:
+            log(f"🧹 NOTIFICATIONS: Dropped {len(notification_ids)}")
         return True
 
     except Exception as e:
-        # AUDIT: Notification drop error
-        log(f"❌ NOTIFICATION AUDIT ERROR: Failed to drop notifications: {e}")
+        log(f"❌ NOTIFICATION ERROR: {e}")
         return False
