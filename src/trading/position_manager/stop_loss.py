@@ -11,6 +11,7 @@ from src.config.settings import (
 )
 from src.utils.logger import log, log_error, send_discord
 from src.trading.orders import (
+    get_enhanced_balance_allowance,
     sell_position,
     cancel_order,
     get_balance_allowance,
@@ -26,6 +27,7 @@ from .reversal import check_and_trigger_reversal
 
 
 def _check_stop_loss(
+    user_address,
     symbol,
     trade_id,
     token_id,
@@ -177,7 +179,7 @@ def _check_stop_loss(
 
     # Robust size check: fetch actual balance to ensure we sell everything
     try:
-        balance_info = get_balance_allowance(token_id)
+        enhanced_balance = get_balance_allowance(token_id)
         actual_balance = balance_info.get("balance", 0) if balance_info else 0
         if actual_balance < 0.1:
             log(

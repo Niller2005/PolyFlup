@@ -26,7 +26,7 @@ from .exit import _check_exit_plan
 _failed_pnl_checks = {}
 
 
-def check_open_positions(verbose=True, check_orders=False):
+def check_open_positions(verbose=True, check_orders=False, user_address=None):
     if not _position_check_lock.acquire(blocking=False):
         return
     global _failed_pnl_checks
@@ -228,6 +228,7 @@ def check_open_positions(verbose=True, check_orders=False):
                         pnl_i["price_change_pct"],
                     )
                     if _check_stop_loss(
+                        user_address,
                         sym,
                         tid,
                         tok,
@@ -292,6 +293,7 @@ def check_open_positions(verbose=True, check_orders=False):
                         size, entry, bet, sc_in, l_sell, sc_id, last_sc_at = row_data_f
 
                     _check_exit_plan(
+                        user_address,
                         sym,
                         tid,
                         tok,
