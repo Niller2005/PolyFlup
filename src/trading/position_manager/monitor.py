@@ -113,8 +113,11 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             # Filled/Matched positions with PnL
                             pnl_pct = _get_position_pnl(sym, side, entry, size)
 
-                            # Build position details with trade ID, scaled-in and exit plan status
-                            position_details = f"#{tid} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
+                            # Build aligned position details with trade ID, scaled-in and exit plan status
+                            # Use fixed width formatting for consistent alignment
+                            position_details = (
+                                f"#{tid:<6} 📦{size:>5.1f} 🧮{pnl_pct:>+6.1f}%"
+                            )
 
                             if sc_in:  # Scaled in
                                 position_details += " | 📊 Scaled in"
@@ -129,9 +132,9 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             )
 
                         elif b_status in ["LIVE", "OPEN", "PENDING"] and b_id:
-                            # Waiting for fill positions with trade ID
+                            # Waiting for fill positions with trade ID - aligned format
                             waiting_details = (
-                                f"#{tid} 📦{size:.1f} | ⏳ Waiting for fill"
+                                f"#{tid:<6} 📦{size:>5.1f} | ⏳ Waiting for fill"
                             )
                             positions_by_symbol[sym][side]["waiting"].append(
                                 waiting_details
