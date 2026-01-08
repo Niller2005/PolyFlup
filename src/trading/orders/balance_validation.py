@@ -419,32 +419,24 @@ def get_enhanced_balance_allowance(
         # Get position data for discrepancy logging
         position_val = position_data.get("size", 0) if position_data else 0
 
+        # Calculate discrepancy for logging and enhanced logic
+        discrepancy = abs(actual_balance - position_val)
+
         # DEBUG: Verify symbol consistency before logging discrepancies
         if symbol != original_symbol:
             log(
                 f"   🚨 BALANCE SYMBOL MISMATCH [{call_id}]: Original={original_symbol}, Current={symbol}, Token={token_id[:20]}..."
             )
+            # Use the original symbol for consistency
+            symbol = original_symbol
 
-        # Use the original symbol for consistency
-        symbol = original_symbol
-
-        # DEBUG: Log the final comparison being made with call ID
-        log(
-            f"   🔍 BALANCE COMPARISON [{call_id}]: Symbol={original_symbol}, Balance={actual_balance:.4f}, Position={position_val:.4f}, Diff={abs(actual_balance - position_val):.4f}"
-        )
-
-        # Log significant discrepancies for monitoring with market type context
-        log_balance_discrepancy(
-            original_symbol,
-            actual_balance,
-            position_val,
-            "balance_validation",
-            "routine_check",
-            market_type,
-        )
-
-        # Use the original symbol for consistency
-        symbol = original_symbol
+        # DEBUG: Verify symbol consistency before logging discrepancies
+        if symbol != original_symbol:
+            log(
+                f"   🚨 BALANCE SYMBOL MISMATCH [{call_id}]: Original={original_symbol}, Current={symbol}, Token={token_id[:20]}..."
+            )
+            # Use the original symbol for consistency
+            symbol = original_symbol
 
         # DEBUG: Log the final comparison being made with call ID
         log(
@@ -460,8 +452,45 @@ def get_enhanced_balance_allowance(
             "routine_check",
             market_type,
         )
+
         # Use the original symbol for consistency
         symbol = original_symbol
+
+        # DEBUG: Log the final comparison being made with call ID
+        log(
+            f"   🔍 BALANCE COMPARISON [{call_id}]: Symbol={original_symbol}, Balance={actual_balance:.4f}, Position={position_val:.4f}, Diff={abs(actual_balance - position_val):.4f}"
+        )
+
+        # ENHANCED: For SELL orders, provide both position and balance data for smart decision making
+        # Balance = what's available for trading, Position = what you actually own
+        if position_val > actual_balance * 1.3 and position_val >= 1.0:
+            log(
+                f"   ⚠️  [{original_symbol}] POSITION >> BALANCE: Position={position_val:.4f}, Balance={actual_balance:.4f}. For SELL orders, use POSITION data."
+            )
+            # Return position size for exit orders, but include balance for safety checks
+            result = {
+                "balance": position_val,  # Use position size for exit orders (what you can actually sell)
+                "allowance": balance_info.get("allowance", 0),
+                "source": "position_data_for_exit_orders",
+                "confidence": config["api_reliability_weight"],
+                "discrepancy": discrepancy,
+                "retry_count": retry_count,
+                "cross_validated": True,
+                "reason": "position_larger_than_balance_use_position_for_exit",
+                "api_response_time": time.time() - balance_start_time,
+                "actual_balance": actual_balance,  # Include actual balance for safety reference
+            }
+            return result
+
+        # Log significant discrepancies for monitoring with market type context
+        log_balance_discrepancy(
+            original_symbol,
+            actual_balance,
+            position_val,
+            "balance_validation",
+            "routine_check",
+            market_type,
+        )
 
         # DEBUG: Log the final comparison being made
         log(
