@@ -74,9 +74,9 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
             if verbose:
                 log(f"👀 Monitoring {len(open_positions)} positions...")
 
-                # Detailed position report every minute - one line per position, grouped by symbol
+                # Detailed position report every minute - each position on its own line
                 if len(open_positions) > 0:
-                    # Group positions by symbol
+                    # Group positions by symbol and side for clean display
                     positions_by_symbol = {}
                     for pos in open_positions:
                         (
@@ -104,18 +104,22 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                         ) = pos
                         if b_status in ["FILLED", "MATCHED"]:
                             if sym not in positions_by_symbol:
-                                positions_by_symbol[sym] = []
+                                positions_by_symbol[sym] = {"UP": [], "DOWN": []}
                             pnl_pct = _get_position_pnl(sym, side, entry, size)
-                            positions_by_symbol[sym].append(
-                                f"{side} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
+                            positions_by_symbol[sym][side].append(
+                                f"📦{size:.1f} 🧮{pnl_pct:+.1f}%"
                             )
 
-                    # Log positions grouped by symbol
+                    # Log positions - each UP/DOWN gets its own line
                     if positions_by_symbol:
                         log("📈 POSITIONS:")
                         for sym in sorted(positions_by_symbol.keys()):
-                            sym_positions = positions_by_symbol[sym]
-                            log(f"  [{sym}] {' | '.join(sym_positions)}")
+                            if positions_by_symbol[sym]["UP"]:
+                                for up_pos in positions_by_symbol[sym]["UP"]:
+                                    log(f"  [{sym}] UP {up_pos}")
+                            if positions_by_symbol[sym]["DOWN"]:
+                                for down_pos in positions_by_symbol[sym]["DOWN"]:
+                                    log(f"  [{sym}] DOWN {down_pos}")
 
                 # Simple position report every minute
                 if len(open_positions) > 0:
