@@ -216,4 +216,57 @@ def get_outcome_prices(symbol: str) -> dict:
         from src.utils.logger import log_error
 
         log_error(f"[{symbol}] Error fetching outcome prices: {e}")
-        return {}
+
+        # FALLBACK: Use Binance spot price to calculate approximate UP/DOWN prices
+        try:
+            from .binance import get_current_spot_price
+
+            spot_price = get_current_spot_price(symbol)
+            if spot_price <= 0:
+                return {}
+
+            target_price = get_window_start_price(symbol)
+            if not target_price:
+                return {}
+
+            target_price = float(target_price)
+            price_change_pct = (
+                (spot_price - target_price) / target_price if target_price > 0 else 0
+            )
+
+            # Calculate approximate UP price based on spot movement
+            # If spot moved up significantly, UP token price increases
+            # If spot moved down significantly, DOWN token price increases (UP decreases)
+            if price_change_pct > 0.005:  # Spot up 0.5% or more
+                up_price = min(0.95, 0.50 + price_change_pct * 5)
+            elif price_change_pct < -0.005:  # Spot down 0.5% or more
+                up_price = max(0.05, 0.50 + price_change_pct * 5)
+            else:
+                up_price = 0.50  # Near target, ambiguous
+
+            down_price = 1.0 - up_price
+
+            # Clamp to valid range
+            up_price = max(0.01, min(0.99, up_price))
+            down_price = max(0.01, min(0.99, down_price))
+
+            up_token_id, down_token_id = get_token_ids(symbol)
+
+            # Determine winning sides based on approximate prices
+            up_wins = up_price >= 0.50
+            down_wins = down_price <= 0.50
+
+            result = {
+                "up_token_id": up_token_id,
+                "down_token_id": down_token_id,
+                "up_price": up_price,
+                "down_price": down_price,
+                "up_wins": up_wins,
+                "down_wins": down_wins,
+            }
+
+            # Don't cache fallback data (want to retry Polymarket ASAP)
+            return result
+        except Exception as fallback_error:
+            log_error(f"[{symbol}] Spot price fallback also failed: {fallback_error}")
+            return {}

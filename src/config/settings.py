@@ -57,9 +57,9 @@ UNFILLED_RETRY_ON_WINNING_SIDE = (
 # Position Scaling
 ENABLE_SCALE_IN = os.getenv("ENABLE_SCALE_IN", "YES").upper() == "YES"
 SCALE_IN_MIN_PRICE = float(
-    os.getenv("SCALE_IN_MIN_PRICE", "0.60")
-)  # Min 60 cents (60%+ win probability)
-SCALE_IN_MAX_PRICE = float(os.getenv("SCALE_IN_MAX_PRICE", "0.90"))  # Max 90 cents
+    os.getenv("SCALE_IN_MIN_PRICE", "0.50")
+)  # Min 50 cents (50%+ win probability)
+SCALE_IN_MAX_PRICE = float(os.getenv("SCALE_IN_MAX_PRICE", "0.75"))  # Max 75 cents
 SCALE_IN_TIME_LEFT = int(
     os.getenv("SCALE_IN_TIME_LEFT", "450")
 )  # 7.5 minutes (450 seconds)
