@@ -70,6 +70,14 @@ def _check_exit_plan(
     if not ENABLE_EXIT_PLAN or buy_status not in ["FILLED", "MATCHED"] or size == 0:
         return False
 
+    # Early check: Skip exit plans for positions less than MIN_SIZE
+    if size < MIN_SIZE:
+        if verbose:
+            log(
+                f"   ⏭️  [{symbol}] #{trade_id} Position size {size:.4f} < {MIN_SIZE}. Skipping exit plan."
+            )
+        return False
+
     repaired = False
     # Use enhanced balance validation for better reliability
     c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
