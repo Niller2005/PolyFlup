@@ -74,7 +74,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
             if verbose:
                 log(f"👀 Monitoring {len(open_positions)} positions...")
 
-                # Detailed position report every minute - each position on its own line
+                # Detailed position report every minute - each position on its own line with full details
                 if len(open_positions) > 0:
                     # Group positions by symbol and side for clean display
                     positions_by_symbol = {}
@@ -105,12 +105,23 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                         if b_status in ["FILLED", "MATCHED"]:
                             if sym not in positions_by_symbol:
                                 positions_by_symbol[sym] = {"UP": [], "DOWN": []}
-                            pnl_pct = _get_position_pnl(sym, side, entry, size)
-                            positions_by_symbol[sym][side].append(
-                                f"📦{size:.1f} 🧮{pnl_pct:+.1f}%"
-                            )
 
-                    # Log positions - each UP/DOWN gets its own line
+                            pnl_pct = _get_position_pnl(sym, side, entry, size)
+
+                            # Build position details with scaled-in and exit plan status
+                            position_details = f"📦{size:.1f} 🧮{pnl_pct:+.1f}%"
+
+                            if sc_in:  # Scaled in
+                                position_details += " 📊"
+
+                            if l_sell:  # Exit plan active
+                                position_details += " ⏰"
+                            else:  # Exit pending
+                                position_details += " ⏳"
+
+                            positions_by_symbol[sym][side].append(position_details)
+
+                    # Log positions - each UP/DOWN gets its own line with full details
                     if positions_by_symbol:
                         log("📈 POSITIONS:")
                         for sym in sorted(positions_by_symbol.keys()):
