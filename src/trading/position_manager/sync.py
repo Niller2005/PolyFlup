@@ -125,6 +125,14 @@ def sync_positions_with_exchange(user_address: str):
 
                     # Check for significant size mismatch
                     if abs(actual_size - db_size) > 0.001:
+                    # CRITICAL FIX: Validate sync data before updating active positions
+                    # Prevent syncing active positions to near-zero due to API timing issues
+                    if db_size >= 5.0 and actual_size < 0.1:
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} Rejecting sync: Active position ({db_size:.2f}) "
+                            f"would sync to near-zero ({actual_size:.4f}). Likely API timing issue."
+                        )
+                    else:
                         log(
                             f"   📊 [{symbol}] #{trade_id} Sync: Size mismatch {db_size:.2f} -> {actual_size:.2f}"
                         )

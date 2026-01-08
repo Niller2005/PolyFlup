@@ -141,6 +141,15 @@ def _check_exit_plan(
 
             # Ensure we don't try to sell more than we actually have, even if threshold didn't trigger
             sell_size = truncate_float(min(size, actual_bal), 2)
+            # CRITICAL FIX: Validate balance data before using it
+            # If we have a significant position in DB but balance shows near zero, 
+            # it is likely a timing/API issue - use DB size instead
+            if size >= MIN_SIZE and actual_bal < 0.1 and age < 300:  # 5 minute grace period
+                log(
+                    f"   ⚠️  [{symbol}] #{trade_id} Balance sync shows near-zero ({actual_bal:.4f}) "
+                    f"for active position ({size:.2f}). Using DB size (age: {age:.0f}s)."
+                )
+                sell_size = truncate_float(size, 2)
 
             if sell_size < MIN_SIZE:
                 if actual_bal >= MIN_SIZE:
@@ -212,6 +221,14 @@ def _check_exit_plan(
                     size = actual_bal
 
                 target_size = truncate_float(min(size, actual_bal), 2)
+            # CRITICAL FIX: Validate balance data before using it for active orders
+            # If balance shows near zero for active position, likely API timing issue
+            if size >= MIN_SIZE and actual_bal < 0.1 and age < 300:
+                log(
+                    f"   ⚠️  [{symbol}] #{trade_id} Balance sync shows near-zero ({actual_bal:.4f}) "
+                    f"for active order position ({size:.2f}). Using DB size (age: {age:.0f}s)."
+                )
+                target_size = truncate_float(size, 2)
                 if truncate_float(o_size, 2) != target_size:
                     # Repair needed
                     cancel_order(limit_sell_id)
