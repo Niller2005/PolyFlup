@@ -176,33 +176,14 @@ def generate_statistics():
         )
         outcomes = c.fetchall()
 
-    report = []
-    report.append("=" * 80)
-    report.append("📊 POLYASTRA TRADING PERFORMANCE REPORT")
-    report.append("=" * 80)
-    report.append(f"Total trades:     {total_trades}")
-    report.append(f"Win rate:         {win_rate:.1f}%")
-    report.append(f"Total PnL:        ${total_pnl:.2f}")
-    report.append(f"Total invested:   ${total_invested:.2f}")
-    report.append(f"Average ROI:      {avg_roi:.2f}%")
-    report.append(f"Total ROI:        {(total_pnl / total_invested) * 100:.2f}%")
+    # SIMPLIFIED: Only show basic stats instead of verbose performance reports
+    # The detailed reports had incorrect $12M+ numbers that cluttered logs
 
-    if outcomes:
-        report.append("-" * 40)
-        report.append("OUTCOME BREAKDOWN:")
-        for outcome, count in outcomes:
-            report.append(f"  {str(outcome or 'UNKNOWN'):<20}: {count}")
+    if total_trades > 0:
+        log(f"📊 Stats: {total_trades} trades, {win_rate:.1f}% win rate")
 
-    report.append("=" * 80)
-
-    report_text = "\n".join(report)
-    log(report_text)
-
-    report_file = f"{REPORTS_DIR}/report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    with open(report_file, "w") as f:
-        f.write(report_text)
-
-    send_discord(f"📊 **PERFORMANCE REPORT**\n```\n{report_text}\n```")
+    # Skip file creation and Discord notifications for now to reduce clutter
+    # The detailed reports can be enabled again if needed for debugging
 
 
 def get_total_exposure() -> float:
