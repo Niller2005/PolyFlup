@@ -88,6 +88,7 @@ from src.trading.position_manager import (
     get_exit_plan_stats,
     recover_open_positions,
     sync_positions_with_exchange,
+    sync_with_exchange,
     execute_first_entry,
 )
 from src.utils.notifications import process_notifications, init_ws_callbacks
