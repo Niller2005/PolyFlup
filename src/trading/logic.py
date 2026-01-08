@@ -22,6 +22,7 @@ from src.data.market_data import (
     get_window_start_price,
 )
 from src.trading.strategy import calculate_confidence, bfxd_allows_trade
+from src.data.market_data import validate_price_movement_for_trade
 from src.trading.orders import get_clob_client
 
 MIN_SIZE = 5.0
@@ -150,6 +151,38 @@ def _prepare_trade_params(
             if add_spacing:
                 log("")
         return
+
+    # Price Movement Validation for High Confidence Trades
+    if confidence >= 0.75:  # Only validate high confidence trades
+        validation_result = validate_price_movement_for_trade(
+            symbol=symbol,
+            confidence=confidence,
+            current_spot=current_spot,
+            max_movement_threshold=20.0,
+            min_confidence_threshold=0.75
+        )
+        
+        if not validation_result["valid"]:
+            if verbose:
+                reason = validation_result["reduction_reason"]
+                log(f"[{symbol}] 🚫 Price validation BLOCKED trade: {reason}")
+                if add_spacing:
+                    log("")
+            return
+        
+        # Use adjusted confidence if it was reduced
+        if validation_result["adjusted_confidence"] < confidence:
+            original_confidence = confidence
+            confidence = validation_result["adjusted_confidence"]
+            
+            # Recalculate sizing confidence with reduced confidence
+            actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
+            
+            if verbose:
+                log(f"[{symbol}] 📉 Price validation reduced confidence: {original_confidence:.1%} → {confidence:.1%}")
+                if validation_result["reduction_reason"]:
+                    reason = validation_result["reduction_reason"]
+                    log(f"   Reason: {reason}")
 
     actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
 

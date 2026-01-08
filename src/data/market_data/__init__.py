@@ -20,6 +20,12 @@ from .indicators import (
     get_volume_weighted_momentum,
 )
 from .analysis import get_order_flow_analysis, get_cross_exchange_divergence
+from .price_validation import (
+    get_recent_price_movements,
+    calculate_volatility_score,
+    detect_price_manipulation,
+    validate_price_movement_for_trade,
+)
 
 __all__ = [
     "get_current_slug",
@@ -37,4 +43,8 @@ __all__ = [
     "get_order_flow_analysis",
     "get_cross_exchange_divergence",
     "get_volume_weighted_momentum",
+    "get_recent_price_movements",
+    "calculate_volatility_score",
+    "detect_price_manipulation",
+    "validate_price_movement_for_trade",
 ]

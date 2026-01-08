@@ -12,6 +12,9 @@ from src.config.settings import (
     ENABLE_DIVERGENCE,
     ENABLE_VWM,
     ENABLE_BFXD,
+    ENABLE_PRICE_VALIDATION,
+    PRICE_VALIDATION_MAX_MOVEMENT,
+    PRICE_VALIDATION_MIN_CONFIDENCE,
 )
 from src.utils.logger import log, log_error
 from src.trading.orders.utils import is_404_error
@@ -25,6 +28,7 @@ from src.data.market_data import (
     get_volume_weighted_momentum,
     get_current_spot_price,
     get_polymarket_momentum,
+    validate_price_movement_for_trade,
 )
 import requests
 
@@ -183,22 +187,98 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         bias = "UP"
         # Confirmation bonus: if Binance and PM both agree on direction
         if momentum_dir == pm_mom_dir and momentum_dir == "UP":
-            up_total *= 1.2
+            up_total *= 1.1  # Reduced from 1.2 to be more conservative
 
         # Bold scaling: 0.4 score = 60% confidence
-        confidence = (up_total - (down_total * 0.1)) * lead_lag_bonus * 1.5
+        confidence = (up_total - (down_total * 0.2)) * lead_lag_bonus
     elif down_total > up_total:
         bias = "DOWN"
         if momentum_dir == pm_mom_dir and momentum_dir == "DOWN":
-            down_total *= 1.2
+            down_total *= 1.1  # Reduced from 1.2 to be more conservative
 
-        confidence = (down_total - (up_total * 0.1)) * lead_lag_bonus * 1.5
+        confidence = (down_total - (up_total * 0.2)) * lead_lag_bonus
 
     else:
         bias = "NEUTRAL"
         confidence = 0.0
 
     # Normalize confidence to 0-1
+    confidence = max(0.0, min(1.0, confidence))
+
+    # Multi-confirmation system for extreme confidence levels (>75%)
+    if confidence > 0.75:
+        # Define the 5 key indicators with their weights
+        key_signals = [
+            {
+                "name": "price_momentum",
+                "score": momentum_score,
+                "dir": momentum_dir,
+                "weight": 0.35,
+            },
+            {
+                "name": "polymarket_momentum",
+                "score": pm_mom_score,
+                "dir": pm_mom_dir,
+                "weight": 0.20,
+            },
+            {
+                "name": "order_flow",
+                "score": flow_score,
+                "dir": flow_dir,
+                "weight": 0.15,
+            },
+            {
+                "name": "cross_divergence",
+                "score": divergence_score,
+                "dir": divergence_dir,
+                "weight": 0.15,
+            },
+            {
+                "name": "adx_strength",
+                "score": adx_score,
+                "dir": adx_dir,
+                "weight": 0.15,
+            },
+        ]
+
+        # Count strongly aligned signals (score > 0.5 and same direction as bias)
+        strongly_aligned = 0
+        confirmation_score = 0.0
+
+        for signal in key_signals:
+            if (
+                signal["score"] > 0.5
+                and signal["dir"] == bias
+                and signal["dir"] != "NEUTRAL"
+            ):
+                strongly_aligned += 1
+                confirmation_score += signal["score"] * signal["weight"]
+
+        # Require at least 3 out of 5 signals to be strongly aligned
+        if strongly_aligned < 3:
+            # Reduce confidence if insufficient confirmation
+            confidence_reduction = (
+                3 - strongly_aligned
+            ) * 0.15  # 15% reduction per missing signal
+            new_confidence = max(0.75, confidence - confidence_reduction)
+
+            log(
+                f"[{symbol}] ⚠️  Insufficient confirmation: {strongly_aligned}/5 signals aligned | "
+                f"Confidence: {confidence:.1%} → {new_confidence:.1%}"
+            )
+            confidence = new_confidence
+        else:
+            # Strong confirmation - log the strong signal
+            log(
+                f"[{symbol}] ✅ Strong confirmation: {strongly_aligned}/5 signals aligned | "
+                f"Confirmation score: {confirmation_score:.2f}"
+            )
+
+    # Additional validation: cap maximum confidence at 85% for extreme signals
+    if confidence > 0.85:
+        confidence = 0.85
+
+    # Final normalization
     confidence = max(0.0, min(1.0, confidence))
 
     # Get current spot price for entry logic
@@ -216,6 +296,78 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         "scores": {"up": up_total, "down": down_total},
         "current_spot": current_spot,
     }
+    # Price Movement Validation for High Confidence Trades
+    if ENABLE_PRICE_VALIDATION and confidence >= PRICE_VALIDATION_MIN_CONFIDENCE:
+        validation_result = validate_price_movement_for_trade(
+            symbol=symbol,
+            confidence=confidence,
+            current_spot=current_spot,
+            max_movement_threshold=PRICE_VALIDATION_MAX_MOVEMENT,
+            min_confidence_threshold=PRICE_VALIDATION_MIN_CONFIDENCE,
+        )
+
+        if validation_result["adjusted_confidence"] < confidence:
+            original_confidence = confidence
+            confidence = validation_result["adjusted_confidence"]
+
+            # Add validation data to signals for logging
+            signals["price_validation"] = validation_result["price_data"]
+
+            if validation_result["reduction_reason"]:
+                reason = validation_result["reduction_reason"]
+                log(
+                    f"[{symbol}] 📉 Price validation reduced confidence: {original_confidence:.1%} → {confidence:.1%} | {reason}"
+                )
+
+            # If confidence dropped significantly, might want to make it neutral
+            if confidence < MIN_EDGE:
+                bias = "NEUTRAL"
+                confidence = 0.0
+                log(
+                    f"[{symbol}] ⚠️  Price validation blocked trade (confidence too low after reduction)"
+                )
+
+    signals = {
+        "momentum": momentum,
+        "pm_momentum": pm_momentum,
+        "order_flow": order_flow,
+        "divergence": divergence,
+        "vwm": vwm,
+        "adx": {"value": adx_val, "score": adx_score},
+        "scores": {"up": up_total, "down": down_total},
+        "current_spot": current_spot,
+    }
+
+    # Price Movement Validation for High Confidence Trades
+    if ENABLE_PRICE_VALIDATION and confidence >= PRICE_VALIDATION_MIN_CONFIDENCE:
+        validation_result = validate_price_movement_for_trade(
+            symbol=symbol,
+            confidence=confidence,
+            current_spot=current_spot,
+            max_movement_threshold=PRICE_VALIDATION_MAX_MOVEMENT,
+            min_confidence_threshold=PRICE_VALIDATION_MIN_CONFIDENCE,
+        )
+
+        if validation_result["adjusted_confidence"] < confidence:
+            original_confidence = confidence
+            confidence = validation_result["adjusted_confidence"]
+
+            # Add validation data to signals for logging
+            signals["price_validation"] = validation_result["price_data"]
+
+            if validation_result["reduction_reason"]:
+                reason = validation_result["reduction_reason"]
+                log(
+                    f"[{symbol}] 📉 Price validation reduced confidence: {original_confidence:.1%} → {confidence:.1%} | {reason}"
+                )
+
+            # If confidence dropped significantly, might want to make it neutral
+            if confidence < MIN_EDGE:
+                bias = "NEUTRAL"
+                confidence = 0.0
+                log(
+                    f"[{symbol}] ⚠️  Price validation blocked trade (confidence too low after reduction)"
+                )
 
     return confidence, bias, p_up, best_bid, best_ask, signals
 

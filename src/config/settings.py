@@ -128,6 +128,13 @@ if not PROXY_PK or not PROXY_PK.startswith("0x"):
     )
     raise SystemExit("Missing PROXY_PK in .env!")
 
+
+# Price Movement Validation for High Confidence Trades
+ENABLE_PRICE_VALIDATION = os.getenv('ENABLE_PRICE_VALIDATION', 'YES').upper() == 'YES'
+PRICE_VALIDATION_MAX_MOVEMENT = float(os.getenv('PRICE_VALIDATION_MAX_MOVEMENT', '20.0'))  # Max 20% movement
+PRICE_VALIDATION_MIN_CONFIDENCE = float(os.getenv('PRICE_VALIDATION_MIN_CONFIDENCE', '0.75'))  # Validate trades > 75% confidence
+PRICE_VALIDATION_VOLATILITY_THRESHOLD = float(os.getenv('PRICE_VALIDATION_VOLATILITY_THRESHOLD', '0.7'))  # High volatility threshold
+
 # Constants
 BINANCE_FUNDING_MAP = {
     "BTC": "BTCUSDT",
