@@ -138,32 +138,6 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                 waiting_details
                             )
 
-                    # Log positions - each UP/DOWN gets its own line with full details
-                    if positions_by_symbol:
-                        log("📈 POSITIONS:")
-                        for sym in sorted(positions_by_symbol.keys()):
-                            # Show filled positions first
-                            if positions_by_symbol[sym]["UP"]["filled"]:
-                                for up_pos in positions_by_symbol[sym]["UP"]["filled"]:
-                                    log(f"  [{sym}] UP {up_pos}")
-                            if positions_by_symbol[sym]["DOWN"]["filled"]:
-                                for down_pos in positions_by_symbol[sym]["DOWN"][
-                                    "filled"
-                                ]:
-                                    log(f"  [{sym}] DOWN {down_pos}")
-
-                            # Show waiting for fill positions
-                            if positions_by_symbol[sym]["UP"]["waiting"]:
-                                for up_wait in positions_by_symbol[sym]["UP"][
-                                    "waiting"
-                                ]:
-                                    log(f"  [{sym}] UP {up_wait}")
-                            if positions_by_symbol[sym]["DOWN"]["waiting"]:
-                                for down_wait in positions_by_symbol[sym]["DOWN"][
-                                    "waiting"
-                                ]:
-                                    log(f"  [{sym}] DOWN {down_wait}")
-
                 # Clean position report with status indicators - matches desired format
                 if len(open_positions) > 0:
                     log("📈 POSITIONS:")
@@ -213,20 +187,28 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                 status_str = (
                                     " | ".join(status_parts) if status_parts else ""
                                 )
-                                position_line = f"  [{sym}] {side:<4} #{str(tid):<6}  📦{size:>5.1f}  🧮{pnl_pct_val:+6.1f}%"
+                                # Add directional emoji based on side and PnL
+                                direction_emoji = (
+                                    "📈"
+                                    if (side == "UP" and pnl_pct_val >= 0)
+                                    or (side == "DOWN" and pnl_pct_val <= 0)
+                                    else "📉"
+                                )
+                                position_line = f"  {direction_emoji} [{sym}] {side:<4} #{str(tid):<6}  📦{size:>5.1f}  🧮{pnl_pct_val:+6.1f}%"
                                 if status_str:
                                     position_line += f" | {status_str}"
                                 log(position_line)
                             else:
-                                # Fallback if PnL calculation fails
+                                # Fallback if PnL calculation fails - use directional emoji
+                                direction_emoji = "📈" if side == "UP" else "📉"
                                 log(
-                                    f"  [{sym}] {side:<4} #{str(tid):<6}  📦{size:>5.1f}  🧮  +0.0%"
+                                    f"  {direction_emoji} [{sym}] {side:<4} #{str(tid):<6}  📦{size:>5.1f}  🧮  +0.0%"
                                 )
 
                         elif b_status.upper() in ["LIVE", "OPEN", "PENDING"] and b_id:
-                            # Waiting for fill positions
+                            # Waiting for fill positions - clean format with just ⏳ emoji
                             log(
-                                f"  [{sym}] {side:<4} #{str(tid):<6}  📦{size:>5.1f} | ⏳ Waiting for fill"
+                                f"  ⏳ [{sym}] {side:<4} #{str(tid):<6}  📦{size:>5.1f}"
                             )
             for (
                 tid,
@@ -281,9 +263,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             curr_b_status = "FILLED"
 
                     if verbose and curr_b_status not in ["FILLED", "MATCHED"]:
-                        log(
-                            f"  ⏳ [{sym}] #{tid} {side}: Waiting for fill (Status: {curr_b_status})"
-                        )
+                        log(f"  ⏳ [{sym}] {side:<4} #{str(tid):<6}  📦{size:>5.1f}")
                         continue
 
                     if (
