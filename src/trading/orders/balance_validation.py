@@ -252,33 +252,11 @@ def log_balance_discrepancy(
     market_type: str = "unknown",
 ) -> None:
     """
-    Log significant balance/position discrepancies for monitoring
+    DISABLED: Data API position data is unreliable, skip all discrepancy logging
     """
-    discrepancy = abs(balance_val - position_val)
-    if discrepancy > 1.0:  # Log any significant discrepancy
-        log(
-            f"   ⚠️  [{symbol}] BALANCE DISCREPANCY: Balance={balance_val:.4f}, Position={position_val:.4f}, Diff={discrepancy:.4f}"
-        )
-        log(f"   ⚠️  [{symbol}] Source: {source}, Reason: {reason}")
-
-        # Warn about potential trading issues
-        if position_val > balance_val * 1.5:
-            log(
-                f"   🚨 [{symbol}] WARNING: Position shows more shares than available balance!"
-            )
-            log(
-                f"   🚨 [{symbol}] This could cause 'Insufficient funds' errors when selling."
-            )
-
-            # Add specific guidance based on common Polymarket issues
-            if symbol in ["BTC", "ETH", "SOL", "XRP"]:
-                log(
-                    f"   🚨 [{symbol}] CRYPTO MARKET: May indicate USDC.e collateral vs position timing issue"
-                )
-            else:
-                log(
-                    f"   🚨 [{symbol}] Verify position settlement status and recent trades"
-                )
+    # Completely disabled - Data API position data is wrong more often than not
+    # No more balance/position comparisons or warnings
+    pass
 
 
 def get_market_type_info(token_id: str) -> Dict[str, str]:
@@ -402,12 +380,13 @@ def get_enhanced_balance_allowance(
     market_type = market_info["type"]
 
     if enable_cross_validation:
-        position_data = get_position_from_data_api(
-            user_address, token_id, original_symbol
-        )
+        # DISABLED: Data API position data is unreliable - skip position calls
+        # position_data = get_position_from_data_api(
+        #     user_address, token_id, original_symbol
+        # )
 
-        # Get position data for discrepancy logging
-        position_val = position_data.get("size", 0) if position_data else 0
+        # Set position_val to 0 since we're not calling position API
+        position_val = 0
 
         # Calculate discrepancy for logging and enhanced logic
         discrepancy = abs(actual_balance - position_val)
@@ -432,15 +411,15 @@ def get_enhanced_balance_allowance(
         # Just return balance data directly - no position API calls, no comparisons
         # Database has correct position size, use that for exit orders, not this enhanced balance
 
-        # Log significant discrepancies for monitoring with market type context
-        log_balance_discrepancy(
-            original_symbol,
-            actual_balance,
-            position_val,
-            "balance_validation",
-            "routine_check",
-            market_type,
-        )
+        # DISABLED: Skip balance discrepancy logging - Data API position data is unreliable
+        # log_balance_discrepancy(
+        #     original_symbol,
+        #     actual_balance,
+        #     position_val,
+        #     "balance_validation",
+        #     "routine_check",
+        #     market_type,
+        # )
 
         # Use the original symbol for consistency
         symbol = original_symbol
@@ -471,25 +450,19 @@ def get_enhanced_balance_allowance(
             market_type,
         )
 
-        # DEBUG: Log the final comparison being made
-        log(
-            f"   🔍 BALANCE COMPARISON: Symbol={original_symbol}, Balance={actual_balance:.4f}, Position={position_val:.4f}, Diff={abs(actual_balance - position_val):.4f}"
-        )
+        # Removed BALANCE COMPARISON debug - Data API position data is unreliable
 
-        # DEBUG: Log the final comparison being made
-        log(
-            f"   🔍 BALANCE COMPARISON: Symbol={original_symbol}, Balance={actual_balance:.4f}, Position={position_val:.4f}, Diff={abs(actual_balance - position_val):.4f}"
-        )
+        # Removed balance comparison logging - Data API position data is unreliable
 
-        # Log significant discrepancies for monitoring with market type context
-        log_balance_discrepancy(
-            original_symbol,
-            actual_balance,
-            position_val,
-            "balance_validation",
-            "routine_check",
-            market_type,
-        )
+        # DISABLED: Skip balance discrepancy logging - Data API position data is unreliable
+        # log_balance_discrepancy(
+        #     original_symbol,
+        #     actual_balance,
+        #     position_val,
+        #     "balance_validation",
+        #     "routine_check",
+        #     market_type,
+        # )
 
         # Calculate discrepancy for logging
         discrepancy = abs(actual_balance - position_val)
@@ -524,11 +497,14 @@ def get_enhanced_balance_allowance(
 
     # Step 2: Cross-validate with position data if enabled
     if enable_cross_validation:
-        position_data = get_position_from_data_api(user_address, token_id)
+        # DISABLED: Data API position data is unreliable - skip position calls
+        # position_data = get_position_from_data_api(user_address, token_id)
+        position_data = None
 
         # Also get all positions for better logging and verification
-        all_positions = get_actual_positions_from_data_api(user_address)
-        symbol_positions = [p for p in all_positions if p.get("asset", "") == token_id]
+        # all_positions = get_actual_positions_from_data_api(user_address)
+        # symbol_positions = [p for p in all_positions if p.get("asset", "") == token_id]
+        symbol_positions = []
 
         actual_position_size = 0
         if symbol_positions:
