@@ -376,13 +376,7 @@ def _check_exit_plan(
         if buy_status == "EXIT_PLAN_PENDING_SETTLEMENT":
             return  # Don't log monitoring status if already filled and waiting for settlement
 
-        status = f"Trade #{trade_id} {side} 📦{size:.2f} 🧮{price_change_pct:+.1f}%"
-        if scaled_in:
-            status += " | 📊 Scaled in"
-        if limit_sell_id:
-            status += " | ⏰ Exit active"
-        else:
-            status += " | ⏳ Exit pending"
-        log(f"  {'📈' if pnl_pct > 0 else '📉'} [{symbol}] {status}")
+        # Position status is now shown in clean position reports - no need for redundant logging here
+        pass
 
     return repaired
