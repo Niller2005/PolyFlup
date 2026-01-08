@@ -267,7 +267,7 @@ def _check_exit_plan(
 
             # CRITICAL FIX: Validate balance data before using it for active orders
             # If balance shows near zero for active position, likely API timing issue
-            if size >= MIN_SIZE and actual_bal < 0.1 and age < 300:
+            if size >= MIN_SIZE and actual_bal < 0.1 and age < 60:
                 log(
                     f"   ⚠️  [{symbol}] #{trade_id} Balance sync shows near-zero ({actual_bal:.4f}) "
                     f"for active order position ({size:.2f}). Using DB size (age: {age:.0f}s)."
