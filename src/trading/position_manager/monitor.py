@@ -129,8 +129,10 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             )
 
                         elif b_status in ["LIVE", "OPEN", "PENDING"] and b_id:
-                            # Waiting for fill positions
-                            waiting_details = f"📦{size:.1f} | ⏳ Waiting for fill"
+                            # Waiting for fill positions with trade ID
+                            waiting_details = (
+                                f"#{tid} 📦{size:.1f} | ⏳ Waiting for fill"
+                            )
                             positions_by_symbol[sym][side]["waiting"].append(
                                 waiting_details
                             )
