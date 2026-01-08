@@ -165,15 +165,13 @@ def _check_exit_plan(
             # CRITICAL FIX: Validate balance data before using it
             # If we have a significant position in DB but balance shows near zero,
             # it is likely a timing/API issue - use DB size instead
-            if (
-                size >= MIN_SIZE and actual_bal < 0.1 and age < 600
-            ):  # 10 minute grace period (increased from 5 minutes)
+            if size >= MIN_SIZE and actual_bal < 0.1 and age < 600:  # 10 minute grace period (increased from 5 minutes)
                 log(
                     f"   ⚠️  [{symbol}] #{trade_id} Balance sync shows near-zero ({actual_bal:.4f}) "
                     f"for active position ({size:.2f}). Using DB size (age: {age:.0f}s)."
                 )
-                # Use DB size for the actual sell, but still validate against actual_bal (min prevents overselling)
-                sell_size = truncate_float(min(size, actual_bal), 2)
+                # Use DB size for the actual sell (this fixes the scaled-in exit plan repair issue)
+                sell_size = truncate_float(size, 2)
 
             if sell_size < MIN_SIZE:
                 if actual_bal >= MIN_SIZE:
