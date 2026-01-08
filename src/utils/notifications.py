@@ -10,6 +10,22 @@ from src.trading.position_manager.reconciliation import track_recent_fill
 from .websocket_manager import ws_manager
 
 
+def _extract_order_id_from_payload(payload: dict) -> str:
+    """Extract order ID from notification payload using multiple possible field names"""
+    if not isinstance(payload, dict):
+        return None
+    
+    # Try multiple possible field names for order ID
+    possible_fields = ['order_id', 'orderId', 'id', 'orderID']
+    
+    for field in possible_fields:
+        order_id = payload.get(field)
+        if order_id:
+            return str(order_id)
+    
+    return None
+
+
 # Notification type constants
 NOTIF_ORDER_CANCELLED = 1
 NOTIF_ORDER_FILLED = 2
@@ -83,7 +99,7 @@ def process_notifications() -> None:
 def _handle_order_fill(payload: dict, timestamp: int) -> None:
     """Handle order fill notification"""
     try:
-        order_id = payload.get("order_id")
+        order_id = _extract_order_id_from_payload(payload)
         fill_price = payload.get("price")
         fill_size = payload.get("size")
 
@@ -204,7 +220,7 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
     """Handle order cancellation notification"""
     try:
-        order_id = payload.get("order_id")
+        order_id = _extract_order_id_from_payload(payload)
 
         if not order_id:
             return

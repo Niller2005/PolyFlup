@@ -5,6 +5,21 @@ from py_clob_client.clob_types import DropNotificationParams
 from src.utils.logger import log
 from .client import client
 
+def _extract_order_id_from_payload(payload: dict) -> str:
+    """Extract order ID from notification payload using multiple possible field names"""
+    if not isinstance(payload, dict):
+        return 'unknown'
+    
+    # Try multiple possible field names for order ID
+    possible_fields = ['orderId', 'order_id', 'id', 'orderID']
+    
+    for field in possible_fields:
+        order_id = payload.get(field)
+        if order_id and order_id != 'unknown':
+            return str(order_id)
+    
+    return 'unknown'
+
 def get_notifications() -> List[dict]:
     """Get all notifications with audit trail"""
     try:
@@ -24,7 +39,8 @@ def get_notifications() -> List[dict]:
                 result.append(notif)
                 # AUDIT: Processed notification dict
                 notification_type = notif.get('type', 'unknown')
-                order_id = notif.get('payload', {}).get('orderId', 'unknown') if isinstance(notif.get('payload'), dict) else 'unknown'
+                payload = notif.get('payload', {})
+                order_id = _extract_order_id_from_payload(payload)
                 log(f"🔍 NOTIFICATION AUDIT: Processed notification {i+1}/{len(notifications)} - Type: {notification_type}, OrderID: {order_id[:10] if order_id != 'unknown' else 'unknown'}")
             else:
                 notif_dict = {
@@ -37,7 +53,8 @@ def get_notifications() -> List[dict]:
                 result.append(notif_dict)
                 # AUDIT: Processed notification object
                 notification_type = getattr(notif, "type", "unknown")
-                order_id = getattr(notif, "payload", {}).get("orderId", "unknown") if isinstance(getattr(notif, "payload", {}), dict) else "unknown"
+                payload = getattr(notif, "payload", {})
+                order_id = _extract_order_id_from_payload(payload)
                 log(f"🔍 NOTIFICATION AUDIT: Processed notification {i+1}/{len(notifications)} - Type: {notification_type}, OrderID: {order_id[:10] if order_id != 'unknown' else 'unknown'}")
         
         # AUDIT: Notification processing complete
