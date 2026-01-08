@@ -92,10 +92,8 @@ def _check_exit_plan(
         (now - trade_timestamp).total_seconds() if trade_timestamp else 0
     )
 
-    # Concise position debug: symbol, side, size only
-    log(f"   🔍 POSITION: {symbol} {side} {size}")
-
-    # Removed EXIT DEBUG spam - was causing excessive logging
+    # Removed position debug spam - was causing excessive logging
+    # Position info now shown in clean position reports
 
     enhanced_balance_info = get_enhanced_balance_allowance(
         token_id, symbol, user_address, trade_age_seconds
