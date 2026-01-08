@@ -102,10 +102,15 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             edge,
                             last_sc_at,
                         ) = pos
-                        if b_status in ["FILLED", "MATCHED"]:
-                            if sym not in positions_by_symbol:
-                                positions_by_symbol[sym] = {"UP": [], "DOWN": []}
 
+                        if sym not in positions_by_symbol:
+                            positions_by_symbol[sym] = {
+                                "UP": {"filled": [], "waiting": []},
+                                "DOWN": {"filled": [], "waiting": []},
+                            }
+
+                        if b_status in ["FILLED", "MATCHED"]:
+                            # Filled/Matched positions with PnL
                             pnl_pct = _get_position_pnl(sym, side, entry, size)
 
                             # Build position details with scaled-in and exit plan status
@@ -119,18 +124,42 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             else:  # Exit pending
                                 position_details += " | ⏳ Exit pending"
 
-                            positions_by_symbol[sym][side].append(position_details)
+                            positions_by_symbol[sym][side]["filled"].append(
+                                position_details
+                            )
+
+                        elif b_status in ["LIVE", "OPEN", "PENDING"] and b_id:
+                            # Waiting for fill positions
+                            waiting_details = f"📦{size:.1f} | ⏳ Waiting for fill"
+                            positions_by_symbol[sym][side]["waiting"].append(
+                                waiting_details
+                            )
 
                     # Log positions - each UP/DOWN gets its own line with full details
                     if positions_by_symbol:
                         log("📈 POSITIONS:")
                         for sym in sorted(positions_by_symbol.keys()):
-                            if positions_by_symbol[sym]["UP"]:
-                                for up_pos in positions_by_symbol[sym]["UP"]:
+                            # Show filled positions first
+                            if positions_by_symbol[sym]["UP"]["filled"]:
+                                for up_pos in positions_by_symbol[sym]["UP"]["filled"]:
                                     log(f"  [{sym}] UP {up_pos}")
-                            if positions_by_symbol[sym]["DOWN"]:
-                                for down_pos in positions_by_symbol[sym]["DOWN"]:
+                            if positions_by_symbol[sym]["DOWN"]["filled"]:
+                                for down_pos in positions_by_symbol[sym]["DOWN"][
+                                    "filled"
+                                ]:
                                     log(f"  [{sym}] DOWN {down_pos}")
+
+                            # Show waiting for fill positions
+                            if positions_by_symbol[sym]["UP"]["waiting"]:
+                                for up_wait in positions_by_symbol[sym]["UP"][
+                                    "waiting"
+                                ]:
+                                    log(f"  [{sym}] UP {up_wait}")
+                            if positions_by_symbol[sym]["DOWN"]["waiting"]:
+                                for down_wait in positions_by_symbol[sym]["DOWN"][
+                                    "waiting"
+                                ]:
+                                    log(f"  [{sym}] DOWN {down_wait}")
 
                 # Simple position report every minute
                 if len(open_positions) > 0:
