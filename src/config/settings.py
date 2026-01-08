@@ -49,11 +49,19 @@ UNFILLED_CANCEL_THRESHOLD = float(
 UNFILLED_TIMEOUT_SECONDS = int(
     os.getenv("UNFILLED_TIMEOUT_SECONDS", "300")
 )  # Cancel unfilled orders after 5 minutes (300s)
-n# Enhanced Balance Validation for API Reliability Issues
-ENABLE_ENHANCED_BALANCE_VALIDATION = os.getenv("ENABLE_ENHANCED_BALANCE_VALIDATION", "YES").upper() == "YES"
-BALANCE_CROSS_VALIDATION_TIMEOUT = int(os.getenv("BALANCE_CROSS_VALIDATION_TIMEOUT", "15"))  # seconds
-XRP_BALANCE_GRACE_PERIOD_MINUTES = int(os.getenv("XRP_BALANCE_GRACE_PERIOD_MINUTES", "15"))
-XRP_BALANCE_TRUST_FACTOR = float(os.getenv("XRP_BALANCE_TRUST_FACTOR", "0.3"))  # Lower trust in XRP balance API
+# Enhanced Balance Validation for API Reliability Issues
+ENABLE_ENHANCED_BALANCE_VALIDATION = (
+    os.getenv("ENABLE_ENHANCED_BALANCE_VALIDATION", "YES").upper() == "YES"
+)
+BALANCE_CROSS_VALIDATION_TIMEOUT = int(
+    os.getenv("BALANCE_CROSS_VALIDATION_TIMEOUT", "15")
+)  # seconds
+XRP_BALANCE_GRACE_PERIOD_MINUTES = int(
+    os.getenv("XRP_BALANCE_GRACE_PERIOD_MINUTES", "15")
+)
+XRP_BALANCE_TRUST_FACTOR = float(
+    os.getenv("XRP_BALANCE_TRUST_FACTOR", "0.3")
+)  # Lower trust in XRP balance API
 UNFILLED_RETRY_ON_WINNING_SIDE = (
     os.getenv("UNFILLED_RETRY_ON_WINNING_SIDE", "YES").upper() == "YES"
 )  # Retry on winning side if unfilled
@@ -135,10 +143,16 @@ if not PROXY_PK or not PROXY_PK.startswith("0x"):
 
 
 # Price Movement Validation for High Confidence Trades
-ENABLE_PRICE_VALIDATION = os.getenv('ENABLE_PRICE_VALIDATION', 'YES').upper() == 'YES'
-PRICE_VALIDATION_MAX_MOVEMENT = float(os.getenv('PRICE_VALIDATION_MAX_MOVEMENT', '20.0'))  # Max 20% movement
-PRICE_VALIDATION_MIN_CONFIDENCE = float(os.getenv('PRICE_VALIDATION_MIN_CONFIDENCE', '0.75'))  # Validate trades > 75% confidence
-PRICE_VALIDATION_VOLATILITY_THRESHOLD = float(os.getenv('PRICE_VALIDATION_VOLATILITY_THRESHOLD', '0.7'))  # High volatility threshold
+ENABLE_PRICE_VALIDATION = os.getenv("ENABLE_PRICE_VALIDATION", "YES").upper() == "YES"
+PRICE_VALIDATION_MAX_MOVEMENT = float(
+    os.getenv("PRICE_VALIDATION_MAX_MOVEMENT", "20.0")
+)  # Max 20% movement
+PRICE_VALIDATION_MIN_CONFIDENCE = float(
+    os.getenv("PRICE_VALIDATION_MIN_CONFIDENCE", "0.75")
+)  # Validate trades > 75% confidence
+PRICE_VALIDATION_VOLATILITY_THRESHOLD = float(
+    os.getenv("PRICE_VALIDATION_VOLATILITY_THRESHOLD", "0.7")
+)  # High volatility threshold
 
 # Constants
 BINANCE_FUNDING_MAP = {
