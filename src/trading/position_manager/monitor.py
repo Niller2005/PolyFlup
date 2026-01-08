@@ -113,8 +113,8 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             # Filled/Matched positions with PnL
                             pnl_pct = _get_position_pnl(sym, side, entry, size)
 
-                            # Build position details with scaled-in and exit plan status
-                            position_details = f"📦{size:.1f} 🧮{pnl_pct:+.1f}%"
+                            # Build position details with trade ID, scaled-in and exit plan status
+                            position_details = f"#{tid} 📦{size:.1f} 🧮{pnl_pct:+.1f}%"
 
                             if sc_in:  # Scaled in
                                 position_details += " | 📊 Scaled in"
