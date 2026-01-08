@@ -11,7 +11,7 @@ from src.trading.orders import (
     get_order,
     cancel_order,
     place_limit_order,
-    get_balance_allowance,
+    get_enhanced_balance_allowance,
     get_orders,
     truncate_float,
     SELL,
@@ -44,6 +44,7 @@ def get_optimal_exit_price(
 
 def _check_exit_plan(
     user_address,
+    symbol,
     trade_id,
     token_id,
     size,

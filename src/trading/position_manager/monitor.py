@@ -297,6 +297,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
 
                     _check_exit_plan(
                         user_address,
+                        sym,
                         tid,
                         tok,
                         size,

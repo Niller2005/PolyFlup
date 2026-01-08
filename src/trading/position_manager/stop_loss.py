@@ -14,7 +14,6 @@ from src.trading.orders import (
     get_enhanced_balance_allowance,
     sell_position,
     cancel_order,
-    get_balance_allowance,
     get_order_status,
     get_clob_client,
 )
