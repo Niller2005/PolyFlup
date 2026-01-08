@@ -360,7 +360,7 @@ def main():
     sync_with_exchange(addr)
 
     log("🔍 Performing initial position check...")
-    check_open_positions(user_address=addr,verbose=True, check_orders=True, user_address=addr)
+    check_open_positions(user_address=addr, verbose=True, check_orders=True)
 
     last_position_check = time.time()
     last_order_check = time.time()
@@ -399,8 +399,10 @@ def main():
             is_order_check_cycle = now_ts - last_order_check >= 10
 
             if now_ts - last_position_check >= 1:
-                check_open_positions(user_address=addr,
-                    verbose=is_verbose_cycle, check_orders=is_order_check_cycle
+                check_open_positions(
+                    user_address=addr,
+                    verbose=is_verbose_cycle,
+                    check_orders=is_order_check_cycle,
                 )
                 last_position_check = now_ts
 
