@@ -152,26 +152,29 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                 )
                                 # CANCEL ANY PENDING SCALE-IN ORDER - WITH COMPREHENSIVE AUDIT TRAIL
                                 if sc_id:
-
                                     # AUDIT: Starting scale-in cancellation process
                                     log(
                                         f"   🧹 [{sym}] #{tid} EXIT AUDIT: Starting scale-in order cancellation process for order {sc_id[:10]}"
                                     )
-                                    
+
                                     # CRITICAL FIX: Check if scale-in order is actually unfilled before cancelling
                                     sc_status = get_order_status(sc_id)
-                                    
+
                                     # AUDIT: Scale-in order status check
                                     log(
                                         f"   🔍 [{sym}] #{tid} EXIT AUDIT: Scale-in order {sc_id[:10]} status: {sc_status}"
                                     )
-                                    
+
                                     if sc_status not in ["FILLED", "MATCHED"]:
                                         # Check for race condition - track this as a recent fill attempt
                                         if is_recently_filled(sc_id):
                                             # AUDIT: Race condition detected - order was recently filled
                                             fill_data = get_order(sc_id)
-                                            fill_size = fill_data.get('size_matched', 0) if fill_data else 'unknown'
+                                            fill_size = (
+                                                fill_data.get("size_matched", 0)
+                                                if fill_data
+                                                else "unknown"
+                                            )
                                             log(
                                                 f"   ⚠️  [{sym}] #{tid} EXIT AUDIT: RACE CONDITION DETECTED! Order {sc_id[:10]} was recently filled (size: {fill_size}), skipping cancellation"
                                             )
@@ -294,7 +297,6 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
 
                     _check_exit_plan(
                         user_address,
-                        sym,
                         tid,
                         tok,
                         size,
