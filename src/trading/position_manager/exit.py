@@ -71,11 +71,8 @@ def _check_exit_plan(
         return False
 
     # Early check: Skip exit plans for positions less than MIN_SIZE
+    # (Status shown in monitoring output as "Exit skipped")
     if size < MIN_SIZE:
-        if verbose:
-            log(
-                f"   ⏭️  [{symbol}] #{trade_id} Position size {size:.4f} < {MIN_SIZE}. Skipping exit plan."
-            )
         return False
 
     repaired = False
@@ -215,9 +212,7 @@ def _check_exit_plan(
                         f"   📈 [{symbol}] #{trade_id} Bumping sell size to {MIN_SIZE} shares"
                     )
                 else:
-                    log(
-                        f"   ⏭️  [{symbol}] #{trade_id} size {sell_size} < {MIN_SIZE}. Skipping, trying again next window."
-                    )
+                    # Skip silently - status shown in monitoring output as "Exit skipped"
                     return
 
             res = place_limit_order(
@@ -308,9 +303,7 @@ def _check_exit_plan(
                                 f"   📈 [{symbol}] #{trade_id} Bumping exit plan size to {MIN_SIZE} shares"
                             )
                         else:
-                            log(
-                                f"   ⏭️  [{symbol}] #{trade_id} size {sell_size} < {MIN_SIZE}. Skipping, trying again next window."
-                            )
+                            # Skip silently - status shown in monitoring output as "Exit skipped"
                             c.execute(
                                 "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
                                 (trade_id,),
@@ -330,7 +323,7 @@ def _check_exit_plan(
                             (new_oid, trade_id),
                         )
                         log(
-                            f"   🔧 [{symbol}] #{trade_id} Exit plan size repaired: {target_size} -> {sell_size}"
+                            f"   🔧 [{symbol}] #{trade_id} Exit plan size repaired: {o_size:.2f} -> {sell_size:.2f}"
                         )
                         repaired = True
                         limit_sell_id = new_oid
