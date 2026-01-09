@@ -15,6 +15,7 @@ from src.trading.orders import (
 )
 from src.utils.websocket_manager import ws_manager
 from src.trading.settlement import force_settle_trade
+from src.trading.logic import MIN_SIZE
 from .shared import _position_check_lock
 from .shared import _scale_in_order_lock
 from .reconciliation import safe_cancel_order, is_recently_filled, track_recent_fill
@@ -181,7 +182,11 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                 if l_sell:
                                     status_parts.append("⏰ Exit active")
                                 else:
-                                    status_parts.append("⏳ Exit pending")
+                                    # Check if position is below MIN_SIZE threshold
+                                    if size < MIN_SIZE:
+                                        status_parts.append("⏭️ Exit skipped")
+                                    else:
+                                        status_parts.append("⏳ Exit pending")
 
                                 status_str = (
                                     " | ".join(status_parts) if status_parts else ""
