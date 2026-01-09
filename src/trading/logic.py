@@ -31,16 +31,20 @@ MIN_SIZE = 5.0
 def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
     """
     Determine actual trading side and confidence for sizing.
-    Updated: Support Trend Following and Contrarian flips, ignoring Neutral/Wait zone.
+    Enforces MIN_EDGE threshold for trend following entries.
     """
     if confidence <= CONTRARIAN_THRESHOLD:
         # Contrarian: Expect flip because confidence in current bias is extremely low
         actual_side = "DOWN" if bias == "UP" else "UP"
         sizing_confidence = 0.25  # Fixed sizing for contrarian entries
-    else:
-        # Follow Trend (no matter the confidence level)
+    elif confidence >= MIN_EDGE:
+        # Follow Trend (only if confidence meets minimum edge requirement)
         actual_side = bias
         sizing_confidence = confidence
+    else:
+        # Wait zone: confidence too low for trend following, too high for contrarian
+        actual_side = "NEUTRAL"
+        sizing_confidence = 0.0
 
     return actual_side, sizing_confidence
 
@@ -152,6 +156,11 @@ def _prepare_trade_params(
                 log("")
         return
 
+    # Extract current_spot from signals for validation
+    current_spot = 0.0
+    if isinstance(signals, dict):
+        current_spot = float(signals.get("current_spot", 0))
+
     # Price Movement Validation for High Confidence Trades
     if confidence >= 0.75:  # Only validate high confidence trades
         validation_result = validate_price_movement_for_trade(
@@ -159,9 +168,9 @@ def _prepare_trade_params(
             confidence=confidence,
             current_spot=current_spot,
             max_movement_threshold=20.0,
-            min_confidence_threshold=0.75
+            min_confidence_threshold=0.75,
         )
-        
+
         if not validation_result["valid"]:
             if verbose:
                 reason = validation_result["reduction_reason"]
@@ -169,17 +178,19 @@ def _prepare_trade_params(
                 if add_spacing:
                     log("")
             return
-        
+
         # Use adjusted confidence if it was reduced
         if validation_result["adjusted_confidence"] < confidence:
             original_confidence = confidence
             confidence = validation_result["adjusted_confidence"]
-            
+
             # Recalculate sizing confidence with reduced confidence
             actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
-            
+
             if verbose:
-                log(f"[{symbol}] 📉 Price validation reduced confidence: {original_confidence:.1%} → {confidence:.1%}")
+                log(
+                    f"[{symbol}] 📉 Price validation reduced confidence: {original_confidence:.1%} → {confidence:.1%}"
+                )
                 if validation_result["reduction_reason"]:
                     reason = validation_result["reduction_reason"]
                     log(f"   Reason: {reason}")
@@ -260,10 +271,6 @@ def _prepare_trade_params(
             )
 
     target_price = float(get_window_start_price(symbol))
-
-    current_spot = 0.0
-    if isinstance(signals, dict):
-        current_spot = float(signals.get("current_spot", 0))
 
     if not _check_target_price_alignment(
         symbol, side, confidence, current_spot, target_price, price, verbose=verbose
