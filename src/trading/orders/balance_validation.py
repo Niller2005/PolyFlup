@@ -66,9 +66,6 @@ def retry_balance_api_call(
                 if symbol in ["BTC", "ETH", "SOL", "XRP", "DOGE", "MATIC"]:
                     balance_val = balance_info.get("balance", 0)
                     if balance_val < 0.001:  # Near-zero balance for crypto
-                        log(
-                            f"   ⚠️  [{symbol}] Balance API returned near-zero ({balance_val:.6f}), may be USDC.e timing issue"
-                        )
                         if attempt < max_retries - 1:
                             time.sleep(retry_delay)
                             retry_delay *= 1.5
