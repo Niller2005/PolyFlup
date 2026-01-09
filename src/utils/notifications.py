@@ -1,7 +1,7 @@
 """Notification monitoring and processing"""
 
 import time
-from typing import List, Dict
+from typing import List, Dict, Optional
 from src.utils.logger import log, log_error, send_discord
 from src.trading.orders import get_notifications, drop_notifications, SELL
 from src.data.db_connection import db_connection
@@ -10,19 +10,39 @@ from src.trading.position_manager.reconciliation import track_recent_fill
 from .websocket_manager import ws_manager
 
 
-def _extract_order_id_from_payload(payload: dict) -> str:
+def _extract_order_id_from_payload(payload: dict) -> Optional[str]:
     """Extract order ID from notification payload using multiple possible field names"""
     if not isinstance(payload, dict):
         return None
-    
+
     # Try multiple possible field names for order ID
-    possible_fields = ['order_id', 'orderId', 'id', 'orderID']
-    
+    possible_fields = ["order_id", "orderId", "id", "orderID"]
+
     for field in possible_fields:
         order_id = payload.get(field)
         if order_id:
             return str(order_id)
-    
+
+    return None
+
+    # Try multiple possible field names for order ID
+    possible_fields = ["order_id", "orderId", "id", "orderID"]
+
+    for field in possible_fields:
+        order_id = payload.get(field)
+        if order_id:
+            return str(order_id)
+
+    return None
+
+    # Try multiple possible field names for order ID
+    possible_fields = ["order_id", "orderId", "id", "orderID"]
+
+    for field in possible_fields:
+        order_id = payload.get(field)
+        if order_id:
+            return str(order_id)
+
     return None
 
 
@@ -129,6 +149,23 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     new_price = float(fill_price) if fill_price else db_price
                     new_size = float(fill_size) if fill_size else db_size
 
+                    # Log with symbol, price, and size
+                    order_id_short = order_id[:10] if len(order_id) > 10 else order_id
+                    log(
+                        f"🔍 [{symbol}] FILL {order_id_short}: {new_size:.2f} @ ${new_price:.4f}"
+                    )
+                row = c.fetchone()
+
+                if row:
+                    trade_id, symbol, trade_side, db_size, db_price, db_status = row
+
+                    if db_status == "FILLED":
+                        return
+
+                    # Update price/size if provided in notification
+                    new_price = float(fill_price) if fill_price else db_price
+                    new_size = float(fill_size) if fill_size else db_size
+
                     log(
                         f"🔔 [{symbol}] #{trade_id} Buy filled: {trade_side} {new_size:.2f} @ ${new_price:.4f}"
                     )
@@ -148,9 +185,21 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
                 if row:
                     trade_id, symbol, trade_side, size = row
-                    log(
-                        f"🎯 [{symbol}] Exit filled: #{trade_id} - will be settled on next position check"
-                    )
+
+                    # Get price from notification if available
+                    exit_price = float(fill_price) if fill_price else "?"
+                    exit_size = float(fill_size) if fill_size else size
+                    order_id_short = order_id[:10] if len(order_id) > 10 else order_id
+
+                    if exit_price != "?":
+                        log(
+                            f"🔍 [{symbol}] FILL {order_id_short}: {exit_size:.2f} @ ${exit_price:.4f} (exit)"
+                        )
+                    else:
+                        log(
+                            f"🔍 [{symbol}] FILL {order_id_short}: {exit_size:.2f} (exit)"
+                        )
+
                     # Mark order status so position manager knows to check it
                     c.execute(
                         "UPDATE trades SET order_status = 'EXIT_PLAN_PENDING_SETTLEMENT' WHERE id = ?",
@@ -193,12 +242,17 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     new_scale_size = float(fill_size) if fill_size else 0
 
                     if new_scale_size > 0:
+                        order_id_short = (
+                            order_id[:10] if len(order_id) > 10 else order_id
+                        )
                         log(
-                            f"📈 [{symbol}] Scale-in filled: #{trade_id} (+{new_scale_size:.2f} @ ${new_scale_price:.4f})"
+                            f"🔍 [{symbol}] FILL {order_id_short}: {new_scale_size:.2f} @ ${new_scale_price:.4f} (scale-in)"
                         )
 
                         # Track this fill to prevent race condition cancellations
-                        track_recent_fill(order_id, new_scale_price, new_scale_size, timestamp)
+                        track_recent_fill(
+                            order_id, new_scale_price, new_scale_size, timestamp
+                        )
 
                         # Immediate update of averages
                         new_total_size = db_size + new_scale_size
@@ -238,7 +292,10 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                 )
                 row = c.fetchone()
 
-                # Don't log cancellations - position manager already logs them if needed
+                if row:
+                    trade_id, symbol, side = row
+                    order_id_short = order_id[:10] if len(order_id) > 10 else order_id
+                    log(f"🔍 [{symbol}] CANCEL {order_id_short}")
 
     except Exception as e:
         log_error(f"Error handling order cancellation notification: {e}")
