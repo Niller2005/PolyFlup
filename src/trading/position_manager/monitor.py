@@ -266,8 +266,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             )
                             curr_b_status = "FILLED"
 
-                    if verbose and curr_b_status not in ["FILLED", "MATCHED"]:
-                        log(f"  ⏳ [{sym}] {side:<4} #{str(tid):<6}  📦{size:>5.1f}")
+                    if curr_b_status not in ["FILLED", "MATCHED"]:
                         continue
 
                     if (
