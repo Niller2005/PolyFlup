@@ -290,8 +290,8 @@ def _check_exit_plan(
                 if res["success"] or res.get("order_id"):
                     new_oid = res.get("order_id")
                     c.execute(
-                        "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
-                        (new_oid, trade_id),
+                        "UPDATE trades SET limit_sell_order_id = ?, size = ? WHERE id = ?",
+                        (new_oid, sell_size, trade_id),
                     )
                     log(
                         f"   ✅ [{symbol}] #{trade_id} Exit plan repaired: {o_size:.2f} -> {sell_size:.2f}"
