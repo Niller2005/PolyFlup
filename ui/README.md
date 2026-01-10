@@ -1,43 +1,109 @@
-# Svelte + Vite
+# PolyFlup Dashboard
 
-This template should help get you started developing with Svelte in Vite.
+Real-time trading dashboard for the PolyFlup bot built with Svelte 5, Vite, and Tailwind CSS.
 
-## Recommended IDE Setup
+## Features
 
-[VS Code](https://code.visualstudio.com/) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode).
+- **Live Statistics**: Real-time P&L, ROI, and win rate
+- **Position Monitoring**: Active positions with current prices and unrealized P&L
+- **Trade History**: Complete trade log with filtering and sorting
+- **Performance Charts**: Visual performance tracking over time
+- **WebSocket Updates**: Near-instant updates via shared SQLite database
 
-## Need an official Svelte framework?
+## Tech Stack
 
-Check out [SvelteKit](https://github.com/sveltejs/kit#readme), which is also powered by Vite. Deploy anywhere with its serverless-first approach and adapt to various platforms, with out of the box support for TypeScript, SCSS, and Less, and easily-added support for mdsvex, GraphQL, PostCSS, Tailwind CSS, and more.
+- **Frontend**: Svelte 5 + Vite
+- **Styling**: Tailwind CSS 4
+- **Charts**: LayerChart + D3
+- **Backend**: Express.js API server
+- **Database**: Better-SQLite3 (read-only access to `trades.db`)
 
-## Technical considerations
+## Installation
 
-**Why use this over SvelteKit?**
-
-- It brings its own routing solution which might not be preferable for some users.
-- It is first and foremost a framework that just happens to use Vite under the hood, not a Vite app.
-
-This template contains as little as possible to get started with Vite + Svelte, while taking into account the developer experience with regards to HMR and intellisense. It demonstrates capabilities on par with the other `create-vite` templates and is a good starting point for beginners dipping their toes into a Vite + Svelte project.
-
-Should you later need the extended capabilities and extensibility provided by SvelteKit, the template has been structured similarly to SvelteKit so that it is easy to migrate.
-
-**Why include `.vscode/extensions.json`?**
-
-Other templates indirectly recommend extensions via the README, but this file allows VS Code to prompt the user to install the recommended extension upon opening the project.
-
-**Why enable `checkJs` in the JS template?**
-
-It is likely that most cases of changing variable types in runtime are likely to be accidental, rather than deliberate. This provides advanced typechecking out of the box. Should you like to take advantage of the dynamically-typed nature of JavaScript, it is trivial to change the configuration.
-
-**Why is HMR not preserving my local component state?**
-
-HMR state preservation comes with a number of gotchas! It has been disabled by default in both `svelte-hmr` and `@sveltejs/vite-plugin-svelte` due to its often surprising behavior. You can read the details [here](https://github.com/sveltejs/svelte-hmr/tree/master/packages/svelte-hmr#preservation-of-local-state).
-
-If you have state that's important to retain within a component, consider creating an external store which would not be replaced by HMR.
-
-```js
-// store.js
-// An extremely simple external store
-import { writable } from 'svelte/store'
-export default writable(0)
+```bash
+cd ui
+npm install
 ```
+
+## Development
+
+```bash
+# Start both API server and dev server
+npm run dev
+
+# Or start individually
+node server.js    # API server on port 3001
+npm run build     # Build for production
+```
+
+The dashboard will be available at [http://localhost:5173](http://localhost:5173) (dev) or [http://localhost:3001](http://localhost:3001) (production).
+
+## API Endpoints
+
+The Express server (`server.js`) provides:
+
+- `GET /api/stats` - Overall statistics (total P&L, ROI, win rate)
+- `GET /api/positions` - Active open positions
+- `GET /api/trades` - Complete trade history
+- `GET /api/performance` - Daily performance data for charts
+
+## Docker Deployment
+
+The dashboard is included in the Docker Compose setup:
+
+```bash
+# From project root
+docker compose up -d
+
+# Dashboard available at http://localhost:3001
+```
+
+## Configuration
+
+The dashboard automatically reads from the `trades.db` SQLite database. No additional configuration required.
+
+### Environment Variables
+
+- `NODE_ENV` - Set to `production` in Docker
+- `DB_PATH` - Path to trades.db (default: `../trades.db` in dev, `/trades.db` in Docker)
+
+## Project Structure
+
+```
+ui/
+├── server.js              # Express API server
+├── src/
+│   ├── App.svelte         # Main app component
+│   ├── lib/               # Reusable components
+│   └── main.js            # Entry point
+├── public/                # Static assets
+├── package.json
+└── vite.config.js
+```
+
+## Development Notes
+
+- **Database Access**: Read-only access to prevent corruption
+- **Real-Time Updates**: Poll API every 5 seconds for live data
+- **Responsive Design**: Mobile-friendly layout with Tailwind
+- **Type Safety**: JavaScript with JSDoc type hints
+
+## Troubleshooting
+
+### Dashboard shows no data
+- Ensure `trades.db` exists in the parent directory
+- Check that the bot has created at least one trade
+- Verify server.js is running on port 3001
+
+### API not responding
+- Check if port 3001 is available
+- Look for errors in server.js console output
+- Ensure database file has read permissions
+
+## Contributing
+
+When adding new features:
+1. Follow Svelte 5 runes syntax (`$state`, `$derived`, `$effect`)
+2. Use Tailwind utility classes for styling
+3. Add new API endpoints to `server.js` as needed
+4. Test both dev and production builds

@@ -76,7 +76,7 @@ src/trading/position_manager/
 
 **Purpose**: Runs every 1 second to evaluate all open positions and trigger appropriate actions.
 
-**Frequency**: 1-second cycle
+**Frequency**: 1-second cycle (real-time monitoring with WebSocket price updates)
 
 **Sequence of Checks** (per position, in order):
 1. **Stop Loss Check** (`_check_stop_loss()`) → May trigger reversal
@@ -84,10 +84,11 @@ src/trading/position_manager/
 3. **Exit Plan Check** (`_check_exit_plan()`) → Place/manage limit sell
 
 **Optimizations**:
-- **Batch price fetching**: All token prices fetched in single API call
-- **WebSocket cache**: Uses cached prices when available
+- **WebSocket price feeds**: Real-time midpoint prices via Market Channel subscriptions
+- **Batch price fetching**: All token prices fetched in single API call when WebSocket unavailable
 - **Batch scoring**: Checks order scoring in batch for multiple positions
 - **Lock mechanism**: Prevents concurrent monitoring cycles
+- **Notification batching**: WebSocket updates for fills, cancels, and P&L changes
 
 ---
 
@@ -149,7 +150,8 @@ if current_price <= dynamic_trigger:
 **Special Cases**:
 - **Spot price check**: If midpoint is low but spot price is winning side, holds position
 - **Age check**: Positions must be at least 30s old to avoid noise
-- **Balance sync**: Fetches actual balance before sell to ensure complete exit
+- **Enhanced balance sync**: Uses cross-validation between balance API and position data (symbol-specific tolerance)
+- **XRP handling**: Special validation for XRP positions with lower API trust factor
 
 **Example**:
 ```
@@ -272,10 +274,14 @@ if current_price <= min(STOP_LOSS_PRICE, entry_price - 0.10):
 - Places when no existing order in database
 - No minimum position age (places immediately after fill)
 - Cooldown: 10s between placement attempts
+- **Reward optimization**: Automatically adjusts price via `check_scoring` API to earn liquidity rewards (if enabled)
 
-#### 2. Balance Syncing (Bi-Directional Healing)
+#### 2. Balance Syncing (Bi-Directional Healing with Enhanced Validation)
 - **Sync if balance > size + 0.0001**: Always sync immediately (we bought more)
 - **Periodic sync**: If `age > 60s` and `scale_in_age > 60s`, sync any discrepancies
+- **Cross-validation**: Validates balance API against position data from Data API
+- **Symbol-specific tolerance**: XRP and other unreliable symbols use position data as fallback
+- **Grace period**: Waits 15 minutes (configurable) before settling zero-balance positions
 
 #### 3. Order Adoption
 - Checks exchange for existing SELL orders before placing new one

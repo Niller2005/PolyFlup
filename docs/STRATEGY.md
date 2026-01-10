@@ -169,8 +169,8 @@ Signal contributes: score × weight × direction
 ### 🧠 Trend Agreement Bonus
 If Binance momentum and Polymarket momentum agree on the direction, the strategy applies a **1.1x multiplier** to the final confidence. This reinforces high-conviction entries where external and internal markets are aligned.
 
-### 🧠 Lead/Lag Indicator (Experimental)
-The bot also tracks the "Lead/Lag" relationship between exchanges. If a signal shows strong cross-exchange consistency, a **1.2x multiplier** may be applied to the final confidence. If they diverge sharply, a **0.8x penalty** is applied to filter out noise.
+### 🧠 Lead/Lag Indicator
+The bot tracks the "Lead/Lag" relationship between exchanges using Polymarket's native momentum data. When Binance and Polymarket momentum signals are consistent (both pointing in the same direction), a **1.2x multiplier** is applied to the final confidence. When they diverge sharply (pointing in opposite directions), a **0.8x penalty** reduces confidence to filter out conflicting signals. This feature is automatically active when `ENABLE_MOMENTUM_FILTER=YES`.
 
 ---
 

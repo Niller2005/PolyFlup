@@ -22,17 +22,20 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 - **🛑 Midpoint Stop Loss**: Primary safety net triggers at $0.30 midpoint price (configurable)
 - **🔄 Hedged Reversal**: Supports holding both sides during trend flips, clearing losers via stop loss
 - **📈 Dynamic Scale-In**: Adds to winning positions with confidence-weighted timing (up to 12m early for high-conviction trades)
-- **⚡ Real-Time Monitoring**: 10-second position checking with robust order status tracking
-- **🛡️ Self-Healing Logic**: Automatically force-settles "ghost" trades if price data is unavailable for 3+ cycles
+- **⚡ Real-Time Monitoring**: 1-second position checking cycle with WebSocket-powered price updates
+- **🛡️ Balance Cross-Validation**: Symbol-specific validation with fallback to position data for API reliability issues
+- **📊 Settlement Auditing**: Automated P&L verification against exchange data (logs discrepancies > $0.10)
 
 ### 🚀 Recent Improvements (Jan 2026)
-- **Enhanced Position Reports** (v0.4.3): Clean, aligned format with directional emojis (📈📉) and status indicators (⏰⏳📊)
-- **Enhanced Scale-In**: Implemented confidence-weighted dynamic timing, allowing high-conviction winners to be scaled as early as 12 minutes before expiry.
-- **Modular Backend**: Fully refactored `src/trading/orders` and `src/data/market_data` for better maintainability.
-- **WebSocket Integration**: Near-instant P&L and order fill updates via Polymarket's real-time sockets.
-- **Intelligent Position Sync**: Startup logic verifies market resolution and prevents re-adopting settled positions.
-- **Silent Error Handling**: Suppressed 404/Not Found errors during market transitions for cleaner logs.
-- **Low-Balance Protection**: Skips evaluation if balance is < 1.0 USDC to avoid API failures.
+- **Enhanced Position Reports** (v0.4.3): Clean, aligned format with directional emojis (📈📉) and status indicators showing position health at a glance
+- **Real-Time WebSocket Integration**: Near-instant P&L and order fill updates via Polymarket's User Channel (fills/cancels) and Market Channel (midpoint prices)
+- **Batch API Optimization**: Fetch midpoints for all positions in a single call, drastically reducing API overhead
+- **Enhanced Scale-In Logic**: Confidence-weighted dynamic timing allows high-conviction winners to be scaled as early as 12 minutes before expiry
+- **Enhanced Balance Validation**: Symbol-specific tolerance for API reliability issues (especially XRP), with cross-validation between balance and position data
+- **Reward Optimization**: Exit plans automatically adjust prices to ensure they earn liquidity rewards via `check_scoring` API
+- **Intelligent Position Sync**: Startup logic detects and "adopts" untracked exchange positions for automated management
+- **Settlement Auditing**: Automated verification of local P&L against official `closed-positions` API data
+- **Modular Backend**: Fully refactored `src/trading/orders` and `src/data/market_data` for better maintainability
 
 > 💡 **Tip**: See [docs/RISK_PROFILES.md](docs/RISK_PROFILES.md) for pre-configured profiles (Conservative, Balanced, Aggressive, Ultra Aggressive)
 
@@ -43,6 +46,8 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 - **Database**: Full SQLite tracking of all trades
 
 ## 🛠️ Installation
+
+> 💡 **New to PolyFlup?** See [QUICKSTART.md](QUICKSTART.md) for a 5-minute setup guide.
 
 1. **Clone the repository**
    ```bash
@@ -136,17 +141,37 @@ npm start
 
 ```
 polyflup/
-├── src/          # Bot source code
-├── ui/           # Real-time Svelte dashboard
-├── polyflup.py  # Bot entry point
-└── trades.db     # Shared SQLite database
+├── src/
+│   ├── bot.py                    # Main bot loop
+│   ├── config/                   # Configuration & settings
+│   ├── data/
+│   │   ├── database.py           # SQLite operations
+│   │   ├── migrations.py         # Database schema migrations
+│   │   └── market_data/          # Price data, indicators, Binance integration
+│   ├── trading/
+│   │   ├── orders/               # Order placement, CLOB client, market info
+│   │   ├── position_manager/    # Entry, exit, scale-in, stop loss, reversal
+│   │   ├── strategy.py           # Signal calculation & edge detection
+│   │   └── settlement.py         # Market settlement & auto-claim
+│   └── utils/                    # Logging, WebSocket, Web3, notifications
+├── ui/
+│   ├── server.js                 # Express API server for dashboard
+│   ├── src/                      # Svelte components
+│   └── package.json              # Node.js dependencies
+├── polyflup.py                   # Bot entry point
+├── trades.db                     # Shared SQLite database
+├── .env.example                  # Configuration template
+└── docs/                         # Strategy, risk profiles, migrations
 ```
 
 ## 📚 Documentation
 
+- **[CHANGELOG.md](CHANGELOG.md)** - Version history and release notes
 - **[AGENTS.md](AGENTS.md)** - Coding standards and guidelines for AI agents/contributors
 - **[docs/STRATEGY.md](docs/STRATEGY.md)** - Deep dive into the trading strategy and Binance integration
 - **[docs/RISK_PROFILES.md](docs/RISK_PROFILES.md)** - Risk management profiles (Conservative, Balanced, Aggressive)
+- **[docs/POSITION_FLOW.md](docs/POSITION_FLOW.md)** - Complete position lifecycle documentation
+- **[docs/API.md](docs/API.md)** - API reference for Polymarket, Binance, and Dashboard endpoints
 - **[docs/MIGRATIONS.md](docs/MIGRATIONS.md)** - Database migration guide for developers
 
 ## ⚠️ Disclaimer

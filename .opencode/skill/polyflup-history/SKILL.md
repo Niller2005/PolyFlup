@@ -5,6 +5,15 @@ description: Chronological log of system improvements and session summaries for 
 
 ## Session Improvements Summary
 
+### 2026-01-10 (v0.4.4 Release)
+- **Exit Order Repair Fix**: Implemented 0.05 share threshold to prevent infinite repair loops from exchange rounding differences
+- **Real-Time Exit Validation**: Added 1-second cycle exit order size validation to catch mismatches immediately
+- **Balance API Cleanup**: Removed noisy warnings for near-zero balance values to reduce log spam
+- **MIN_SIZE Display**: Added "Exit skipped" status indicator for positions below 5.0 share threshold
+- **MIN_EDGE Enforcement**: Fixed threshold enforcement to prevent low-confidence entries from bypassing filters
+- **Notification Logging**: Improved concise format with symbol and price info for better readability
+- **Duplicate Log Removal**: Eliminated duplicate position logging in monitoring loop for cleaner reports
+
 ### 2026-01-08 (v0.4.3 Release)
 - **Enhanced Position Reports**: Implemented clean, aligned format with directional emojis (📈📉) and status indicators (⏰⏳📊)
 - **Professional Display**: Removed debug spam and redundant logging for cleaner trading logs

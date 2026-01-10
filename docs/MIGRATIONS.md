@@ -144,10 +144,19 @@ uv run python -c "import sqlite3; conn = sqlite3.connect('trades.db'); c = conn.
 
 ## Applied Migrations
 
-| Version | Description | Applied |
-|---------|-------------|---------|
-| 1 | Add scale_in_order_id column | ✅ |
-| 2 | Verify timestamp column | ✅ |
+| Version | Description | Applied | Date |
+|---------|-------------|---------|------|
+| 1 | Add scale_in_order_id column | ✅ | 2025-12 |
+| 2 | Verify timestamp column (created_at) | ✅ | 2025-12 |
+
+## Checking Migration Status
+
+View applied migrations:
+```bash
+uv run python check_migration_status.py
+```
+
+This will show the current schema version and list all applied migrations.
 
 ## Rollback
 

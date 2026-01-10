@@ -35,4 +35,51 @@ The migration system tracks versions in the `schema_version` table.
 
 ### Schema Overview
 Main table: `trades`
-- Fields: `id`, `timestamp`, `symbol`, `side`, `entry_price`, `size`, `settled`, `final_outcome`, `exit_price`, `pnl_usd`, `roi_pct`, `order_id`, `order_status`, `target_price`, `is_reversal`, `edge`.
+- Core Fields: `id`, `timestamp`, `symbol`, `side`, `entry_price`, `size`, `bet_usd`, `edge`
+- Order Tracking: `order_id`, `order_status`, `limit_sell_order_id`, `scale_in_order_id`
+- Position Management: `scaled_in`, `is_reversal`, `target_price`, `reversal_triggered`, `reversal_triggered_at`
+- Settlement: `settled`, `settled_at`, `exited_early`, `final_outcome`, `exit_price`, `pnl_usd`, `roi_pct`
+- Timing: `window_start`, `window_end`, `last_scale_in_at`
+- Market Data: `slug`, `token_id`, `p_yes`, `best_bid`, `best_ask`, `imbalance`, `funding_bias`
+
+### Key Database Patterns
+
+#### Position Queries
+```python
+# Get open positions with all relevant data
+c.execute("""
+    SELECT id, symbol, token_id, side, entry_price, size, bet_usd, 
+           limit_sell_order_id, scale_in_order_id, scaled_in, edge, 
+           last_scale_in_at, window_end
+    FROM trades 
+    WHERE settled = 0 AND exited_early = 0 
+    AND datetime(window_end) > datetime(?)
+""", (now.isoformat(),))
+```
+
+#### Trade Updates
+```python
+# Update position size after scale-in
+c.execute("""
+    UPDATE trades 
+    SET size = ?, bet_usd = ? * entry_price, 
+        scaled_in = 1, last_scale_in_at = ?
+    WHERE id = ?
+""", (new_size, new_size, now.isoformat(), trade_id))
+```
+
+#### Settlement
+```python
+# Settle position with exit data
+c.execute("""
+    UPDATE trades 
+    SET settled = 1, exited_early = 1, exit_price = ?, 
+        pnl_usd = ?, roi_pct = ?, settled_at = ?
+    WHERE id = ?
+""", (exit_price, pnl_usd, roi_pct, now.isoformat(), trade_id))
+```
+
+### WAL Mode
+- Database uses Write-Ahead Logging (WAL) mode for better concurrency
+- Enabled on initialization: `PRAGMA journal_mode=WAL`
+- Allows concurrent readers while writes are in progress

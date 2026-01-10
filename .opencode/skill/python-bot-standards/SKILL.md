@@ -128,9 +128,52 @@ trade_id = execute_trade(trade_params, is_reversal=False)
 - Maintain backward compatibility where possible
 - Document all improvements in release tags
 
-## v0.4.2 Release Highlights
+### Balance Validation & Position Sync (v0.4.4+)
+- **Enhanced Balance Validation**: Symbol-specific tolerance for API reliability issues (XRP, etc.)
+  - Default: 0.8 reliability weight, 0.2 position trust factor, 5-minute grace period
+  - XRP: 0.3 reliability weight (lower trust), 0.3 position trust, 15-minute grace period
+- **Real-Time Exit Order Validation**: 1-second cycle size validation to catch mismatches immediately
+- **Rounding Threshold**: Use 0.05 share threshold for exit order repair to prevent infinite loops
+- **Bi-Directional Healing**: Sync database size with actual wallet balance when discrepancies detected
+  - Sync if balance > DB size + 0.0001 (immediate, no cooldown)
+  - Sync if age > 60s AND scale-in age > 60s AND |balance - size| > 0.0001
+- **Grace Period Logic**: 
+  - 60-second grace period after buy/scale-in before balance validation
+  - 10-minute grace period for zero balance before ghost trade settlement (increased from 5m)
+- **API Retry Strategy**: Exponential backoff with symbol-specific retry counts
+  - Default: 2 retries with 1.0s delay
+  - XRP: 3 retries with 2.0s delay
+  - Crypto markets: +1 extra retry with 1.5x delay multiplier
+- **Geographic Restrictions**: Detect and skip retries for geo-blocked APIs
+- **Database as Source of Truth**: For exit orders, always trust database position size over balance API
 
-### Major Stability Improvements
+### Position Monitoring & Reporting (v0.4.3+)
+- **Clean Position Reports**: Aligned format with directional emojis (📈 UP winning, 📉 DOWN winning)
+- **Status Indicators**: Visual indicators for exit plan status (⏰ active, ⏳ pending, ⏭️ skipped)
+- **Trade ID Display**: Show trade ID for all positions in monitoring output
+- **Spam Reduction**: Removed debug logging spam for cleaner production logs
+- **Min Size Handling**: Silent skip for positions below MIN_SIZE (5.0 shares) with status display
+
+### Notification Processing (v0.4.3+)
+- **Multi-Field Order ID Extraction**: Robust parsing with fallback to multiple field names
+- **Concise Logging**: Streamlined notification processing logs with symbol and price info
+- **Batch Processing**: Efficient handling of multiple notifications at once
+
+## Version History
+
+### v0.4.4 (Jan 2026)
+- **Exit Order Repair Fix**: Prevent infinite repair loops from exchange rounding differences (0.05 threshold)
+- **Real-Time Validation**: Exit order size validation every 1-second cycle to catch mismatches immediately
+- **Log Cleanup**: Remove noisy balance API warnings for near-zero values
+- **Position Display**: Show "Exit skipped" status for positions below MIN_SIZE threshold
+
+### v0.4.3 (Jan 2026)
+- **Enhanced Position Reports**: Clean, aligned format with directional emojis and status indicators
+- **Professional Display**: Removed debug spam and redundant logging for cleaner trading logs
+- **Visual Clarity**: Perfect alignment with trade IDs, position sizes, and PnL percentages
+- **Unified Format**: Consolidated position monitoring with consistent visual indicators
+
+### v0.4.2 (Jan 2026)
 - **Confidence Algorithm Fixes**: Eliminated false 100% signals with proper capping and validation
 - **Scale-in Order Race Condition Prevention**: Implemented order fill confirmation before cancellation
 - **Synchronization Locks**: Added comprehensive thread safety across all trading operations
@@ -139,5 +182,3 @@ trade_id = execute_trade(trade_params, is_reversal=False)
 - **Enhanced Audit Trail**: Comprehensive logging for scale-in orders and position management
 - **Notification System**: Fixed unknown order ID extraction with robust multi-field parsing
 - **Exit Plan Self-Healing**: Improved balance validation consistency and grace period logic
-
-This comprehensive update represents a significant improvement in system stability and reliability, with enhanced safety mechanisms and comprehensive audit trail logging.

@@ -1,7 +1,11 @@
 # XRP Balance Fix - Deployment Guide
 
+> **⚠️ NOTE**: This is a historical deployment guide for the XRP balance validation feature. The feature is now fully integrated into the codebase (v0.4.3+). For current setup instructions, see the main [README.md](README.md) and [.env.example](.env.example).
+
 ## Summary
 This implementation provides a targeted fix for XRP balance API sync issues where the balance consistently shows 0.0000 despite active positions, preventing exit plans from being placed.
+
+**Status**: ✅ Fully deployed and active as of January 2026. Enhanced balance validation is now enabled by default.
 
 ## Changes Made
 
