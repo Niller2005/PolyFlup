@@ -14,6 +14,7 @@ from src.trading.orders import (
     get_enhanced_balance_allowance,
     sell_position,
     cancel_order,
+    cancel_market_orders,
     get_order_status,
     get_clob_client,
 )
@@ -268,6 +269,11 @@ def _check_stop_loss(
             f"   Sweep [{symbol}] #{trade_id} Stop Loss: Cancelling pending scale-in order {scale_in_order_id[:10]}..."
         )
         cancel_order(scale_in_order_id)
+
+    log(
+        f"   🔓 [{symbol}] #{trade_id} Canceling ALL orders for token to ensure clean exit..."
+    )
+    cancel_market_orders(asset_id=token_id)
 
     log(
         f"   💰 [{symbol}] #{trade_id} Selling {size:.2f} shares at ${current_price:.2f}..."
