@@ -256,7 +256,18 @@ def _check_exit_plan(
                     f"   ⚠️  [{symbol}] #{trade_id} Exit order size mismatch detected! "
                     f"Order: {o_size:.2f}, DB: {size:.2f}. Repairing..."
                 )
-                # Cancel incorrect order and place new one with correct size
+
+                if abs(o_size - actual_bal) <= 0.0001:
+                    c.execute(
+                        "UPDATE trades SET size = ? WHERE id = ?",
+                        (o_size, trade_id),
+                    )
+                    log(
+                        f"   ✅ [{symbol}] #{trade_id} Exit plan repaired (DB updated): {size:.2f} -> {o_size:.2f}"
+                    )
+                    _last_exit_attempt[trade_id] = now.timestamp()
+                    return True
+
                 cancel_order(limit_sell_id)
 
                 sell_size = truncate_float(min(size, actual_bal), 2)
