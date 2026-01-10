@@ -248,6 +248,58 @@ def _check_exit_plan(
                 o_data.get("original_size", 0)
             )  # Define o_size for all cases
 
+            # VALIDATION: Check if exit order size matches database size
+            # This runs every cycle to catch any mismatches immediately
+            if o_status == "LIVE" and truncate_float(o_size, 2) != truncate_float(
+                size, 2
+            ):
+                log(
+                    f"   ⚠️  [{symbol}] #{trade_id} Exit order size mismatch detected! "
+                    f"Order: {o_size:.2f}, DB: {size:.2f}. Repairing..."
+                )
+                # Cancel incorrect order and place new one with correct size
+                cancel_order(limit_sell_id)
+
+                sell_size = truncate_float(min(size, actual_bal), 2)
+                if sell_size < MIN_SIZE:
+                    log(
+                        f"   ⏭️ [{symbol}] #{trade_id} Cannot repair exit - size below minimum ({sell_size:.2f} < {MIN_SIZE})"
+                    )
+                    c.execute(
+                        "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                        (trade_id,),
+                    )
+                    return False
+
+                res = place_limit_order(
+                    token_id,
+                    get_optimal_exit_price(entry, confidence, cur_p, side),
+                    sell_size,
+                    SELL,
+                )
+                if res["success"] or res.get("order_id"):
+                    new_oid = res.get("order_id")
+                    c.execute(
+                        "UPDATE trades SET limit_sell_order_id = ? WHERE id = ?",
+                        (new_oid, trade_id),
+                    )
+                    log(
+                        f"   ✅ [{symbol}] #{trade_id} Exit plan repaired: {o_size:.2f} -> {sell_size:.2f}"
+                    )
+                    _last_exit_attempt[trade_id] = now.timestamp()
+                    return True
+                else:
+                    err = res.get("error", "Unknown error")
+                    log(
+                        f"   ❌ [{symbol}] #{trade_id} Failed to repair exit plan: {err}"
+                    )
+                    c.execute(
+                        "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                        (trade_id,),
+                    )
+                    _last_exit_attempt[trade_id] = now.timestamp()
+                    return False
+
             if o_status == "LIVE":
                 # BI-DIRECTIONAL HEALING: Sync DB size with actual wallet balance
                 scale_in_age = 999
