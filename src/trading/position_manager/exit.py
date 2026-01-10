@@ -250,9 +250,8 @@ def _check_exit_plan(
 
             # VALIDATION: Check if exit order size matches database size
             # This runs every cycle to catch any mismatches immediately
-            if o_status == "LIVE" and truncate_float(o_size, 2) != truncate_float(
-                size, 2
-            ):
+            # Use 0.05 threshold to avoid infinite repair loops from exchange rounding
+            if o_status == "LIVE" and abs(o_size - size) > 0.05:
                 log(
                     f"   ⚠️  [{symbol}] #{trade_id} Exit order size mismatch detected! "
                     f"Order: {o_size:.2f}, DB: {size:.2f}. Repairing..."
