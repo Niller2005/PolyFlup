@@ -106,6 +106,11 @@ def execute_trade(
             adx_score=raw_scores.get("adx_score"),
             adx_dir=raw_scores.get("adx_dir"),
             lead_lag_bonus=raw_scores.get("lead_lag_bonus"),
+            additive_confidence=raw_scores.get("additive_confidence"),
+            additive_bias=raw_scores.get("additive_bias"),
+            bayesian_confidence=raw_scores.get("bayesian_confidence"),
+            bayesian_bias=raw_scores.get("bayesian_bias"),
+            market_prior_p_up=raw_scores.get("market_prior_p_up"),
         )
 
         emoji = trade_params.get("emoji", "🚀")

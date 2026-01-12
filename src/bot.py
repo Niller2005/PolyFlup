@@ -287,6 +287,11 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                     adx_score=p["raw_scores"].get("adx_score"),
                     adx_dir=p["raw_scores"].get("adx_dir"),
                     lead_lag_bonus=p["raw_scores"].get("lead_lag_bonus"),
+                    additive_confidence=p["raw_scores"].get("additive_confidence"),
+                    additive_bias=p["raw_scores"].get("additive_bias"),
+                    bayesian_confidence=p["raw_scores"].get("bayesian_confidence"),
+                    bayesian_bias=p["raw_scores"].get("bayesian_bias"),
+                    market_prior_p_up=p["raw_scores"].get("market_prior_p_up"),
                 )
 
                 emoji = p.get("emoji", "🚀")
