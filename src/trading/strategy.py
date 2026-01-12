@@ -215,8 +215,8 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
     # Normalize confidence to 0-1
     confidence = max(0.0, min(1.0, confidence))
 
-    # Multi-confirmation system for extreme confidence levels (>75%)
-    if confidence > 0.75:
+    # Multi-confirmation system with graduated reduction (starting at 60%)
+    if confidence > 0.60:
         # Define the 5 key indicators with their weights
         key_signals = [
             {
@@ -266,17 +266,16 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
 
         # Require at least 3 out of 5 signals to be strongly aligned
         if strongly_aligned < 3:
-            # Reduce confidence if insufficient confirmation
-            confidence_reduction = (
-                3 - strongly_aligned
-            ) * 0.15  # 15% reduction per missing signal
-            new_confidence = max(0.75, confidence - confidence_reduction)
+            # Graduated reduction: scales with confidence level
+            # Higher confidence = more penalty for missing confirmation
+            confidence_factor = (confidence - 0.60) / 0.25  # 0.0 at 60%, 1.0 at 85%
+            confidence_reduction = (3 - strongly_aligned) * 0.10 * confidence_factor
+            confidence = max(0.60, confidence - confidence_reduction)
 
             log(
                 f"[{symbol}] ⚠️  Insufficient confirmation: {strongly_aligned}/5 signals aligned | "
-                f"Confidence: {confidence:.1%} → {new_confidence:.1%}"
+                f"Confidence: {confidence + confidence_reduction:.1%} → {confidence:.1%}"
             )
-            confidence = new_confidence
         else:
             # Strong confirmation - log the strong signal
             log(
