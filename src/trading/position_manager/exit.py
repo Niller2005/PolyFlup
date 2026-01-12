@@ -18,7 +18,7 @@ from src.trading.orders import (
 )
 from src.trading.logic import MIN_SIZE
 
-from .shared import _last_exit_attempt
+from .shared import _last_exit_attempt, _last_balance_sync
 
 
 def get_optimal_exit_price(
@@ -154,13 +154,47 @@ def _check_exit_plan(
                     pass
 
             needs_sync = False
+
+            # Validate scale-in order status before allowing sync to higher balance
+            # This prevents phantom share inflation when balance API returns incorrect data
+            scale_in_filled = False
+            if scale_in_id:
+                try:
+                    sc_data = get_order(scale_in_id)
+                    if sc_data and sc_data.get("status", "").upper() in [
+                        "FILLED",
+                        "MATCHED",
+                    ]:
+                        scale_in_filled = True
+                        fill_size = float(sc_data.get("size_matched", 0))
+                except Exception as e:
+                    pass
+
+            # Only sync to higher balance if scale-in actually succeeded
+            # OR if the difference is small (< 50% of current size)
             if actual_bal > size + 0.0001:
-                needs_sync = True  # Always sync if we have more tokens than DB thinks
+                # Require either: (1) confirmed scale-in fill OR (2) reasonable adjustment
+                if scale_in_filled or abs(actual_bal - size) < (size * 0.5):
+                    needs_sync = True
+                else:
+                    # SUSPICIOUS: Balance higher but no confirmed fill
+                    log(
+                        f"   🚨 [{symbol}] #{trade_id} BLOCKED BALANCE SYNC: "
+                        f"Balance={actual_bal:.2f} > DB size={size:.2f} "
+                        f"but scale-in order {scale_in_id[:10] if scale_in_id else 'none'} "
+                        f"not confirmed filled. Skipping sync to prevent phantom share inflation."
+                    )
             elif age > 60 and scale_in_age > 60 and abs(actual_bal - size) > 0.0001:
                 needs_sync = True  # Periodic sync for other cases
 
             if needs_sync:
-                if actual_bal > 0:
+                # Check minimum sync interval to prevent rapid repeated syncing
+                last_sync_time = _last_balance_sync.get(trade_id, 0)
+                sync_interval = now.timestamp() - last_sync_time
+
+                MIN_SYNC_INTERVAL = 30  # Minimum 30 seconds between syncs
+
+                if actual_bal > 0 and sync_interval >= MIN_SYNC_INTERVAL:
                     log(
                         f"   🔧 [{symbol}] #{trade_id} Syncing size to match balance: {size:.4f} -> {actual_bal:.4f}"
                     )
@@ -169,6 +203,12 @@ def _check_exit_plan(
                         (actual_bal, actual_bal, trade_id),
                     )
                     size = actual_bal
+                    # Track this sync to prevent rapid repeats
+                    _last_balance_sync[trade_id] = now.timestamp()
+                elif actual_bal > 0:
+                    log(
+                        f"   ⏳ [{symbol}] #{trade_id} Skipping balance sync (last sync {sync_interval:.0f}s ago, min {MIN_SYNC_INTERVAL}s)"
+                    )
                 else:
                     # Balance is 0
                     if age > 600:  # Increased from 300 to 600 seconds (10 minutes)
@@ -321,25 +361,59 @@ def _check_exit_plan(
                     except:
                         pass
 
+                # Validate scale-in order status before allowing sync to higher balance
+                scale_in_filled = False
+                if scale_in_id:
+                    try:
+                        sc_data = get_order(scale_in_id)
+                        if sc_data and sc_data.get("status", "").upper() in [
+                            "FILLED",
+                            "MATCHED",
+                        ]:
+                            scale_in_filled = True
+                            fill_size = float(sc_data.get("size_matched", 0))
+                    except Exception as e:
+                        pass
+
                 needs_sync = False
                 if actual_bal > size + 0.0001:
-                    needs_sync = (
-                        True  # Always sync if we have more tokens than DB thinks
-                    )
+                    # Require either: (1) confirmed scale-in fill OR (2) reasonable adjustment
+                    if scale_in_filled or abs(actual_bal - size) < (size * 0.5):
+                        needs_sync = True
+                    else:
+                        # SUSPICIOUS: Balance higher but no confirmed fill
+                        log(
+                            f"   🚨 [{symbol}] #{trade_id} BLOCKED BALANCE SYNC (LIVE order): "
+                            f"Balance={actual_bal:.2f} > DB size={size:.2f} "
+                            f"but scale-in order {scale_in_id[:10] if scale_in_id else 'none'} "
+                            f"not confirmed filled. Skipping sync to prevent phantom share inflation."
+                        )
                 elif age > 60 and scale_in_age > 60 and abs(actual_bal - size) > 0.0001:
                     needs_sync = (
                         True  # Periodic sync for other cases (e.g. fewer tokens)
                     )
 
                 if needs_sync and actual_bal > 0:
-                    log(
-                        f"   🔧 [{symbol}] #{trade_id} Syncing size to match balance (active order): {size:.4f} -> {actual_bal:.4f}"
-                    )
-                    c.execute(
-                        "UPDATE trades SET size = ?, bet_usd = ? * entry_price WHERE id = ?",
-                        (actual_bal, actual_bal, trade_id),
-                    )
-                    size = actual_bal
+                    # Check minimum sync interval
+                    last_sync_time = _last_balance_sync.get(trade_id, 0)
+                    sync_interval = now.timestamp() - last_sync_time
+
+                    MIN_SYNC_INTERVAL = 30  # Minimum 30 seconds between syncs
+
+                    if sync_interval >= MIN_SYNC_INTERVAL:
+                        log(
+                            f"   🔧 [{symbol}] #{trade_id} Syncing size to match balance (active order): {size:.4f} -> {actual_bal:.4f}"
+                        )
+                        c.execute(
+                            "UPDATE trades SET size = ?, bet_usd = ? * entry_price WHERE id = ?",
+                            (actual_bal, actual_bal, trade_id),
+                        )
+                        size = actual_bal
+                        _last_balance_sync[trade_id] = now.timestamp()
+                    else:
+                        log(
+                            f"   ⏳ [{symbol}] #{trade_id} Skipping balance sync (last sync {sync_interval:.0f}s ago, min {MIN_SYNC_INTERVAL}s)"
+                        )
 
                 target_size = truncate_float(min(size, actual_bal), 2)
             else:

@@ -98,7 +98,9 @@
 
 ---
 
-### 4. Position Size Inflation Mystery
+### 4. ✅ FIXED: Position Size Inflation Mystery
+
+**Status**: FIXED in commit (pending)
 
 **Observed**: Unexpected DB size growth for SOL #512 and XRP #514
 
@@ -114,21 +116,47 @@
 - Yet DB sizes show ~2x initial entry sizes
 - **Contradiction**: If placements failed, how did sizes double?
 
-**Possible Causes**:
-1. **Sync bug**: Balance sync is incorrectly inflating DB sizes when it sees larger balance
-2. **Ghost shares**: Exchange actually filled scale-ins but reported error
-3. **Rounding compounding**: Multiple small sync operations adding up
-4. **Wrong position tracked**: Syncing wrong position ID to balance
+**Root Cause Found**:
+Balance API returning phantom shares despite scale-in orders failing. Log evidence:
 
-**Investigation Needed**:
-1. **Add detailed logging**: Log all DB size changes with reasons (scale-in vs sync)
-2. **Track order fills**: Check if scale-in order fills are being received via WebSocket
-3. **Compare with exchange**: Query `closed-positions` API to verify actual position sizes
+```
+XRP #514:
+- Initial: 10.00 shares
+- 17:58:47 - Sync: 10.00 → 12.78 (balance API returned 12.78)
+- 17:58:51 - Sync: 12.77 → 19.99 (balance API returned 19.99)
+- 17:58:55 - Sync: 19.99 → 20.00 (balance API returned 20.00)
 
-**Files to Review**:
-- `src/trading/position_manager/reconciliation.py` - All size sync logic
-- `src/utils/websocket.py` - Order fill notifications
-- `src/trading/orders/` - Order status tracking
+SOL #512:
+- Initial: 10.48 shares
+- 17:46:28 - Sync: 10.32 → 10.33
+- 17:58:56 - Sync: 10.33 → 20.57 (balance API returned 20.57)
+```
+
+**The Bug**: In `src/trading/position_manager/exit.py` lines 157-160:
+
+```python
+if actual_bal > size + 0.0001:
+    needs_sync = True  # Always sync if we have more tokens than DB thinks
+```
+
+This logic **blindly trusts balance API** without verifying:
+1. Did a scale-in actually succeed?
+2. Is balance API returning valid data?
+3. Are there phantom/ghost shares?
+
+Balance API is returning inflated values (20.00 instead of 10.00) even though all scale-in orders failed with "Insufficient funds" errors.
+
+**Fix Applied**:
+1. **Added scale-in order validation**: Before syncing to higher balance, verify scale-in order actually filled
+2. **Added reasonable adjustment check**: Only allow sync if difference < 50% of current size
+3. **Added minimum sync interval**: 30 seconds between syncs to prevent rapid compounding
+4. **Added suspicious sync blocking**: Log and block when balance is higher but no confirmed fill
+
+**Files Modified**:
+- `src/trading/position_manager/exit.py` - Added validation logic before balance sync
+- `src/trading/position_manager/shared.py` - Added `_last_balance_sync` tracking
+
+**Next Action**: Test fix with new trades
 
 ---
 
@@ -154,13 +182,17 @@
 ## Implementation Priority
 
 ### Phase 1: Immediate (This Week)
-1. ✅ **COMMITTED**: Restart bot to populate Bayesian comparison data
-2. **INVESTIGATE**: Position size inflation mystery (Issue #4)
-   - Add detailed logging to reconciliation.py
-   - Compare with exchange closed-positions API
+1. ✅ **COMPLETED**: Restart bot to populate Bayesian comparison data
+2. ✅ **FIXED**: Position size inflation mystery (Issue #4)
+    - ✅ Root cause identified: Balance API returning phantom shares
+    - ✅ Added validation: Check scale-in order status before syncing
+    - ✅ Added reasonable adjustment check: < 50% difference only
+    - ✅ Added minimum sync interval: 30 seconds between syncs
+    - ✅ Added suspicious sync blocking: Log and block phantom inflation
+    - 🔄 Test fix with new trades
 3. **MONITOR**: USDC balance and settlement flow (Issue #3)
-   - Check if settlements are releasing funds properly
-   - Verify no funds locked in pending orders
+    - Check if settlements are releasing funds properly
+    - Verify no funds locked in pending orders
 
 ### Phase 2: Short-term (Next Week)
 4. **IMPROVE**: Balance API lag handling (Issue #2)

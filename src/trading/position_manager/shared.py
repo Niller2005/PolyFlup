@@ -8,3 +8,6 @@ _scale_in_order_lock = threading.Lock()
 
 # Module-level tracking for exit plan attempts to prevent spamming on errors (e.g. balance errors)
 _last_exit_attempt = {}
+
+# Track last balance sync timestamp to prevent rapid repeated syncing (prevents phantom share inflation)
+_last_balance_sync = {}
