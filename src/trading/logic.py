@@ -1,11 +1,10 @@
 """Trade logic and parameter preparation"""
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from src.config.settings import (
     MIN_EDGE,
-    CONTRARIAN_THRESHOLD,
     BET_PERCENT,
     CONFIDENCE_SCALING_FACTOR,
     MAX_SIZE,
@@ -29,21 +28,81 @@ from src.trading.orders import get_clob_client
 MIN_SIZE = 5.0
 
 
-def _determine_trade_side(bias: str, confidence: float) -> tuple[str, float]:
+def _determine_trade_side(
+    bias: str, confidence: float, raw_scores: Optional[Dict[str, Any]] = None
+) -> tuple[str, float]:
     """
     Determine actual trading side and confidence for sizing.
     Enforces MIN_EDGE threshold for trend following entries.
+    Uses evidence-based reversal instead of fixed contrarian threshold.
     """
-    if confidence <= CONTRARIAN_THRESHOLD:
-        # Contrarian: Expect flip because confidence in current bias is extremely low
-        actual_side = "DOWN" if bias == "UP" else "UP"
-        sizing_confidence = 0.25  # Fixed sizing for contrarian entries
-    elif confidence >= MIN_EDGE:
-        # Follow Trend (only if confidence meets minimum edge requirement)
+    opposite = "DOWN" if bias == "UP" else "UP"
+
+    # Evidence-based reversal: Check if opposite-side signals strongly favor reversal
+    if raw_scores and bias != "NEUTRAL":
+        signals_list = [
+            (
+                "momentum",
+                raw_scores.get("momentum_score", 0.0),
+                raw_scores.get("momentum_dir", "NEUTRAL"),
+            ),
+            (
+                "pm_momentum",
+                raw_scores.get("pm_mom_score", 0.0),
+                raw_scores.get("pm_mom_dir", "NEUTRAL"),
+            ),
+            (
+                "flow",
+                raw_scores.get("flow_score", 0.0),
+                raw_scores.get("flow_dir", "NEUTRAL"),
+            ),
+            (
+                "divergence",
+                raw_scores.get("divergence_score", 0.0),
+                raw_scores.get("divergence_dir", "NEUTRAL"),
+            ),
+            (
+                "vwm",
+                raw_scores.get("vwm_score", 0.0),
+                raw_scores.get("vwm_dir", "NEUTRAL"),
+            ),
+            (
+                "adx",
+                raw_scores.get("adx_score", 0.0),
+                raw_scores.get("adx_dir", "NEUTRAL"),
+            ),
+        ]
+
+        # Count opposite-side signals with strong scores (> 0.6)
+        opposite_aligned = sum(
+            1
+            for _, score, direction in signals_list
+            if score > 0.6 and direction == opposite
+        )
+
+        # Check score totals for strength
+        up_total = raw_scores.get("up_total", 0.0)
+        down_total = raw_scores.get("down_total", 0.0)
+
+        # Evidence-based reversal criteria:
+        # 1. 4+ opposite signals strongly aligned (> 0.6 score)
+        # 2. Opposite score is at least 1.5x current bias score
+        if opposite_aligned >= 4:
+            if bias == "UP" and down_total > up_total * 1.5:
+                actual_side = opposite
+                sizing_confidence = min(0.40, down_total * 0.5)
+                return actual_side, sizing_confidence
+            elif bias == "DOWN" and up_total > down_total * 1.5:
+                actual_side = opposite
+                sizing_confidence = min(0.40, up_total * 0.5)
+                return actual_side, sizing_confidence
+
+    # Trend following entry (original logic)
+    if confidence >= MIN_EDGE:
         actual_side = bias
         sizing_confidence = confidence
     else:
-        # Wait zone: confidence too low for trend following, too high for contrarian
+        # Wait zone: confidence too low for trend following
         actual_side = "NEUTRAL"
         sizing_confidence = 0.0
 
@@ -194,7 +253,9 @@ def _prepare_trade_params(
             confidence = validation_result["adjusted_confidence"]
 
             # Recalculate sizing confidence with reduced confidence
-            actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
+            actual_side, sizing_confidence = _determine_trade_side(
+                bias, confidence, raw_scores
+            )
 
             if verbose:
                 log(
@@ -204,7 +265,7 @@ def _prepare_trade_params(
                     reason = validation_result["reduction_reason"]
                     log(f"   Reason: {reason}")
 
-    actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
+    actual_side, sizing_confidence = _determine_trade_side(bias, confidence, raw_scores)
 
     if actual_side == "NEUTRAL":
         if verbose:
@@ -212,7 +273,7 @@ def _prepare_trade_params(
                 log(f"[{symbol}] ⚪ Neutral / No Signal")
             else:
                 log(
-                    f"[{symbol}] ⏳ WAIT ZONE: {bias} ({confidence:.1%}) | {CONTRARIAN_THRESHOLD} < x < {MIN_EDGE}"
+                    f"[{symbol}] ⏳ WAIT ZONE: {bias} ({confidence:.1%}) | < {MIN_EDGE:.1%} (evidence-based reversal not met)"
                 )
 
             if add_spacing:
