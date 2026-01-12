@@ -98,7 +98,7 @@ def migration_004_add_reversal_triggered_at_column(conn: Any) -> None:
 
 
 def migration_005_add_last_scale_in_at_column(conn: Any) -> None:
-    """Add last_scale_in_at column to track when the last scale-in occurred"""
+    """Add last_scale_in_at column to track when last scale-in occurred"""
     c = conn.cursor()
 
     c.execute("PRAGMA table_info(trades)")
@@ -110,6 +110,40 @@ def migration_005_add_last_scale_in_at_column(conn: Any) -> None:
         log("    ✓ Column added")
     else:
         log("    ✓ last_scale_in_at column already exists")
+
+
+def migration_006_add_signal_score_columns(conn: Any) -> None:
+    """Add raw signal score columns for confidence formula calibration"""
+    c = conn.cursor()
+
+    c.execute("PRAGMA table_info(trades)")
+    columns = [row[1] for row in c.fetchall()]
+
+    new_columns = [
+        ("up_total", "REAL"),
+        ("down_total", "REAL"),
+        ("momentum_score", "REAL"),
+        ("momentum_dir", "TEXT"),
+        ("flow_score", "REAL"),
+        ("flow_dir", "TEXT"),
+        ("divergence_score", "REAL"),
+        ("divergence_dir", "TEXT"),
+        ("vwm_score", "REAL"),
+        ("vwm_dir", "TEXT"),
+        ("pm_mom_score", "REAL"),
+        ("pm_mom_dir", "TEXT"),
+        ("adx_score", "REAL"),
+        ("adx_dir", "TEXT"),
+        ("lead_lag_bonus", "REAL"),
+    ]
+
+    for col_name, col_type in new_columns:
+        if col_name not in columns:
+            log(f"  - Adding {col_name} column...")
+            c.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
+            log(f"    ✓ {col_name} added")
+        else:
+            log(f"    ✓ {col_name} already exists")
 
 
 # Migration registry: version -> migration function
@@ -126,6 +160,11 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
         5,
         "Add last_scale_in_at column",
         migration_005_add_last_scale_in_at_column,
+    ),
+    (
+        6,
+        "Add signal score columns for calibration",
+        migration_006_add_signal_score_columns,
     ),
 ]
 

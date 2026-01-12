@@ -69,7 +69,12 @@ c.execute("""
 
 This ensures fresh databases have the column from the start.
 
+### Step 4: Document Purpose (Optional)
+
+For migrations that add significant functionality, document why it was added in MIGRATIONS.md "Applied Migrations" table.
+
 ### Step 4: Test
+
 
 Run the bot or test with:
 
@@ -148,6 +153,36 @@ uv run python -c "import sqlite3; conn = sqlite3.connect('trades.db'); c = conn.
 |---------|-------------|---------|------|
 | 1 | Add scale_in_order_id column | ✅ | 2025-12 |
 | 2 | Verify timestamp column (created_at) | ✅ | 2025-12 |
+| 3 | Add reversal_triggered column | ✅ | 2025-12 |
+| 4 | Add reversal_triggered_at column | ✅ | 2025-12 |
+| 5 | Add last_scale_in_at column | ✅ | 2025-12 |
+| 6 | Add signal score columns for calibration | ✅ | 2026-01 |
+
+### Migration 006: Signal Score Columns
+
+**Purpose**: Enable backtesting and calibration of confidence formula parameters.
+
+Migration 006 adds 14 raw signal score columns to the `trades` table:
+- `up_total`, `down_total`: Weighted signal aggregates per direction
+- `momentum_score`, `momentum_dir`: Binance price momentum (35% weight)
+- `flow_score`, `flow_dir`: Order flow analysis (10% weight)
+- `divergence_score`, `divergence_dir`: Cross-exchange divergence (15% weight)
+- `vwm_score`, `vwm_dir`: Volume-weighted momentum (5% weight)
+- `pm_mom_score`, `pm_mom_dir`: Polymarket native momentum (20% weight)
+- `adx_score`, `adx_dir`: Trend strength indicator (15% weight)
+- `lead_lag_bonus`: Multiplier when Binance/PM momentum agree (1.2x or 0.8x)
+
+**Usage**: These raw scores allow `calibrate_formula.py` to test different formula variants:
+- Current: `(up - down * 0.2) * lead_lag_bonus`
+- Pure ratio: `up / (up + down)`
+- Various k1 values: 0.0, 0.1, 0.2, 0.3, 0.4
+
+**Related scripts**:
+- `analyze_confidence.py`: Analyzes current confidence vs win rate
+- `calibrate_formula.py`: Tests formula variants and recommends optimal parameters
+
+**Note**: Run the bot for ~100 trades with raw signal data before running `calibrate_formula.py` for reliable results.
+
 
 ## Checking Migration Status
 
