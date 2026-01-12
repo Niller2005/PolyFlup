@@ -9,6 +9,7 @@ from src.config.settings import (
     BET_PERCENT,
     CONFIDENCE_SCALING_FACTOR,
     MAX_SIZE,
+    MAX_SIZE_MODE,
     MAX_ENTRY_LATENESS_SEC,
     ENABLE_BFXD,
 )
@@ -119,10 +120,18 @@ def _calculate_bet_size(
     else:
         bet_usd_effective = target_bet
 
-    # Cap at MAX_SIZE (if configured)
-    if MAX_SIZE and size > MAX_SIZE:
-        size = MAX_SIZE
-        bet_usd_effective = size * price
+    # Use MAX_SIZE strategy
+    if MAX_SIZE:
+        if MAX_SIZE_MODE == "MAXIMIZE":
+            # Use higher of balance % or MAX_SIZE
+            max_size_usd = MAX_SIZE * price
+            if bet_usd_effective < max_size_usd:
+                size = MAX_SIZE
+                bet_usd_effective = max_size_usd
+        else:  # CAP mode (default)
+            if size > MAX_SIZE:
+                size = MAX_SIZE
+                bet_usd_effective = size * price
 
     return size, bet_usd_effective
 

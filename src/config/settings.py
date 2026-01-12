@@ -25,6 +25,7 @@ if MAX_SIZE.upper() not in ["NONE", "NO", ""]:
     MAX_SIZE = float(MAX_SIZE)
 else:
     MAX_SIZE = None  # No cap
+MAX_SIZE_MODE = os.getenv("MAX_SIZE_MODE", "CAP")  # CAP or MAXIMIZE
 
 
 # Position Management
