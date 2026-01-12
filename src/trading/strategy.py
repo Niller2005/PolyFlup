@@ -178,17 +178,114 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
     div_weight = 0.15 if ADX_ENABLED else 0.15
     vwm_weight = 0.05 if ADX_ENABLED else 0.10
 
-    # Apply weights and directions
-    for score, direction, weight in [
-        (momentum_score, momentum_dir, mom_weight),
-        (pm_mom_score, pm_mom_dir, pm_mom_weight),
-        (flow_score, flow_dir, flow_weight),
-        (divergence_score, divergence_dir, div_weight),
-        (vwm_score, vwm_dir, vwm_weight),
-        (adx_score, adx_dir, adx_weight),
+    # Calculate quality factors for each signal (0.8 - 1.5 range)
+    # Momentum quality: based on RSI extremes and strength
+    if momentum_dir != "NEUTRAL":
+        momentum_strength = momentum.get("strength", 0.0)
+        momentum_rsi = momentum.get("rsi", 50.0)
+        if momentum_rsi < 30:
+            # Oversold in uptrend = very high quality
+            mom_quality = 1.3
+        elif momentum_rsi > 70:
+            # Overbought in uptrend = potential exhaustion = lower quality
+            mom_quality = 0.8
+        elif momentum_dir == "UP" and momentum_rsi < 30:
+            # Strong downtrend with oversold = bounce potential = high quality
+            mom_quality = 1.2
+        elif momentum_dir == "DOWN" and momentum_rsi > 70:
+            # Strong uptrend with overbought = exhaustion = high quality
+            mom_quality = 1.3
+        else:
+            mom_quality = 1.0
+        # Strength boost: very strong momentum gets bonus
+        if momentum_strength > 0.8:
+            mom_quality *= 1.1
+    else:
+        mom_quality = 1.0
+
+    # PM momentum: no built-in quality metrics, use moderate factor
+    pm_mom_quality = 1.0
+
+    # Flow quality: based on buy pressure extremes and trade intensity
+    if flow_dir != "NEUTRAL":
+        buy_pressure = order_flow.get("buy_pressure", 0.5)
+        large_trade_dir = order_flow.get("large_trade_direction", "NEUTRAL")
+        trade_intensity = order_flow.get("trade_intensity", 0.0)
+
+        if buy_pressure > 0.70:
+            # Very strong buying pressure - high quality
+            flow_quality = 1.3
+        elif buy_pressure < 0.30:
+            # Strong selling pressure - high quality
+            flow_quality = 1.2
+        elif large_trade_dir != "NEUTRAL" and buy_pressure > 0.6:
+            # Large trades in consistent direction = better quality
+            flow_quality *= 1.1
+        # Higher trade intensity = better quality
+        if trade_intensity > 0.5:
+            flow_quality *= 1.05
+    else:
+        flow_quality = 1.0
+
+    # Divergence quality: based on magnitude and opportunity
+    if divergence_dir != "NEUTRAL":
+        divergence_val = divergence.get("divergence", 0.0)
+        opportunity = divergence.get("opportunity", "NEUTRAL")
+
+        quality = 1.0
+        # Larger divergence = stronger signal
+        quality = 1.0 + min(abs(divergence_val), 0.3)
+
+        # Check opportunity quality
+        if opportunity != "NEUTRAL":
+            # Clear opportunity direction = better quality
+            quality *= 1.15
+        elif abs(divergence_val) < 0.05:
+            # Very small divergence = weak signal
+            quality *= 0.8
+        divergence_quality = quality
+    else:
+        divergence_quality = 1.0
+
+    # VWM quality: already has momentum_quality from VWM calculation
+    # Convert 0-1 scale to 0.8-1.3 multiplier
+    vwm_mom_quality = vwm.get("momentum_quality", 0.0)
+    vwm_quality = 0.8 + (vwm_mom_quality * 0.5)
+
+    # ADX quality: based on trend strength
+    if adx_score > 0:
+        if adx_val > 40:
+            # Very strong trend
+            adx_quality = 1.3
+        elif adx_val > 30:
+            # Strong trend
+            adx_quality = 1.15
+        elif adx_val > 25:
+            # Moderate trend
+            adx_quality = 1.05
+        elif adx_val > 20:
+            # Weak trend
+            adx_quality = 0.9
+        elif adx_val > 15:
+            # Very weak trend
+            adx_quality = 0.8
+        else:
+            # No trend
+            adx_quality = 0.7
+    else:
+        adx_quality = 1.0
+
+    # Apply weights with quality factors
+    for score, direction, weight, quality in [
+        (momentum_score, momentum_dir, mom_weight, mom_quality),
+        (pm_mom_score, pm_mom_dir, pm_mom_weight, pm_mom_quality),
+        (flow_score, flow_dir, flow_weight, flow_quality),
+        (divergence_score, divergence_dir, div_weight, divergence_quality),
+        (vwm_score, vwm_dir, vwm_weight, vwm_quality),
+        (adx_score, adx_dir, adx_weight, adx_quality),
     ]:
         if direction == "UP":
-            up_total += score * weight
+            up_total += score * weight * quality
         elif direction == "DOWN":
             down_total += score * weight
 
