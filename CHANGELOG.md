@@ -7,19 +7,25 @@ and this project uses semantic versioning.
 
 ---
 
-## [0.4.4] - 2026-01-12
+## [0.5.0] - 2026-01-12
 
 ### Added
 - **Bayesian Confidence Calculation**: New probabilistic method using log-likelihood accumulation with market priors
 - **Dual Calculation Framework**: Both additive and Bayesian methods always calculated for A/B testing
-- **Quality Factors**: Signal-specific multipliers (0.8-1.5x) based on RSI, buy pressure, divergence magnitude, ADX strength
+- **Quality Factors**: Signal-specific multipliers (0.7-1.5x) based on RSI, buy pressure, divergence magnitude, ADX strength
 - **Database Migration 007**: 5 new columns (additive_confidence, additive_bias, bayesian_confidence, bayesian_bias, market_prior_p_up)
 - **Multi-Confirmation System**: Graduated reduction (60-85%) requires key signal agreement for high-confidence entries
+- **A/B Testing Tools**: `compare_bayesian_additive.py` script for performance comparison, `check_bayesian_data.py` for data verification
 
 ### Changed
 - **Strategy Module**: Refactored confidence calculation to support dual methods
 - **Logging**: Shows Bayesian vs additive comparison when `BAYESIAN_CONFIDENCE=YES`
 - **Settings**: Added `BAYESIAN_CONFIDENCE` flag (default: NO)
+
+### Fixed
+- **Missing Bayesian Parameters**: Added 5 new parameters to `save_trade()` calls in `src/bot.py` and `src/trading/execution.py`
+- **Bayesian Data Population**: Confirmed Bayesian values being populated correctly after bot restart (trades #526-#529)
+- **Formatting**: Normalized line endings and whitespace in 5 Python files (no functional changes)
 
 ### Technical Details
 - **Bayesian Formula**: `confidence = 1 / (1 + exp(-ln(prior_odds) - Σ(log_LR × weight)))`
@@ -29,9 +35,12 @@ and this project uses semantic versioning.
 - **Preserved Features**: All recent improvements (scale-in, price validation, hedged reversal) work with either method
 
 ### Documentation
-- Updated `README.md` with Bayesian feature overview
+- Updated `README.md` with Bayesian feature overview and analysis tools section
 - Updated `docs/STRATEGY.md` with Bayesian calculation details
 - Updated `docs/MIGRATIONS.md` with migration 007 documentation
+- Created `ISSUES_AND_PLAN.md` for issue tracking and implementation planning
+- Updated `.env.example` with `BAYESIAN_CONFIDENCE` setting
+- Updated all skills with v0.5.0 information (python-bot-standards, polymarket-trading, polyflup-history, database-sqlite)
 
 ---
 

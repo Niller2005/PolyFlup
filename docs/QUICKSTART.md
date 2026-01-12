@@ -82,16 +82,28 @@ BET_PERCENT=5.0                     # Position size (% of balance)
 MIN_EDGE=0.35                       # Minimum confidence to enter (35%)
 MAX_SPREAD=0.15                     # Maximum allowed spread (15%)
 CONFIDENCE_SCALING_FACTOR=5.0       # Position scaling multiplier
-STOP_LOSS_PRICE=0.30                # Stop loss trigger ($0.30 midpoint)
+STOP_LOSS_PRICE=0.30                # Stop loss trigger ($0.30)
 
 # Risk Management
 ENABLE_STOP_LOSS=YES
 ENABLE_REVERSAL=YES
 ENABLE_EXIT_PLAN=YES
 EXIT_PRICE_TARGET=0.99              # Sell at 99 cents
+
+# Confidence Calculation (v0.5.0+)
+BAYESIAN_CONFIDENCE=NO              # Use additive (default), or YES for Bayesian
 ```
 
 See [docs/RISK_PROFILES.md](docs/RISK_PROFILES.md) for pre-configured settings.
+
+### Confidence Calculation Methods
+
+PolyFlup supports two methods for calculating trading confidence (v0.5.0+):
+
+- **Additive (Default)**: Simple directional voting with weighted signals
+- **Bayesian (Experimental)**: Proper probability theory using log-likelihoods
+
+Both methods are calculated simultaneously and stored for A/B comparison. Set `BAYESIAN_CONFIDENCE=YES` to switch to Bayesian method after collecting 100+ trades of baseline data. See `docs/STRATEGY.md` for details.
 
 ---
 

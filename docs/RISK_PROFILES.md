@@ -159,6 +159,43 @@ All profiles enforce **Maximum Portfolio Exposure**:
 
 ---
 
+## 🧮 Confidence Calculation Methods
+
+PolyFlup supports two confidence calculation methods for A/B testing. Both methods are **always calculated and stored** - you choose which one to use for trading.
+
+### Additive Method (Default)
+
+- **Formula**: `confidence = (winning_total - (losing_total × 0.2)) × lead_lag_bonus`
+- **Characteristics**: Simple directional voting with weighted aggregation
+- **Conflict Handling**: Penalizes confidence when signals disagree
+- **Quality Adjustment**: Multiplier applied to weighted scores
+
+### Bayesian Method (Alternative, v0.5.0+)
+
+- **Formula**: `confidence = 1 / (1 + exp(-ln(prior_odds) - Σ(log_LR × weight)))`
+- **Characteristics**: Proper probability theory with log-likelihood accumulation
+- **Market Prior**: Starts from Polymarket orderbook probability
+- **Conflict Handling**: Conflicting signals naturally cancel (better math)
+- **Quality Adjustment**: Multiplier (0.7-1.5x) applied to log-likelihood
+
+### Configuration
+
+```env
+BAYESIAN_CONFIDENCE=NO   # Use additive (default)
+BAYESIAN_CONFIDENCE=YES  # Use Bayesian (experimental)
+```
+
+### Recommendation
+
+1. **Start with Additive** (default) to collect baseline data
+2. **Run for 100+ trades** with `BAYESIAN_CONFIDENCE=NO`
+3. **Compare performance** using `uv run python compare_bayesian_additive.py`
+4. **Switch to Bayesian** if it shows superior win rate
+
+**Note**: Bayesian is generally more conservative (e.g., trade #529 showed additive=43.6%, Bayesian=3.1%). Consider lowering `MIN_EDGE` slightly when switching to Bayesian.
+
+---
+
 ## 🔧 Custom Profile
 
 Want to create your own profile? Key principles:
@@ -169,6 +206,7 @@ Want to create your own profile? Key principles:
 4. **Size Cap:** `MAX_SIZE` prevents oversized positions (set to `NONE` to disable)
 5. **Stop Loss:** Tighter (e.g., $0.40) = less drawdown but more false exits
 6. **Scaling Factor:** Higher = more aggressive on high-confidence signals
+7. **Confidence Method:** Choose between additive (default) and Bayesian (experimental)
 
 **Example Custom Profile (Medium-Aggressive):**
 ```bash

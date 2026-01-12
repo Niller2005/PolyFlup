@@ -31,7 +31,7 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 - **📊 Settlement Auditing**: Automated P&L verification against exchange data (logs discrepancies > $0.10)
 
 ### 🚀 Recent Improvements (Jan 2026)
-- **Bayesian Confidence Calculation** (v0.4.4): New probabilistic method using log-likelihood accumulation with market priors. Both additive and Bayesian methods calculated for A/B testing. Toggle via `BAYESIAN_CONFIDENCE` setting.
+- **Bayesian Confidence Calculation** (v0.5.0): New probabilistic method using log-likelihood accumulation with market priors. Both additive and Bayesian methods calculated for A/B testing. Toggle via `BAYESIAN_CONFIDENCE` setting. Compare performance with `compare_bayesian_additive.py`.
 - **Enhanced Position Reports** (v0.4.3): Clean, aligned format with directional emojis (📈📉) and status indicators showing position health at a glance
 - **Real-Time WebSocket Integration**: Near-instant P&L and order fill updates via Polymarket's User Channel (fills/cancels) and Market Channel (midpoint prices)
 - **Batch API Optimization**: Fetch midpoints for all positions in a single call, drastically reducing API overhead
