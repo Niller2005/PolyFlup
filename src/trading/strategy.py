@@ -171,11 +171,12 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
     down_total = 0.0
 
     # Adjust weights to include PM momentum
+    # Capped momentum at 25-30%, redistributed to flow and divergence
     adx_weight = 0.15 if ADX_ENABLED else 0.0
-    mom_weight = 0.35 if ADX_ENABLED else 0.40
+    mom_weight = 0.25 if ADX_ENABLED else 0.30
     pm_mom_weight = 0.20 if ADX_ENABLED else 0.25
-    flow_weight = 0.10 if ADX_ENABLED else 0.10
-    div_weight = 0.15 if ADX_ENABLED else 0.15
+    flow_weight = 0.15 if ADX_ENABLED else 0.15
+    div_weight = 0.20 if ADX_ENABLED else 0.20
     vwm_weight = 0.05 if ADX_ENABLED else 0.10
 
     # Calculate quality factors for each signal (0.8 - 1.5 range)
@@ -211,6 +212,8 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         buy_pressure = order_flow.get("buy_pressure", 0.5)
         large_trade_dir = order_flow.get("large_trade_direction", "NEUTRAL")
         trade_intensity = order_flow.get("trade_intensity", 0.0)
+
+        flow_quality = 1.0
 
         if buy_pressure > 0.70:
             # Very strong buying pressure - high quality
