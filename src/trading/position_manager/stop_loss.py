@@ -119,7 +119,7 @@ def _check_stop_loss(
             if not up_id:
                 return False
 
-            conf, bias, _, _, _, _ = calculate_confidence(symbol, up_id, client)
+            conf, bias, _, _, _, _, _ = calculate_confidence(symbol, up_id, client)
 
             target_bias = "DOWN" if side == "UP" else "UP"
             if bias == target_bias and conf > 0.30:

@@ -272,6 +272,21 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                     limit_sell_order_id=None,
                     is_reversal=is_reversal,
                     target_price=p["target_price"],
+                    up_total=p["raw_scores"].get("up_total"),
+                    down_total=p["raw_scores"].get("down_total"),
+                    momentum_score=p["raw_scores"].get("momentum_score"),
+                    momentum_dir=p["raw_scores"].get("momentum_dir"),
+                    flow_score=p["raw_scores"].get("flow_score"),
+                    flow_dir=p["raw_scores"].get("flow_dir"),
+                    divergence_score=p["raw_scores"].get("divergence_score"),
+                    divergence_dir=p["raw_scores"].get("divergence_dir"),
+                    vwm_score=p["raw_scores"].get("vwm_score"),
+                    vwm_dir=p["raw_scores"].get("vwm_dir"),
+                    pm_mom_score=p["raw_scores"].get("pm_mom_score"),
+                    pm_mom_dir=p["raw_scores"].get("pm_mom_dir"),
+                    adx_score=p["raw_scores"].get("adx_score"),
+                    adx_dir=p["raw_scores"].get("adx_dir"),
+                    lead_lag_bonus=p["raw_scores"].get("lead_lag_bonus"),
                 )
 
                 emoji = p.get("emoji", "🚀")

@@ -64,6 +64,7 @@ def execute_trade(
     )
 
     try:
+        raw_scores = trade_params.get("raw_scores", {})
         trade_id = save_trade(
             cursor=cursor,
             symbol=symbol,
@@ -90,6 +91,21 @@ def execute_trade(
             limit_sell_order_id=None,
             is_reversal=is_reversal,
             target_price=trade_params.get("target_price"),
+            up_total=raw_scores.get("up_total"),
+            down_total=raw_scores.get("down_total"),
+            momentum_score=raw_scores.get("momentum_score"),
+            momentum_dir=raw_scores.get("momentum_dir"),
+            flow_score=raw_scores.get("flow_score"),
+            flow_dir=raw_scores.get("flow_dir"),
+            divergence_score=raw_scores.get("divergence_score"),
+            divergence_dir=raw_scores.get("divergence_dir"),
+            vwm_score=raw_scores.get("vwm_score"),
+            vwm_dir=raw_scores.get("vwm_dir"),
+            pm_mom_score=raw_scores.get("pm_mom_score"),
+            pm_mom_dir=raw_scores.get("pm_mom_dir"),
+            adx_score=raw_scores.get("adx_score"),
+            adx_dir=raw_scores.get("adx_dir"),
+            lead_lag_bonus=raw_scores.get("lead_lag_bonus"),
         )
 
         emoji = trade_params.get("emoji", "🚀")

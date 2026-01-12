@@ -30,7 +30,7 @@ def _trigger_price_based_reversal(
             return False
 
         client = get_clob_client()
-        confidence, bias, p_up, best_bid, best_ask, _ = calculate_confidence(
+        confidence, bias, p_up, best_bid, best_ask, _, _ = calculate_confidence(
             symbol, up_id, client
         )
 

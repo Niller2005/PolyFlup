@@ -151,8 +151,8 @@ def _prepare_trade_params(
         return
 
     client = get_clob_client()
-    confidence, bias, p_up, best_bid, best_ask, signals = calculate_confidence(
-        symbol, up_id, client
+    confidence, bias, p_up, best_bid, best_ask, signals, raw_scores = (
+        calculate_confidence(symbol, up_id, client)
     )
 
     if bias == "NEUTRAL" or best_bid is None or best_ask is None:
@@ -364,4 +364,5 @@ def _prepare_trade_params(
         "window_start": window_start,
         "window_end": window_end,
         "slug": get_current_slug(symbol),
+        "raw_scores": raw_scores,
     }

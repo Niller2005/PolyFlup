@@ -39,9 +39,11 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
     Goal: Higher quality entries, fewer stop losses.
 
     Returns:
-        tuple: (confidence, bias, p_up, best_bid, best_ask, signals)
+        tuple: (confidence, bias, p_up, best_bid, best_ask, signals, raw_scores)
         - confidence: 0.0 to 1.0 (sizing)
         - bias: "UP", "DOWN", or "NEUTRAL"
+        - signals: Dictionary of detailed signal information
+        - raw_scores: Dictionary of raw signal scores for backtesting
     """
     try:
         book = client.get_order_book(up_token)
@@ -57,10 +59,10 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
             log(f"[{symbol}] Order book not ready for token {up_token[:10]}... (404)")
         else:
             log_error(f"[{symbol}] Order book error for {up_token}: {e}")
-        return 0.0, "NEUTRAL", 0.5, None, None, {}
+        return 0.0, "NEUTRAL", 0.5, None, None, {}, {}
 
     if not bids or not asks:
-        return 0.0, "NEUTRAL", 0.5, None, None, {}
+        return 0.0, "NEUTRAL", 0.5, None, None, {}, {}
 
     best_bid = float(
         bids[-1].price if hasattr(bids[-1], "price") else bids[-1].get("price", 0)
@@ -70,11 +72,19 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
     )
 
     if not best_bid or not best_ask:
-        return 0.0, "NEUTRAL", 0.5, best_bid, best_ask, {}
+        return 0.0, "NEUTRAL", 0.5, best_bid, best_ask, {}, {}
 
     spread = best_ask - best_bid
     if spread > MAX_SPREAD:
-        return 0.0, "NEUTRAL", 0.5, best_bid, best_ask, {"reason": "spread_too_wide"}
+        return (
+            0.0,
+            "NEUTRAL",
+            0.5,
+            best_bid,
+            best_ask,
+            {"reason": "spread_too_wide"},
+            {},
+        )
 
     # Base Polymarket probability
     p_up = (best_bid + best_ask) / 2.0
@@ -338,6 +348,25 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         "current_spot": current_spot,
     }
 
+    # Raw signal scores for database storage and backtesting
+    raw_scores = {
+        "up_total": up_total,
+        "down_total": down_total,
+        "momentum_score": momentum_score,
+        "momentum_dir": momentum_dir,
+        "flow_score": flow_score,
+        "flow_dir": flow_dir,
+        "divergence_score": divergence_score,
+        "divergence_dir": divergence_dir,
+        "vwm_score": vwm_score,
+        "vwm_dir": vwm_dir,
+        "pm_mom_score": pm_mom_score,
+        "pm_mom_dir": pm_mom_dir,
+        "adx_score": adx_score,
+        "adx_dir": adx_dir,
+        "lead_lag_bonus": lead_lag_bonus,
+    }
+
     # Price Movement Validation for High Confidence Trades
     if ENABLE_PRICE_VALIDATION and confidence >= PRICE_VALIDATION_MIN_CONFIDENCE:
         validation_result = validate_price_movement_for_trade(
@@ -369,7 +398,7 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
                     f"[{symbol}] ⚠️  Price validation blocked trade (confidence too low after reduction)"
                 )
 
-    return confidence, bias, p_up, best_bid, best_ask, signals
+    return confidence, bias, p_up, best_bid, best_ask, signals, raw_scores
 
 
 def bfxd_allows_trade(symbol: str, direction: str) -> tuple[bool, str]:

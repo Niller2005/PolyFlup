@@ -54,8 +54,10 @@ def save_trade(cursor=None, **kwargs):
             """
             INSERT INTO trades (timestamp, symbol, window_start, window_end, slug, token_id,
             side, edge, entry_price, size, bet_usd, p_yes, best_bid, best_ask,
-            imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered, reversal_triggered_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered, reversal_triggered_at,
+            up_total, down_total, momentum_score, momentum_dir, flow_score, flow_dir,
+            divergence_score, divergence_dir, vwm_score, vwm_dir, pm_mom_score, pm_mom_dir, adx_score, adx_dir, lead_lag_bonus)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 datetime.now(tz=ZoneInfo("UTC")).isoformat(),
@@ -81,6 +83,21 @@ def save_trade(cursor=None, **kwargs):
                 kwargs.get("target_price"),
                 kwargs.get("reversal_triggered", False),
                 kwargs.get("reversal_triggered_at"),
+                kwargs.get("up_total"),
+                kwargs.get("down_total"),
+                kwargs.get("momentum_score"),
+                kwargs.get("momentum_dir"),
+                kwargs.get("flow_score"),
+                kwargs.get("flow_dir"),
+                kwargs.get("divergence_score"),
+                kwargs.get("divergence_dir"),
+                kwargs.get("vwm_score"),
+                kwargs.get("vwm_dir"),
+                kwargs.get("pm_mom_score"),
+                kwargs.get("pm_mom_dir"),
+                kwargs.get("adx_score"),
+                kwargs.get("adx_dir"),
+                kwargs.get("lead_lag_bonus"),
             ),
         )
         return cursor.lastrowid
@@ -92,8 +109,10 @@ def save_trade(cursor=None, **kwargs):
                 """
                 INSERT INTO trades (timestamp, symbol, window_start, window_end, slug, token_id,
                 side, edge, entry_price, size, bet_usd, p_yes, best_bid, best_ask,
-                imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered, reversal_triggered_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered, reversal_triggered_at,
+                up_total, down_total, momentum_score, momentum_dir, flow_score, flow_dir,
+                divergence_score, divergence_dir, vwm_score, vwm_dir, pm_mom_score, pm_mom_dir, adx_score, adx_dir, lead_lag_bonus)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     datetime.now(tz=ZoneInfo("UTC")).isoformat(),
@@ -119,6 +138,21 @@ def save_trade(cursor=None, **kwargs):
                     kwargs.get("target_price"),
                     kwargs.get("reversal_triggered", False),
                     kwargs.get("reversal_triggered_at"),
+                    kwargs.get("up_total"),
+                    kwargs.get("down_total"),
+                    kwargs.get("momentum_score"),
+                    kwargs.get("momentum_dir"),
+                    kwargs.get("flow_score"),
+                    kwargs.get("flow_dir"),
+                    kwargs.get("divergence_score"),
+                    kwargs.get("divergence_dir"),
+                    kwargs.get("vwm_score"),
+                    kwargs.get("vwm_dir"),
+                    kwargs.get("pm_mom_score"),
+                    kwargs.get("pm_mom_dir"),
+                    kwargs.get("adx_score"),
+                    kwargs.get("adx_dir"),
+                    kwargs.get("lead_lag_bonus"),
                 ),
             )
             trade_id = c.lastrowid
