@@ -24,7 +24,64 @@
 
 ## Secondary Issues (Medium Priority)
 
-### 2. Balance API Lag Causing Temporary Failures
+### 2. ✅ FIXED: Exchange API False FILLED Status (NEW)
+
+**Status**: FIXED in commit `bf33b96`
+
+**Observed**: 3 catastrophic stop losses in window "January 12, 4:00-4:15PM ET"
+- BTC #569: Stop loss at $0.14 → "UNFILLED_NO_BALANCE"
+- ETH #570: Stop loss at $0.06 → "UNFILLED_NO_BALANCE"  
+- XRP #571: Stop loss at $0.04 → "UNFILLED_NO_BALANCE"
+
+**Root Cause**: Exchange API returned false "FILLED" status for orders that never filled.
+
+**Timeline**:
+```
+21:00:29 - 3 entry orders placed (BTC #569, ETH #570, XRP #571)
+21:00:33-37 - Balance sync shows "near-zero (0.0000)" for all 3 positions
+21:03-21:05 - CRITICAL FLOOR stop losses triggered on phantom positions
+21:03-21:05 - Exit orders failed: "insufficient funds" (no shares to sell)
+21:21:00 - Window summary: All 3 trades "UNFILLED_NO_BALANCE"
+```
+
+**Evidence**:
+- Database shows all 3 trades as "FILLED" status
+- **NO WebSocket fill notifications** for any of the 3 entry order IDs
+- Balance API showed 0.00 shares (no actual position existed)
+- Exit orders failed due to "insufficient funds" (no shares to sell)
+
+**The Bug**: `src/bot.py` line 236-248 trusted batch API response `status` field without verification.
+
+**Fix Applied**:
+```python
+# Added 2-second delay after batch order placement
+time.sleep(2.0)
+
+# Verify each order status via get_order() after delay
+verified_status = actual_status  # Default to batch response
+o_data = get_order(order_id)  # Query again
+api_status = o_data.get("status", "").upper()
+
+# Use verified status instead of batch response
+if api_status in ["FILLED", "MATCHED"]:
+    verified_status = api_status
+    sz_m = float(o_data.get("size_matched", 0))
+    if sz_m > 0:  # Only FILLED if shares matched
+        actual_size = sz_m
+elif api_status in ["LIVE", "OPEN", "PENDING"]:
+    verified_status = api_status  # Order still waiting
+    log(f"Order verified as LIVE (2s delay check)")
+
+# Only save as FILLED if order actually filled
+if verified_status.upper() in ["FILLED", "MATCHED"]:
+    trade_id = save_trade(...)
+```
+
+**Next Action**: Monitor next 10-20 trades to ensure no phantom FILLED status
+
+---
+
+### 3. Balance API Lag Causing Temporary Failures
 
 **Observed**: 8 occurrences in logs
 ```
@@ -190,7 +247,15 @@ Balance API is returning inflated values (20.00 instead of 10.00) even though al
     - ✅ Added minimum sync interval: 30 seconds between syncs
     - ✅ Added suspicious sync blocking: Log and block phantom inflation
     - 🔄 Test fix with new trades
-3. **MONITOR**: USDC balance and settlement flow (Issue #3)
+3. ✅ **FIXED**: Exchange API false FILLED status (NEW - Issue #6)
+    - ✅ Root cause identified: API returning "FILLED" status for unfilled orders
+    - ✅ Added 2-second delay after batch order placement
+    - ✅ Added order verification via get_order() after delay
+    - ✅ Use verified status instead of batch API response
+    - ✅ Only save as FILLED if size_matched > 0
+    - ✅ Log verified orders as LIVE when still waiting
+    - 🔄 Monitor next 10-20 trades to ensure no phantom FILLED status
+4. **MONITOR**: USDC balance and settlement flow (Issue #3)
     - Check if settlements are releasing funds properly
     - Verify no funds locked in pending orders
 
