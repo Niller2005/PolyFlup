@@ -28,7 +28,12 @@ def init_database():
                 final_outcome TEXT, exit_price REAL, pnl_usd REAL, roi_pct REAL,
                 settled BOOLEAN DEFAULT 0, settled_at TEXT, exited_early BOOLEAN DEFAULT 0,
                 scaled_in BOOLEAN DEFAULT 0, is_reversal BOOLEAN DEFAULT 0, target_price REAL,
-                reversal_triggered BOOLEAN DEFAULT 0, reversal_triggered_at TEXT
+                reversal_triggered BOOLEAN DEFAULT 0, reversal_triggered_at TEXT,
+                last_scale_in_at TEXT,
+                up_total REAL, down_total REAL, momentum_score REAL, momentum_dir TEXT,
+                flow_score REAL, flow_dir TEXT, divergence_score REAL, divergence_dir TEXT,
+                vwm_score REAL, vwm_dir TEXT, pm_mom_score REAL, pm_mom_dir TEXT,
+                adx_score REAL, adx_dir TEXT, lead_lag_bonus REAL
             )
         """)
         c.execute("CREATE INDEX IF NOT EXISTS idx_symbol ON trades(symbol)")
