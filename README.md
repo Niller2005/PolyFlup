@@ -172,6 +172,32 @@ polyflup/
 └── docs/                         # Strategy, risk profiles, migrations
 ```
 
+## 🔬 Analysis Tools
+
+### Bayesian vs Additive Comparison
+
+After collecting 50+ trades with migration 007 data, compare performance:
+
+```bash
+uv run python compare_bayesian_additive.py
+```
+
+This script shows:
+- Overall win rates for both methods
+- Performance by confidence buckets (0-25%, 25-35%, etc.)
+- Average edge and PnL per trade
+- Recommendation on which method to use
+
+**Note**: Only new trades (after migration 007) will have both confidence values. Run the bot for ~100 trades before comparing.
+
+### Database Migrations
+
+Run pending migrations manually (usually auto-runs on bot startup):
+
+```bash
+uv run python run_migrations.py
+```
+
 ## 📚 Documentation
 
 - **[CHANGELOG.md](CHANGELOG.md)** - Version history and release notes
