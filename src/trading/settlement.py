@@ -267,6 +267,9 @@ def check_and_settle_trades():
                 log(
                     f"{emoji} [{symbol}] #{trade_id} {side}: {pnl_usd:+.2f}$ ({roi_pct:+.1f}%)"
                 )
+                log(
+                    f"   💸 Released ${(exit_value * size):.2f} USDC to wallet (final_price: {final_price:.4f} × {size:.1f} shares)"
+                )
                 total_pnl += pnl_usd
                 settled_count += 1
 

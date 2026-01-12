@@ -12,6 +12,7 @@ from src.trading.orders import (
     get_order,
     get_multiple_market_prices,
     check_orders_scoring,
+    get_balance_allowance,
 )
 from src.utils.websocket_manager import ws_manager
 from src.trading.settlement import force_settle_trade
@@ -73,7 +74,13 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                     log(f"⚠️  Error in batch scoring check: {e}")
 
             if verbose:
-                log(f"👀 Monitoring {len(open_positions)} positions...")
+                bal_info = get_balance_allowance()
+                usdc_balance = bal_info.get("balance", 0) if bal_info else 0
+                log(
+                    f"👀 Monitoring {len(open_positions)} positions... | 💰 USDC: ${usdc_balance:.2f}"
+                )
+                if usdc_balance < 10.0:
+                    log("   ⚠️  WARNING: USDC balance below $10. Scale-ins may fail!")
 
                 # Detailed position report every minute - each position on its own line with full details
                 if len(open_positions) > 0:
