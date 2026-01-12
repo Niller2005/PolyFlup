@@ -14,6 +14,7 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MAX_SPREAD` | 0.12 | Only enter liquid markets with tight spreads |
 | `CONFIDENCE_SCALING_FACTOR` | 3.0 | Moderate scaling (max 3x base bet) |
 | `MAX_SIZE` | 100.0 | Cap position size at 100 shares (use `NONE` for no cap) |
+| `MAX_SIZE_MODE` | CAP | Cap at MAX_SIZE (use `MAXIMIZE` to use higher of balance% or MAX_SIZE) |
 | `STOP_LOSS_PRICE` | 0.40 | Conservative stop loss trigger |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
 | `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
@@ -37,6 +38,7 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MAX_SPREAD` | 0.15 | Accept reasonable spreads |
 | `CONFIDENCE_SCALING_FACTOR` | 5.0 | Standard scaling (max 5x base bet) |
 | `MAX_SIZE` | 500.0 | Cap position size at 500 shares (use `NONE` for no cap) |
+| `MAX_SIZE_MODE` | CAP | Cap at MAX_SIZE (use `MAXIMIZE` to use higher of balance% or MAX_SIZE) |
 | `STOP_LOSS_PRICE` | 0.30 | Standard stop loss trigger ($0.30) |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
 | `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
@@ -60,6 +62,7 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MAX_SPREAD` | 0.18 | Accept wider spreads for more opportunities |
 | `CONFIDENCE_SCALING_FACTOR` | 7.0 | Aggressive scaling (max 7x base bet) |
 | `MAX_SIZE` | 1000.0 | Cap position size at 1000 shares (use `NONE` for no cap) |
+| `MAX_SIZE_MODE` | CAP | Cap at MAX_SIZE (use `MAXIMIZE` to use higher of balance% or MAX_SIZE) |
 | `STOP_LOSS_PRICE` | 0.20 | Wider stop loss to avoid noise |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
 | `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
@@ -83,6 +86,7 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `MAX_SPREAD` | 0.20 | Enter almost any liquid market |
 | `CONFIDENCE_SCALING_FACTOR` | 10.0 | Extreme scaling (max 10x base bet) |
 | `MAX_SIZE` | 2000.0 | Cap position size at 2000 shares (use `NONE` for no cap) |
+| `MAX_SIZE_MODE` | CAP | Cap at MAX_SIZE (use `MAXIMIZE` to use higher of balance% or MAX_SIZE) |
 | `STOP_LOSS_PRICE` | 0.10 | Very wide stop loss |
 | `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
 | `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
