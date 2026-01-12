@@ -218,138 +218,117 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         for p in trade_params_list
     ]
 
-        results = place_batch_orders(orders)
+    results = place_batch_orders(orders)
 
-        placed_count = 0
-        from src.data.db_connection import db_connection
+    placed_count = 0
+    from src.data.db_connection import db_connection
 
-        # Wait for order fills to verify before saving as FILLED
-        # This prevents false FILLED status from exchange API
-        import time
-        time.sleep(2.0)  # Wait 2 seconds for fills to process
+    # Wait for order fills to verify before saving as FILLED
+    # This prevents false FILLED status from exchange API
+    import time
 
-        for i, result in enumerate(results):
-            if i < len(trade_params_list) and result["success"]:
-                placed_count += 1
-                p = trade_params_list[i]
+    time.sleep(2.0)  # Wait 2 seconds for fills to process
 
-                actual_size = p["size"]
-                actual_price = p["price"]
-                actual_status = result["status"]
-                is_reversal = "HEDGED REVERSAL" in str(p.get("core_summary", ""))
-
-                # Verify order status after 2-second delay
-                order_id = result.get("order_id")
-                verified_status = actual_status
-                try:
-                    o_data = get_order(order_id)
-                    if o_data:
-                        api_status = o_data.get("status", "").upper()
-                        # Use verified status from get_order() instead of batch response
-                        if api_status in ["FILLED", "MATCHED"]:
-                            verified_status = api_status
-                            sz_m = float(o_data.get("size_matched", 0))
-                            pr_m = float(o_data.get("price", 0))
-                            if sz_m > 0:
-                                actual_size = sz_m
-                                if pr_m > 0:
-                                    actual_price = pr_m
-                                    p["bet_usd"] = actual_size * actual_price
-                        elif api_status in ["LIVE", "OPEN", "PENDING"]:
-                            # Order still waiting on book - use LIVE status
-                            verified_status = api_status
-                            log(
-                                f"   ⏳ [{p['symbol']}] Order {order_id[:10]} verified as {verified_status} (2s delay check)"
-                            )
-                        else:
-                            # Unexpected status - use original
-                            log(
-                                f"   ⚠️  [{p['symbol']}] Order {order_id[:10]} has unexpected status: {api_status}"
-                            )
-                except Exception as e:
-                    log(f"   ⚠️  [{p['symbol']}] Could not verify order {order_id[:10]}: {e}")
-
-                if verified_status.upper() in ["FILLED", "MATCHED"]:
-                    try:
-
-            send_discord(
-                f"**{'🔄 ' if is_reversal else ''}[{p['symbol']}] {p['side']} ${p['bet_usd']:.2f}** | Confidence {p['confidence']:.1%} | Price {actual_price:.4f}"
-            )
-            try:
-                trade_id = save_trade(
-                    symbol=p["symbol"],
-                    window_start=p["window_start"].isoformat(),
-                    window_end=p["window_end"].isoformat(),
-                    slug=p["slug"],
-                    token_id=p["token_id"],
-                    side=p["side"],
-                    edge=p["confidence"],
-                    price=actual_price,
-                    size=actual_size,
-                    bet_usd=p["bet_usd"],
-                    p_yes=p["p_up"],
-                    best_bid=p["best_bid"],
-                    best_ask=p["best_ask"],
-                    imbalance=p["imbalance"],
-                    funding_bias=p["funding_bias"],
-                    order_status=actual_status,
-                    order_id=result["order_id"],
-                    limit_sell_order_id=None,
-                    is_reversal=is_reversal,
-                    target_price=p["target_price"],
-                    up_total=p["raw_scores"].get("up_total"),
-                    down_total=p["raw_scores"].get("down_total"),
-                    momentum_score=p["raw_scores"].get("momentum_score"),
-                    momentum_dir=p["raw_scores"].get("momentum_dir"),
-                    flow_score=p["raw_scores"].get("flow_score"),
-                    flow_dir=p["raw_scores"].get("flow_dir"),
-                    divergence_score=p["raw_scores"].get("divergence_score"),
-                    divergence_dir=p["raw_scores"].get("divergence_dir"),
-                    vwm_score=p["raw_scores"].get("vwm_score"),
-                    vwm_dir=p["raw_scores"].get("vwm_dir"),
-                    pm_mom_score=p["raw_scores"].get("pm_mom_score"),
-                    pm_mom_dir=p["raw_scores"].get("pm_mom_dir"),
-                    adx_score=p["raw_scores"].get("adx_score"),
-                    adx_dir=p["raw_scores"].get("adx_dir"),
-                    lead_lag_bonus=p["raw_scores"].get("lead_lag_bonus"),
-                    additive_confidence=p["raw_scores"].get("additive_confidence"),
-                    additive_bias=p["raw_scores"].get("additive_bias"),
-                    bayesian_confidence=p["raw_scores"].get("bayesian_confidence"),
-                    bayesian_bias=p["raw_scores"].get("bayesian_bias"),
-                    market_prior_p_up=p["raw_scores"].get("market_prior_p_up"),
-                )
-
-                emoji = p.get("emoji", "🚀")
-                entry_type = p.get("entry_type", "Trade")
-                log(
-                    f"{emoji} [{p['symbol']}] {entry_type}: {p.get('core_summary', '')} | #{trade_id} {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | ID: {result['order_id'][:10] if result['order_id'] else 'N/A'}"
-                )
-
-                if is_reversal:
-                    with db_connection() as conn:
-                        c = conn.cursor()
-                        now_iso = datetime.now(tz=ZoneInfo("UTC")).isoformat()
-                        c.execute(
-                            "UPDATE trades SET reversal_triggered = 1, reversal_triggered_at = ? WHERE symbol = ? AND window_start = ? AND side != ? AND settled = 0",
-                            (
-                                now_iso,
-                                p["symbol"],
-                                p["window_start"].isoformat(),
-                                p["side"],
-                            ),
-                        )
-                        if c.rowcount > 0:
-                            log(
-                                f"   🛡️  [{p['symbol']}] Original trade marked as reversal_triggered"
-                            )
-            except Exception as e:
-                log_error(f"[{p['symbol']}] Trade completion error: {e}")
-        elif i < len(trade_params_list):
+    for i, result in enumerate(results):
+        if i < len(trade_params_list) and result["success"]:
+            placed_count += 1
             p = trade_params_list[i]
-            log_error(
-                f"[{p['symbol']}] ❌ Batch order failed: {result.get('error')}",
-                include_traceback=False,
-            )
+
+            actual_size = p["size"]
+            actual_price = p["price"]
+            actual_status = result["status"]
+            is_reversal = "HEDGED REVERSAL" in str(p.get("core_summary", ""))
+
+            # Verify order status after 2-second delay
+            order_id = result.get("order_id")
+            verified_status = actual_status
+            try:
+                o_data = get_order(order_id)
+                if o_data:
+                    api_status = o_data.get("status", "").upper()
+                    # Use verified status from get_order() instead of batch response
+                    if api_status in ["FILLED", "MATCHED"]:
+                        verified_status = api_status
+                        sz_m = float(o_data.get("size_matched", 0))
+                        pr_m = float(o_data.get("price", 0))
+                        if sz_m > 0:
+                            actual_size = sz_m
+                            if pr_m > 0:
+                                actual_price = pr_m
+                                p["bet_usd"] = actual_size * actual_price
+                    elif api_status in ["LIVE", "OPEN", "PENDING"]:
+                        # Order still waiting on book - use LIVE status
+                        verified_status = api_status
+                        log(
+                            f"   ⏳ [{p['symbol']}] Order {order_id[:10]} verified as {verified_status} (2s delay check)"
+                        )
+                    else:
+                        # Unexpected status - use original
+                        log(
+                            f"   ⚠️  [{p['symbol']}] Order {order_id[:10]} has unexpected status: {api_status}"
+                        )
+            except Exception as e:
+                log(
+                    f"   ⚠️  [{p['symbol']}] Could not verify order {order_id[:10]}: {e}"
+                )
+
+            if verified_status.upper() in ["FILLED", "MATCHED"]:
+                try:
+                    send_discord(
+                        f"**{'🔄 ' if is_reversal else ''}[{p['symbol']}] {p['side']} ${p['bet_usd']:.2f}** | Confidence {p['confidence']:.1%} | Price {actual_price:.4f}"
+                    )
+                    trade_id = save_trade(
+                        symbol=p["symbol"],
+                        window_start=p["window_start"].isoformat(),
+                        window_end=p["window_end"].isoformat(),
+                        slug=p["slug"],
+                        token_id=p["token_id"],
+                        side=p["side"],
+                        edge=p["confidence"],
+                        price=actual_price,
+                        size=actual_size,
+                        bet_usd=p["bet_usd"],
+                        p_yes=p["p_up"],
+                        best_bid=p["best_bid"],
+                        best_ask=p["best_ask"],
+                        imbalance=p["imbalance"],
+                        funding_bias=p["funding_bias"],
+                        order_status=verified_status,
+                        order_id=result["order_id"],
+                        limit_sell_order_id=None,
+                        is_reversal=is_reversal,
+                        target_price=p["target_price"],
+                        up_total=p["raw_scores"].get("up_total"),
+                        down_total=p["raw_scores"].get("down_total"),
+                        momentum_score=p["raw_scores"].get("momentum_score"),
+                        momentum_dir=p["raw_scores"].get("momentum_dir"),
+                        flow_score=p["raw_scores"].get("flow_score"),
+                        flow_dir=p["raw_scores"].get("flow_dir"),
+                        divergence_score=p["raw_scores"].get("divergence_score"),
+                        divergence_dir=p["raw_scores"].get("divergence_dir"),
+                        vwm_score=p["raw_scores"].get("vwm_score"),
+                        vwm_dir=p["raw_scores"].get("vwm_dir"),
+                        pm_mom_score=p["raw_scores"].get("pm_mom_score"),
+                        pm_mom_dir=p["raw_scores"].get("pm_mom_dir"),
+                        adx_score=p["raw_scores"].get("adx_score"),
+                        adx_dir=p["raw_scores"].get("adx_dir"),
+                        lead_lag_bonus=p["raw_scores"].get("lead_lag_bonus"),
+                        additive_confidence=p["raw_scores"].get("additive_confidence"),
+                        additive_bias=p["raw_scores"].get("additive_bias"),
+                        bayesian_confidence=p["raw_scores"].get("bayesian_confidence"),
+                        bayesian_bias=p["raw_scores"].get("bayesian_bias"),
+                        market_prior_p_up=p["raw_scores"].get("market_prior_p_up"),
+                    )
+                    if trade_id:
+                        log(
+                            f"   🚀 [{p['symbol']}] {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | Edge: {p['confidence']:.1%}"
+                        )
+                    else:
+                        log(f"   ❌ [{p['symbol']}] Failed to save trade to database")
+
+                except Exception as e:
+                    log(f"   ❌ [{p['symbol']}] Failed to save trade: {e}")
+
     return placed_count
 
 
