@@ -218,34 +218,59 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         for p in trade_params_list
     ]
 
-    results = place_batch_orders(orders)
+        results = place_batch_orders(orders)
 
-    placed_count = 0
-    from src.data.db_connection import db_connection
+        placed_count = 0
+        from src.data.db_connection import db_connection
 
-    for i, result in enumerate(results):
-        if i < len(trade_params_list) and result["success"]:
-            placed_count += 1
-            p = trade_params_list[i]
+        # Wait for order fills to verify before saving as FILLED
+        # This prevents false FILLED status from exchange API
+        import time
+        time.sleep(2.0)  # Wait 2 seconds for fills to process
 
-            actual_size = p["size"]
-            actual_price = p["price"]
-            actual_status = result["status"]
-            is_reversal = "HEDGED REVERSAL" in str(p.get("core_summary", ""))
+        for i, result in enumerate(results):
+            if i < len(trade_params_list) and result["success"]:
+                placed_count += 1
+                p = trade_params_list[i]
 
-            if actual_status.upper() in ["FILLED", "MATCHED"]:
+                actual_size = p["size"]
+                actual_price = p["price"]
+                actual_status = result["status"]
+                is_reversal = "HEDGED REVERSAL" in str(p.get("core_summary", ""))
+
+                # Verify order status after 2-second delay
+                order_id = result.get("order_id")
+                verified_status = actual_status
                 try:
-                    o_data = get_order(result["order_id"])
+                    o_data = get_order(order_id)
                     if o_data:
-                        sz_m = float(o_data.get("size_matched", 0))
-                        pr_m = float(o_data.get("price", 0))
-                        if sz_m > 0:
-                            actual_size = sz_m
-                            if pr_m > 0:
-                                actual_price = pr_m
-                            p["bet_usd"] = actual_size * actual_price
-                except:
-                    pass
+                        api_status = o_data.get("status", "").upper()
+                        # Use verified status from get_order() instead of batch response
+                        if api_status in ["FILLED", "MATCHED"]:
+                            verified_status = api_status
+                            sz_m = float(o_data.get("size_matched", 0))
+                            pr_m = float(o_data.get("price", 0))
+                            if sz_m > 0:
+                                actual_size = sz_m
+                                if pr_m > 0:
+                                    actual_price = pr_m
+                                    p["bet_usd"] = actual_size * actual_price
+                        elif api_status in ["LIVE", "OPEN", "PENDING"]:
+                            # Order still waiting on book - use LIVE status
+                            verified_status = api_status
+                            log(
+                                f"   ⏳ [{p['symbol']}] Order {order_id[:10]} verified as {verified_status} (2s delay check)"
+                            )
+                        else:
+                            # Unexpected status - use original
+                            log(
+                                f"   ⚠️  [{p['symbol']}] Order {order_id[:10]} has unexpected status: {api_status}"
+                            )
+                except Exception as e:
+                    log(f"   ⚠️  [{p['symbol']}] Could not verify order {order_id[:10]}: {e}")
+
+                if verified_status.upper() in ["FILLED", "MATCHED"]:
+                    try:
 
             send_discord(
                 f"**{'🔄 ' if is_reversal else ''}[{p['symbol']}] {p['side']} ${p['bet_usd']:.2f}** | Confidence {p['confidence']:.1%} | Price {actual_price:.4f}"
