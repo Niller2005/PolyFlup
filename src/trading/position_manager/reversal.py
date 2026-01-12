@@ -59,7 +59,7 @@ def _trigger_price_based_reversal(
         rev_price = max(0.01, min(0.99, round(rev_price, 2)))
 
         # Prepare parameters similar to bot.py
-        actual_side, sizing_confidence = _determine_trade_side(bias, confidence)
+        actual_side, sizing_confidence = _determine_trade_side(symbol, bias, confidence)
 
         # If strategy strongly agrees with the reversal, use that sizing.
         # Otherwise use a default sizing for the price-trigger reversal.

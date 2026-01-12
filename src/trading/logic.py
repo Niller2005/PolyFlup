@@ -29,7 +29,10 @@ MIN_SIZE = 5.0
 
 
 def _determine_trade_side(
-    bias: str, confidence: float, raw_scores: Optional[Dict[str, Any]] = None
+    symbol: str,
+    bias: str,
+    confidence: float,
+    raw_scores: Optional[Dict[str, Any]] = None,
 ) -> tuple[str, float]:
     """
     Determine actual trading side and confidence for sizing.
@@ -97,14 +100,26 @@ def _determine_trade_side(
                 sizing_confidence = min(0.40, up_total * 0.5)
                 return actual_side, sizing_confidence
 
-    # Trend following entry (original logic)
+    # Trend following with graduated sizing based on confidence level
     if confidence >= MIN_EDGE:
+        # Full confidence: use full sizing
         actual_side = bias
         sizing_confidence = confidence
+    elif confidence >= 0.15:
+        # Partial confidence zone: 15% - 35%
+        # Use discounted sizing to capture moderate signal strength
+        actual_side = bias
+        sizing_confidence = confidence * 0.7
     else:
-        # Wait zone: confidence too low for trend following
+        # Very low confidence: skip trade entirely
         actual_side = "NEUTRAL"
         sizing_confidence = 0.0
+
+    # Log partial sizing for transparency
+    if actual_side == bias and confidence < MIN_EDGE:
+        log(
+            f"[{symbol}] 📊 PARTIAL CONFIDENCE: {confidence:.1%} → {sizing_confidence:.1%} sizing (70% of confidence)"
+        )
 
     return actual_side, sizing_confidence
 
@@ -254,7 +269,7 @@ def _prepare_trade_params(
 
             # Recalculate sizing confidence with reduced confidence
             actual_side, sizing_confidence = _determine_trade_side(
-                bias, confidence, raw_scores
+                symbol, bias, confidence, raw_scores
             )
 
             if verbose:
@@ -265,7 +280,9 @@ def _prepare_trade_params(
                     reason = validation_result["reduction_reason"]
                     log(f"   Reason: {reason}")
 
-    actual_side, sizing_confidence = _determine_trade_side(bias, confidence, raw_scores)
+    actual_side, sizing_confidence = _determine_trade_side(
+        symbol, bias, confidence, raw_scores
+    )
 
     if actual_side == "NEUTRAL":
         if verbose:
