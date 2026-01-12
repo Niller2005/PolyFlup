@@ -41,6 +41,7 @@ Main table: `trades`
 - Settlement: `settled`, `settled_at`, `exited_early`, `final_outcome`, `exit_price`, `pnl_usd`, `roi_pct`
 - Timing: `window_start`, `window_end`, `last_scale_in_at`
 - Market Data: `slug`, `token_id`, `p_yes`, `best_bid`, `best_ask`, `imbalance`, `funding_bias`
+- Bayesian Comparison (v0.5.0+): `additive_confidence`, `additive_bias`, `bayesian_confidence`, `bayesian_bias`, `market_prior_p_up`
 
 ### Key Database Patterns
 
@@ -83,3 +84,12 @@ c.execute("""
 - Database uses Write-Ahead Logging (WAL) mode for better concurrency
 - Enabled on initialization: `PRAGMA journal_mode=WAL`
 - Allows concurrent readers while writes are in progress
+
+### Migration History
+- **Migration 007** (v0.5.0): Added Bayesian confidence comparison columns (`additive_confidence`, `additive_bias`, `bayesian_confidence`, `bayesian_bias`, `market_prior_p_up`) for A/B testing
+- **Migration 006** (v0.4.x): Added raw signal score columns (`up_total`, `down_total`, `momentum_score`, `momentum_dir`, `flow_score`, `flow_dir`, `divergence_score`, `divergence_dir`, `vwm_score`, `vwm_dir`, `pm_mom_score`, `pm_mom_dir`, `adx_score`, `adx_dir`, `lead_lag_bonus`) for confidence formula calibration
+- **Migration 005**: Added `last_scale_in_at` column for tracking scale-in timing
+- **Migration 004**: Added `reversal_triggered_at` column for timing reversals
+- **Migration 003**: Added `reversal_triggered` column for reversal tracking
+- **Migration 002**: Added timestamp verification
+- **Migration 001**: Added `scale_in_order_id` column for tracking pending scale-in orders

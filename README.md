@@ -6,6 +6,10 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 
 ### 📊 Trading Strategy
 - **Multi-Source Signal Integration**: Combines Polymarket order book data with real-time Binance market data to identify true mispricings
+- **Dual Confidence Calculation**: A/B testing framework comparing additive and Bayesian confidence methods
+  - **Bayesian Method** (new, optional): Proper probability theory with log-likelihood accumulation and market priors
+  - **Additive Method** (default): Directional voting with weighted signal aggregation
+  - Both methods always calculated and stored for performance comparison
 - **Edge Calculation**: Directional voting system where external Binance signals validate Polymarket pricing (100% total weight):
   - **Price Momentum (30%)**: Velocity, acceleration, and RSI analysis over 15-minute lookback
   - **Polymarket Momentum (20%)**: Internal price action confirmation on the CLOB
@@ -27,6 +31,7 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 - **📊 Settlement Auditing**: Automated P&L verification against exchange data (logs discrepancies > $0.10)
 
 ### 🚀 Recent Improvements (Jan 2026)
+- **Bayesian Confidence Calculation** (v0.4.4): New probabilistic method using log-likelihood accumulation with market priors. Both additive and Bayesian methods calculated for A/B testing. Toggle via `BAYESIAN_CONFIDENCE` setting.
 - **Enhanced Position Reports** (v0.4.3): Clean, aligned format with directional emojis (📈📉) and status indicators showing position health at a glance
 - **Real-Time WebSocket Integration**: Near-instant P&L and order fill updates via Polymarket's User Channel (fills/cancels) and Market Channel (midpoint prices)
 - **Batch API Optimization**: Fetch midpoints for all positions in a single call, drastically reducing API overhead
@@ -77,6 +82,9 @@ MIN_EDGE=0.35                        # Minimum confidence to enter (35%)
 MAX_SPREAD=0.15                      # Max allowed spread (15%)
 CONFIDENCE_SCALING_FACTOR=5.0        # Position scaling multiplier
 LOSING_SIDE_MIN_CONFIDENCE=0.40      # Higher threshold for underdog entries
+
+# Confidence Calculation Method
+BAYESIAN_CONFIDENCE=NO               # Use Bayesian method (YES) or Additive method (NO)
 
 # Binance Advanced Strategy
 ENABLE_MOMENTUM_FILTER=YES           # Price velocity, acceleration, RSI (30% weight)

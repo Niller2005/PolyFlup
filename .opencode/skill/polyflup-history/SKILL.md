@@ -5,6 +5,16 @@ description: Chronological log of system improvements and session summaries for 
 
 ## Session Improvements Summary
 
+### 2026-01-12 (v0.5.0 Release)
+- **Bayesian Confidence Calculation**: Implemented alternative confidence calculation using proper Bayesian evidence accumulation with log-odds and likelihood ratios
+- **Dual Calculation System**: Both additive and Bayesian methods calculated simultaneously for comprehensive A/B testing capabilities
+- **Market Prior Integration**: Bayesian method starts with Polymarket orderbook probability as prior, anchoring calculations to market reality
+- **Quality Factor System**: Signal evidence strength modulated by per-signal quality factors (0.7-1.5x multiplier on log-likelihood)
+- **Database Schema Update**: Migration 007 added `additive_confidence`, `additive_bias`, `bayesian_confidence`, `bayesian_bias`, `market_prior_p_up` columns
+- **Configuration Toggle**: `BAYESIAN_CONFIDENCE` flag in settings allows switching between additive and Bayesian methods
+- **A/B Testing Workflow**: Collect 100+ trades with both methods stored, then compare win rates using SQL queries
+- **Advantages**: Bayesian method naturally handles conflicting signals (they cancel out), properly combines independent evidence, and provides better uncertainty handling
+
 ### 2026-01-10 (v0.4.4 Release)
 - **Exit Order Repair Fix**: Implemented 0.05 share threshold to prevent infinite repair loops from exchange rounding differences
 - **Real-Time Exit Validation**: Added 1-second cycle exit order size validation to catch mismatches immediately

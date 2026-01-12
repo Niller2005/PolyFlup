@@ -4,6 +4,107 @@
 
 The enhanced strategy combines **Polymarket order book data** with **real-time Binance market data** to make more informed trading decisions. Instead of relying solely on Polymarket's internal pricing (which can be circular), we now use external market signals to identify true mispricings.
 
+## Confidence Calculation Methods
+
+PolyFlup supports two confidence calculation methods for A/B testing:
+
+### Additive Method (Default)
+
+The additive method uses a directional voting system where signals vote for UP or DOWN with weighted confidence:
+
+```
+confidence = (dominant_total - (weaker_total × 0.2)) × lead_lag_bonus
+```
+
+**Characteristics:**
+- Simple and intuitive
+- Penalizes conflicting signals (reduces confidence when signals disagree)
+- Applies lead/lag bonus (1.2x when exchanges agree, 0.8x when they disagree)
+- Works well when signals are relatively independent
+
+### Bayesian Method (New, Optional)
+
+The Bayesian method uses proper probability theory with log-likelihood accumulation:
+
+```
+# Log-likelihood from a signal
+evidence = (score - 0.5) × 2  # Map 0-1 score to -1 to +1
+log_LR = evidence × 3.0 × quality_factor  # Calibration with quality
+
+# Accumulate evidence starting from market prior
+log_odds = ln(p_up / (1 - p_up)) + Σ(log_LR × weight)
+
+# Convert to probability
+confidence = 1 / (1 + exp(-log_odds))
+```
+
+**Characteristics:**
+- Properly combines independent evidence using probability theory
+- Starts with market prior (Polymarket's implied probability) as anchor
+- Conflicting signals naturally cancel each other out
+- Quality factors (0.8-1.5x) adjust log-likelihood based on signal reliability
+- Mathematically grounded - confidence always bounded 0-1
+
+**Quality Factors Applied to Log-Likelihood:**
+
+| Signal | Quality Factor Conditions |
+|--------|--------------------------|
+| **Momentum** | RSI < 30 (oversold) = 1.3x, RSI > 70 (overbought) = 0.8x, Strength > 0.8 = 1.1x |
+| **Order Flow** | Buy pressure > 70% or < 30% = 1.3x, Large trades consistent = 1.1x |
+| **Divergence** | Larger divergence magnitude = 1.0-1.3x multiplier |
+| **VWM** | Based on momentum_quality (0.8-1.3x) |
+| **ADX** | ADX > 40 = 1.3x, ADX > 30 = 1.15x, ADX < 15 = 0.8x |
+| **PM Momentum** | Default 1.0 (no built-in quality metrics) |
+
+### A/B Testing Framework
+
+Both methods are **always calculated and stored** in the database for comparison. This allows you to:
+
+1. **Run with additive** (default) to collect baseline data
+2. **After 100+ trades**, analyze which method performs better
+3. **Switch to Bayesian** if it shows superior win rate
+
+**Configuration:**
+```env
+BAYESIAN_CONFIDENCE=NO   # Use additive (default)
+BAYESIAN_CONFIDENCE=YES  # Use Bayesian
+```
+
+**Comparing Methods:**
+```sql
+SELECT 
+    CASE WHEN bayesian_confidence > additive_confidence THEN 'Bayesian higher'
+         WHEN additive_confidence > bayesian_confidence THEN 'Additive higher'
+         ELSE 'Equal' END as method,
+    AVG(edge) as avg_edge,
+    COUNT(*) as total,
+    SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
+    CAST(SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) AS REAL) / COUNT(*) as win_rate
+FROM trades
+WHERE settled = 1
+GROUP BY method;
+```
+
+**Database Columns (Migration 007):**
+- `additive_confidence`: Additive method confidence value
+- `additive_bias`: Additive method directional bias (UP/DOWN/NEUTRAL)
+- `bayesian_confidence`: Bayesian method confidence value
+- `bayesian_bias`: Bayesian method directional bias (UP/DOWN/NEUTRAL)
+- `market_prior_p_up`: Polymarket orderbook probability (market prior)
+
+### Key Differences
+
+| Aspect | Additive | Bayesian |
+|--------|----------|----------|
+| **Mathematical Foundation** | Heuristic voting | Probability theory |
+| **Starting Point** | Zero baseline | Market prior (p_up) |
+| **Conflict Handling** | Penalizes (reduces confidence) | Cancels (log-odds sum) |
+| **Quality Adjustment** | Multiplier on weighted scores | Multiplier on log-likelihood |
+| **Bounded Confidence** | Requires manual clamping | Naturally 0-1 |
+| **Signal Independence** | Assumes independence | Properly combines |
+
+---
+
 ## Problem with "Buying the Undervalued Side"
 
 The original strategy had a fundamental issue:
@@ -294,6 +395,10 @@ Instead of a fixed timer, the scale-in window is dynamically determined by the t
 All features can be toggled in `.env`:
 
 ```bash
+# Confidence Calculation Method
+BAYESIAN_CONFIDENCE=NO         # Use Bayesian method (YES) or Additive method (NO)
+                               # Both always calculated for A/B testing
+
 # Enable/disable individual signals
 ENABLE_MOMENTUM_FILTER=YES    # Price velocity, acceleration, RSI (30% weight)
 ENABLE_ORDER_FLOW=YES          # Buy/sell pressure analysis (20% weight)
@@ -316,11 +421,13 @@ CONFIDENCE_SCALING_FACTOR=5.0  # Position sizing multiplier (higher = more aggre
 | **Data Sources** | Polymarket only | Polymarket + Binance (4-5 signals) |
 | **Decision Model** | Price vs implied probability | Directional voting with weighted confidence |
 | **Validation** | Circular (internal only) | External price action validates Polymarket prices |
+| **Confidence Method** | Single additive formula | Dual calculation (Additive + Bayesian) for A/B testing |
 | **Momentum** | Not considered | Real-time price velocity & acceleration (35%) |
 | **Order Flow** | Ignored | Buy/sell pressure from actual trades (25%) |
 | **Divergence** | N/A | Detects cross-exchange mispricings (25%) |
 | **Volume** | Not weighted | Volume-weighted signals with quality filter (15%) |
 | **Conflict Handling** | None | Conflicting signals penalize confidence |
+| **Quality Factors** | N/A | 0.8-1.5x multipliers based on signal reliability |
 | **Position Sizing** | Fixed percentage | Dynamic scaling based on signal confidence |
 | **Predictive Power** | Low | High (multi-source forward-looking) |
 
@@ -355,6 +462,16 @@ ENABLE_VWM=NO
 MIN_EDGE=0.57
 ```
 
+**Bayesian Confidence (experimental):**
+```bash
+BAYESIAN_CONFIDENCE=YES  # Use Bayesian method
+ENABLE_MOMENTUM_FILTER=YES
+ENABLE_ORDER_FLOW=YES
+ENABLE_DIVERGENCE=YES
+ENABLE_VWM=YES
+MIN_EDGE=0.40            # Lower threshold for Bayesian (better calibration)
+```
+
 **Legacy (Original strategy):**
 ```bash
 ENABLE_MOMENTUM_FILTER=NO
@@ -363,6 +480,32 @@ ENABLE_DIVERGENCE=NO
 ENABLE_VWM=NO
 MIN_EDGE=0.565
 ```
+
+## Multi-Confirmation System
+
+After confidence is calculated (by either additive or Bayesian method), the bot applies a graduated multi-confirmation filter for high-confidence trades:
+
+### How It Works
+
+1. **Trigger**: Runs when confidence > 60%
+2. **Key Indicators**: Analyzes the 5 primary signals:
+   - Price Momentum (35%)
+   - Polymarket Momentum (20%)
+   - Order Flow (15%)
+   - Cross-Exchange Divergence (15%)
+   - ADX Trend Strength (15%)
+
+3. **Graduated Reduction**:
+   - **60-70% confidence**: Requires 3/5 key signals agreeing
+   - **70-80% confidence**: Requires 2/5 key signals agreeing
+   - **80-85% confidence**: No reduction (all signals agree)
+   - **85%+ confidence**: No reduction (very high confidence)
+
+### Why This Matters
+
+The multi-confirmation system acts as a sanity check for very high confidence values (>85%). It prevents situations where a single strong signal (e.g., divergence) creates unrealistic confidence without broader signal agreement.
+
+**Note**: This system runs **after** the Bayesian calculation, so quality factors and log-likelihood accumulation are applied first. The multi-confirmation filter then validates the final result.
 
 ---
 
@@ -380,11 +523,23 @@ The bot logs all signal components:
   Final edge=0.5100
 ```
 
+When `BAYESIAN_CONFIDENCE=YES`, the bot also logs:
+
+```
+[BTC] 🔬 Using Bayesian confidence (p_up=0.520): 68.3% | Additive would be: 51.0%
+```
+
+This shows:
+- Active method's confidence
+- Market prior (p_up) used by Bayesian
+- What additive method would have calculated (for comparison)
+
 Watch for:
 - **Strong alignment**: When all signals agree → High confidence
 - **Divergence signals**: Often indicate the best opportunities
 - **Momentum strength**: >0.7 = very strong trend
 - **Buy pressure**: >0.60 or <0.40 = extreme imbalance
+- **Confidence method difference**: Large gaps between Bayesian and additive may indicate which method is better calibrated
 
 ---
 

@@ -7,6 +7,34 @@ and this project uses semantic versioning.
 
 ---
 
+## [0.4.4] - 2026-01-12
+
+### Added
+- **Bayesian Confidence Calculation**: New probabilistic method using log-likelihood accumulation with market priors
+- **Dual Calculation Framework**: Both additive and Bayesian methods always calculated for A/B testing
+- **Quality Factors**: Signal-specific multipliers (0.8-1.5x) based on RSI, buy pressure, divergence magnitude, ADX strength
+- **Database Migration 007**: 5 new columns (additive_confidence, additive_bias, bayesian_confidence, bayesian_bias, market_prior_p_up)
+- **Multi-Confirmation System**: Graduated reduction (60-85%) requires key signal agreement for high-confidence entries
+
+### Changed
+- **Strategy Module**: Refactored confidence calculation to support dual methods
+- **Logging**: Shows Bayesian vs additive comparison when `BAYESIAN_CONFIDENCE=YES`
+- **Settings**: Added `BAYESIAN_CONFIDENCE` flag (default: NO)
+
+### Technical Details
+- **Bayesian Formula**: `confidence = 1 / (1 + exp(-ln(prior_odds) - Σ(log_LR × weight)))`
+- **Log-Likelihood**: `evidence = (score - 0.5) × 2`, `log_LR = evidence × 3.0 × quality`
+- **Market Prior**: Starts from Polymarket orderbook `p_up` as baseline probability
+- **Quality Adjustment**: Applied to log-likelihood, not weighted scores
+- **Preserved Features**: All recent improvements (scale-in, price validation, hedged reversal) work with either method
+
+### Documentation
+- Updated `README.md` with Bayesian feature overview
+- Updated `docs/STRATEGY.md` with Bayesian calculation details
+- Updated `docs/MIGRATIONS.md` with migration 007 documentation
+
+---
+
 ## [0.4.3] - 2026-01-10
 
 ### Added

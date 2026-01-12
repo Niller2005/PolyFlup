@@ -14,6 +14,44 @@ description: Polymarket-specific terminology, trading strategies, and API refere
 
 ## Strategy Nuances
 
+### Confidence Calculation Methods (v0.5.0+)
+
+The bot supports two confidence calculation methods for A/B testing:
+
+**Additive Method (Default)**:
+- Directional voting system with weighted signal aggregation
+- Confidence = (winning_total - (losing_total × 0.2)) × lead_lag_bonus
+- Trend agreement bonus (1.1x) when Binance and Polymarket momentum align
+
+**Bayesian Method (Alternative)**:
+- Statistically principled probability theory using log-odds
+- Starts with market prior from Polymarket orderbook
+- Accumulates evidence via log-likelihood ratios:
+  ```python
+  evidence = (score - 0.5) × 2  # Scale to -1 to +1
+  log_LR = evidence × 3.0 × quality  # Quality factor (0.7-1.5x)
+  log_odds += log_LR × weight
+  confidence = 1 / (1 + exp(-log_odds))
+  ```
+- Naturally handles conflicting signals (they cancel out)
+- Market prior anchors calculation to Polymarket reality
+
+**A/B Testing**:
+- Both methods calculated simultaneously on every trade
+- Results stored in database for comparison
+- Toggle via `BAYESIAN_CONFIDENCE` environment variable (default: NO)
+- Compare win rates after 100+ trades:
+  ```sql
+  SELECT
+      AVG(CASE WHEN bias='UP' THEN edge ELSE -edge END) as avg_edge,
+      COUNT(*) as total,
+      SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
+      CAST(wins AS REAL) / COUNT(*) as win_rate
+  FROM trades
+  WHERE settled = 1
+  GROUP BY method;
+  ```
+
 ### Exit Plan Optimization
 - **Smart Exit Pricing**: 
   - High confidence trades (≥85%): Use $0.999 exit price for maximum profit

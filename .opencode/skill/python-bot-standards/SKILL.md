@@ -50,6 +50,29 @@ trade_id = execute_trade(trade_params, is_reversal=False)
 - Use directional voting with weighted signal aggregation
 - Test confidence ranges (0-100%) and bias validation thoroughly
 
+### Bayesian Confidence Calculation (v0.5.0+)
+- **Dual Calculation System**: Both additive and Bayesian methods are calculated simultaneously for A/B testing
+- **Configuration Flag**: `BAYESIAN_CONFIDENCE` in `src/config/settings.py` toggles between methods (default: NO)
+- **Bayesian Formula**:
+  ```python
+  # Start with market prior from Polymarket orderbook
+  prior_odds = p_up / (1 - p_up)
+  log_odds = ln(prior_odds)
+
+  # Accumulate evidence from all signals
+  for each signal:
+      evidence = (score - 0.5) * 2  # -1 to +1
+      log_LR = evidence * 3.0 * quality  # Calibration with quality
+      log_odds += log_LR × weight
+
+  # Convert to probability
+  confidence = 1 / (1 + exp(-log_odds))
+  ```
+- **Quality Factors** (0.7-1.5x): Applied to log-likelihood strength for each signal
+- **Market Prior**: Anchors calculation to Polymarket orderbook probability
+- **A/B Testing**: Both methods stored in `raw_scores` dictionary and database for comparison
+- **Database Schema**: Migration 007 adds `additive_confidence`, `additive_bias`, `bayesian_confidence`, `bayesian_bias`, `market_prior_p_up` columns
+
 ### Audit Trail Requirements (v0.4.2+)
 - Log all scale-in order lifecycle events with consistent formatting
 - Use standardized emojis: 🎯 (placement), ✅ (filled), 🧹 (cancellation), ⚠️ (race condition)
@@ -160,6 +183,14 @@ trade_id = execute_trade(trade_params, is_reversal=False)
 - **Batch Processing**: Efficient handling of multiple notifications at once
 
 ## Version History
+
+### v0.5.0 (Jan 2026)
+- **Bayesian Confidence Calculation**: Implemented statistically principled probability calculation using log-odds and likelihood ratios
+- **Dual Calculation System**: Both additive and Bayesian methods calculated simultaneously for A/B testing
+- **Market Prior Integration**: Bayesian method uses Polymarket orderbook probability as prior for anchored calculations
+- **Quality Factor System**: Evidence strength modulated by signal quality (0.7-1.5x multiplier on log-likelihood)
+- **Database Migration 007**: Added columns for storing both methods' results and market prior
+- **Configuration Toggle**: `BAYESIAN_CONFIDENCE` flag enables Bayesian method for production use
 
 ### v0.4.4 (Jan 2026)
 - **Exit Order Repair Fix**: Prevent infinite repair loops from exchange rounding differences (0.05 threshold)
