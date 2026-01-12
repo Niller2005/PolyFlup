@@ -18,7 +18,7 @@ from src.trading.orders import (
 )
 from src.trading.logic import MIN_SIZE
 
-from .shared import _last_exit_attempt, _last_balance_sync
+from .shared import _last_exit_attempt, _last_balance_sync, _recent_fills
 
 
 def get_optimal_exit_price(
@@ -105,6 +105,16 @@ def _check_exit_plan(
         age = 0
     last_att = _last_exit_attempt.get(trade_id, 0)
     on_cd = now.timestamp() - last_att < 10
+
+    # Add cooldown after fill detection to allow balance API to catch up
+    last_fill = _recent_fills.get(trade_id, 0)
+    fill_cooldown = now.timestamp() - last_fill < 3
+    if fill_cooldown and last_fill > 0:
+        if verbose:
+            log(
+                f"   ⏳ [{symbol}] Balance API cooldown: {3 - (now.timestamp() - last_fill):.1f}s after fill (prevents zero-balance lag errors)"
+            )
+        return
 
     if not limit_sell_id:
         if True:  # Removed EXIT_MIN_POSITION_AGE check for immediate placement

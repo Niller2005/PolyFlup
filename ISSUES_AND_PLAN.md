@@ -251,11 +251,16 @@ Balance API is returning inflated values (20.00 instead of 10.00) even though al
     - ✅ Root cause identified: API returning "FILLED" status for unfilled orders
     - ✅ Added 2-second delay after batch order placement
     - ✅ Added order verification via get_order() after delay
-    - ✅ Use verified status instead of batch API response
+    - ✅ Use verified status instead of batch response
     - ✅ Only save as FILLED if size_matched > 0
     - ✅ Log verified orders as LIVE when still waiting
+    - ✅ Fix commit: Use verified_status instead of actual_status (commit `4001384`)
     - 🔄 Monitor next 10-20 trades to ensure no phantom FILLED status
-4. **MONITOR**: USDC balance and settlement flow (Issue #3)
+4. ✅ **COMPLETED**: Monitoring UI improvements (commit `9287f72`)
+    - ✅ Add USDC balance to monitoring output
+    - ✅ Log settlement releases with USDC amount
+    - ✅ Add balance low warning when USDC < $10
+5. **MONITOR**: USDC balance and settlement flow (Issue #3)
     - Check if settlements are releasing funds properly
     - Verify no funds locked in pending orders
 
@@ -282,9 +287,9 @@ Balance API is returning inflated values (20.00 instead of 10.00) even though al
 
 ## Quick Wins (Low Effort)
 
-1. **Add USDC balance to monitoring output**: Show available funds in position reports
-2. **Log settlement releases**: When a position settles, log "Released $X.XX USDC to wallet"
-3. **Add balance low warning**: Alert when USDC < $10 to avoid scale-in failures
+1. ✅ **COMPLETED**: Add USDC balance to monitoring output (commit `9287f72`)
+2. ✅ **COMPLETED**: Log settlement releases (commit `9287f72`)
+3. ✅ **COMPLETED**: Add balance low warning (commit `9287f72`)
 
 ---
 

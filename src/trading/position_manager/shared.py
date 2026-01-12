@@ -11,3 +11,6 @@ _last_exit_attempt = {}
 
 # Track last balance sync timestamp to prevent rapid repeated syncing (prevents phantom share inflation)
 _last_balance_sync = {}
+
+# Track recent fills to add cooldown before balance queries (prevents zero balance API lag issues)
+_recent_fills = {}

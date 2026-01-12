@@ -19,6 +19,7 @@ from src.trading.settlement import force_settle_trade
 from src.trading.logic import MIN_SIZE
 from .shared import _position_check_lock
 from .shared import _scale_in_order_lock
+from .shared import _recent_fills
 from .reconciliation import safe_cancel_order, is_recently_filled, track_recent_fill
 from .pnl import _get_position_pnl
 from .stop_loss import _check_stop_loss
@@ -272,6 +273,8 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                 (tid,),
                             )
                             curr_b_status = "FILLED"
+                            # Track recent fill for balance API cooldown
+                            _recent_fills[tid] = now.timestamp()
 
                     if curr_b_status not in ["FILLED", "MATCHED"]:
                         continue
