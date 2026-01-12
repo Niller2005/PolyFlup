@@ -61,8 +61,9 @@ def save_trade(cursor=None, **kwargs):
             side, edge, entry_price, size, bet_usd, p_yes, best_bid, best_ask,
             imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered, reversal_triggered_at,
             up_total, down_total, momentum_score, momentum_dir, flow_score, flow_dir,
-            divergence_score, divergence_dir, vwm_score, vwm_dir, pm_mom_score, pm_mom_dir, adx_score, adx_dir, lead_lag_bonus)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            divergence_score, divergence_dir, vwm_score, vwm_dir, pm_mom_score, pm_mom_dir, adx_score, adx_dir, lead_lag_bonus,
+            additive_confidence, additive_bias, bayesian_confidence, bayesian_bias, market_prior_p_up)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 datetime.now(tz=ZoneInfo("UTC")).isoformat(),
@@ -103,6 +104,11 @@ def save_trade(cursor=None, **kwargs):
                 kwargs.get("adx_score"),
                 kwargs.get("adx_dir"),
                 kwargs.get("lead_lag_bonus"),
+                kwargs.get("additive_confidence"),
+                kwargs.get("additive_bias"),
+                kwargs.get("bayesian_confidence"),
+                kwargs.get("bayesian_bias"),
+                kwargs.get("market_prior_p_up"),
             ),
         )
         return cursor.lastrowid
@@ -116,8 +122,9 @@ def save_trade(cursor=None, **kwargs):
                 side, edge, entry_price, size, bet_usd, p_yes, best_bid, best_ask,
                 imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered, reversal_triggered_at,
                 up_total, down_total, momentum_score, momentum_dir, flow_score, flow_dir,
-                divergence_score, divergence_dir, vwm_score, vwm_dir, pm_mom_score, pm_mom_dir, adx_score, adx_dir, lead_lag_bonus)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                divergence_score, divergence_dir, vwm_score, vwm_dir, pm_mom_score, pm_mom_dir, adx_score, adx_dir, lead_lag_bonus,
+                additive_confidence, additive_bias, bayesian_confidence, bayesian_bias, market_prior_p_up)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     datetime.now(tz=ZoneInfo("UTC")).isoformat(),
@@ -158,6 +165,11 @@ def save_trade(cursor=None, **kwargs):
                     kwargs.get("adx_score"),
                     kwargs.get("adx_dir"),
                     kwargs.get("lead_lag_bonus"),
+                    kwargs.get("additive_confidence"),
+                    kwargs.get("additive_bias"),
+                    kwargs.get("bayesian_confidence"),
+                    kwargs.get("bayesian_bias"),
+                    kwargs.get("market_prior_p_up"),
                 ),
             )
             trade_id = c.lastrowid

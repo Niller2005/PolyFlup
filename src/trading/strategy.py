@@ -15,6 +15,7 @@ from src.config.settings import (
     ENABLE_PRICE_VALIDATION,
     PRICE_VALIDATION_MAX_MOVEMENT,
     PRICE_VALIDATION_MIN_CONFIDENCE,
+    BAYESIAN_CONFIDENCE,
 )
 from src.utils.logger import log, log_error
 from src.trading.orders.utils import is_404_error
@@ -31,6 +32,7 @@ from src.data.market_data import (
     validate_price_movement_for_trade,
 )
 import requests
+import numpy as np
 
 
 def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
@@ -278,6 +280,14 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
     else:
         adx_quality = 1.0
 
+    # Log-likelihood helper for Bayesian approach
+    def log_likelihood(score: float, direction: str, quality: float) -> float:
+        evidence = (score - 0.5) * 2  # -1 to +1
+        log_LR = evidence * 3.0 * quality  # Calibration factor with quality
+        if direction == "DOWN":
+            log_LR = -log_LR
+        return log_LR
+
     # Apply weights with quality factors
     for score, direction, weight, quality in [
         (momentum_score, momentum_dir, mom_weight, mom_quality),
@@ -290,30 +300,71 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         if direction == "UP":
             up_total += score * weight * quality
         elif direction == "DOWN":
-            down_total += score * weight
+            down_total += score * weight * quality
 
-    # Final Decision
+    # Calculate additive confidence (for A/B testing)
     if up_total > down_total:
-        bias = "UP"
-        # Confirmation bonus: if Binance and PM both agree on direction
+        additive_bias = "UP"
         if momentum_dir == pm_mom_dir and momentum_dir == "UP":
-            up_total *= 1.1  # Reduced from 1.2 to be more conservative
-
-        # Bold scaling: 0.4 score = 60% confidence
-        confidence = (up_total - (down_total * 0.2)) * lead_lag_bonus
+            additive_up_total = up_total * 1.1
+        else:
+            additive_up_total = up_total
+        additive_confidence = (additive_up_total - (down_total * 0.2)) * lead_lag_bonus
     elif down_total > up_total:
-        bias = "DOWN"
+        additive_bias = "DOWN"
         if momentum_dir == pm_mom_dir and momentum_dir == "DOWN":
-            down_total *= 1.1  # Reduced from 1.2 to be more conservative
-
-        confidence = (down_total - (up_total * 0.2)) * lead_lag_bonus
-
+            additive_down_total = down_total * 1.1
+        else:
+            additive_down_total = down_total
+        additive_confidence = (additive_down_total - (up_total * 0.2)) * lead_lag_bonus
     else:
-        bias = "NEUTRAL"
-        confidence = 0.0
+        additive_bias = "NEUTRAL"
+        additive_confidence = 0.0
 
-    # Normalize confidence to 0-1
-    confidence = max(0.0, min(1.0, confidence))
+    # Normalize additive confidence
+    additive_confidence = max(0.0, min(1.0, additive_confidence))
+
+    # Calculate Bayesian confidence (for A/B testing)
+    # Start with market prior from Polymarket orderbook
+    prior_odds = p_up / (1 - p_up) if p_up != 1.0 else 10.0
+    bayesian_log_odds = np.log(prior_odds) if prior_odds > 0 else 0.0
+
+    # Accumulate evidence from all signals
+    for score, direction, weight, quality in [
+        (momentum_score, momentum_dir, mom_weight, mom_quality),
+        (pm_mom_score, pm_mom_dir, pm_mom_weight, pm_mom_quality),
+        (flow_score, flow_dir, flow_weight, flow_quality),
+        (divergence_score, divergence_dir, div_weight, divergence_quality),
+        (vwm_score, vwm_dir, vwm_weight, vwm_quality),
+        (adx_score, adx_dir, adx_weight, adx_quality),
+    ]:
+        bayesian_log_odds += log_likelihood(score, direction, quality) * weight
+
+    # Convert log-odds back to probability
+    bayesian_confidence = 1 / (1 + np.exp(-bayesian_log_odds))
+
+    # Apply lead-lag bonus as multiplier on final confidence
+    bayesian_confidence *= lead_lag_bonus
+
+    # Determine bias from sign of log-odds
+    if bayesian_log_odds > 0:
+        bayesian_bias = "UP"
+    elif bayesian_log_odds < 0:
+        bayesian_bias = "DOWN"
+    else:
+        bayesian_bias = "NEUTRAL"
+
+    # Select active confidence based on configuration
+    if BAYESIAN_CONFIDENCE:
+        confidence = bayesian_confidence
+        bias = bayesian_bias
+        log(
+            f"[{symbol}] 🔬 Using Bayesian confidence (p_up={p_up:.3f}): "
+            f"{confidence:.1%} | Additive would be: {additive_confidence:.1%}"
+        )
+    else:
+        confidence = additive_confidence
+        bias = additive_bias
 
     # Multi-confirmation system with graduated reduction (starting at 60%)
     if confidence > 0.60:
@@ -464,6 +515,12 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
         "adx_score": adx_score,
         "adx_dir": adx_dir,
         "lead_lag_bonus": lead_lag_bonus,
+        # A/B Testing: store both methods for comparison
+        "additive_confidence": additive_confidence,
+        "additive_bias": additive_bias,
+        "bayesian_confidence": bayesian_confidence,
+        "bayesian_bias": bayesian_bias,
+        "market_prior_p_up": p_up,
     }
 
     # Price Movement Validation for High Confidence Trades

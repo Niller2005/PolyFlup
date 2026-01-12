@@ -157,6 +157,7 @@ uv run python -c "import sqlite3; conn = sqlite3.connect('trades.db'); c = conn.
 | 4 | Add reversal_triggered_at column | ✅ | 2025-12 |
 | 5 | Add last_scale_in_at column | ✅ | 2025-12 |
 | 6 | Add signal score columns for calibration | ✅ | 2026-01 |
+| 7 | Add Bayesian comparison columns for A/B testing | ✅ | 2026-01 |
 
 ### Migration 006: Signal Score Columns
 
@@ -182,6 +183,77 @@ Migration 006 adds 14 raw signal score columns to the `trades` table:
 - `calibrate_formula.py`: Tests formula variants and recommends optimal parameters
 
 **Note**: Run the bot for ~100 trades with raw signal data before running `calibrate_formula.py` for reliable results.
+
+### Migration 007: Bayesian Comparison Columns
+
+**Purpose**: Enable A/B testing between additive and Bayesian confidence calculation methods.
+
+Migration 007 adds 5 comparison columns to `trades` table:
+- `additive_confidence`: Original additive confidence calculation (for comparison)
+- `additive_bias`: Original additive directional bias (UP/DOWN/NEUTRAL)
+- `bayesian_confidence`: New Bayesian confidence using log-likelihood accumulation
+- `bayesian_bias`: Bayesian directional bias (UP/DOWN/NEUTRAL)
+- `market_prior_p_up`: Polymarket orderbook probability (market implied prior)
+
+**Bayesian Calculation**:
+The new method uses a proper Bayesian framework:
+1. **Starts with market prior**: Uses `p_up` from Polymarket orderbook as baseline
+2. **Accumulates log-likelihood ratios**: Each signal contributes log(LR) × weight
+3. **Converts to probability**: `confidence = 1 / (1 + exp(-log_odds))`
+
+**Advantages over additive method**:
+- Properly combines independent evidence using probability theory
+- Naturally handles conflicting signals (they cancel out)
+- Prior from market price anchors the calculation to reality
+- Can incorporate changing uncertainty over time
+
+**Formula**:
+```python
+# Log-likelihood from signal
+evidence = (score - 0.5) * 2  # -1 to +1
+log_LR = evidence * 3.0 * quality  # Calibration factor with quality
+
+# Accumulate evidence
+log_odds = ln(prior_odds) + sum(log_LR × weight)
+
+# Convert to probability
+confidence = 1 / (1 + exp(-log_odds))
+```
+
+**Usage**:
+- Set `BAYESIAN_CONFIDENCE = NO` in `.env` to use additive (current)
+- Set `BAYESIAN_CONFIDENCE = YES` to use Bayesian (new)
+- Both methods are always calculated and stored for comparison
+- After ~100 trades, compare win rates between methods
+
+**How to compare**:
+```sql
+SELECT 
+    AVG(edge) as avg_edge,
+    COUNT(*) as total,
+    SUM(CASE WHEN result='WIN' THEN 1 ELSE 0 END) as wins,
+    CAST(wins AS REAL) / COUNT(*) as win_rate
+FROM trades
+WHERE settled = 1
+GROUP BY 
+    CASE WHEN bayesian_confidence > additive_confidence THEN 'Bayesian higher'
+         WHEN additive_confidence > bayesian_confidence THEN 'Additive higher'
+         ELSE 'Equal' END;
+```
+
+**Related Files**:
+- `src/config/settings.py`: Add `BAYESIAN_CONFIDENCE` flag
+- `src/trading/strategy.py`: Bayesian calculation implementation
+- `src/data/database.py`: Updated `save_trade()` to include new columns
+- `src/data/migrations.py`: Migration 007 function definition
+
+**Configuration**:
+Add to `.env`:
+```env
+BAYESIAN_CONFIDENCE=NO  # Set to YES to enable
+```
+
+**Note**: Collect 100+ trades before switching to Bayesian mode. The A/B comparison data will help determine which method performs better.
 
 
 ## Checking Migration Status

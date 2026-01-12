@@ -155,6 +155,9 @@ PRICE_VALIDATION_VOLATILITY_THRESHOLD = float(
     os.getenv("PRICE_VALIDATION_VOLATILITY_THRESHOLD", "0.7")
 )  # High volatility threshold
 
+# Bayesian Confidence Calculation
+BAYESIAN_CONFIDENCE = os.getenv("BAYESIAN_CONFIDENCE", "NO").upper() == "YES"
+
 # Constants
 BINANCE_FUNDING_MAP = {
     "BTC": "BTCUSDT",

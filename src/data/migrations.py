@@ -146,6 +146,30 @@ def migration_006_add_signal_score_columns(conn: Any) -> None:
             log(f"    ✓ {col_name} already exists")
 
 
+def migration_007_add_bayesian_comparison_columns(conn: Any) -> None:
+    """Add Bayesian confidence comparison columns for A/B testing against additive method"""
+    c = conn.cursor()
+
+    c.execute("PRAGMA table_info(trades)")
+    columns = [row[1] for row in c.fetchall()]
+
+    new_columns = [
+        ("additive_confidence", "REAL"),
+        ("additive_bias", "TEXT"),
+        ("bayesian_confidence", "REAL"),
+        ("bayesian_bias", "TEXT"),
+        ("market_prior_p_up", "REAL"),
+    ]
+
+    for col_name, col_type in new_columns:
+        if col_name not in columns:
+            log(f"  - Adding {col_name} column...")
+            c.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
+            log(f"    ✓ {col_name} added")
+        else:
+            log(f"    ✓ {col_name} already exists")
+
+
 # Migration registry: version -> migration function
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
@@ -165,6 +189,11 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
         6,
         "Add signal score columns for calibration",
         migration_006_add_signal_score_columns,
+    ),
+    (
+        7,
+        "Add Bayesian comparison columns for A/B testing",
+        migration_007_add_bayesian_comparison_columns,
     ),
 ]
 
