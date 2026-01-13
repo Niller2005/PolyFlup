@@ -87,7 +87,7 @@ def _check_stop_loss(
             return False  # Don't stop loss in the same cycle as reversal trigger
 
     # HEDGED STOP LOSS LOGIC (Enhanced Multi-Check)
-    # First, calculate time since reversal for all checks
+    # First, calculate time since reversal for all hedge checks
     try:
         if not reversal_triggered_at:
             seconds_since_rev = 0
@@ -96,6 +96,10 @@ def _check_stop_loss(
             seconds_since_rev = (now - rev_time).total_seconds()
     except:
         seconds_since_rev = 0
+
+    # Calculate window end and time left
+    window_end = datetime.fromisoformat(window_end_str) if window_end_str else None
+    time_left = (window_end - now).total_seconds() if window_end else 900
 
     # 0. Hedge Size Balance Check (if hedge is much larger than original)
     if reversal_triggered and seconds_since_rev > 10:
@@ -133,10 +137,6 @@ def _check_stop_loss(
         else:
             # 3. Time Check (Dynamic Cooldown)
             # Dynamic cooldown: max 10% of remaining window time, capped at 120s
-            window_end = (
-                datetime.fromisoformat(window_end_str) if window_end_str else None
-            )
-            time_left = (window_end - now).total_seconds() if window_end else 900
             dynamic_cooldown = min(120, time_left * 0.10)
 
             if seconds_since_rev < dynamic_cooldown:
@@ -145,53 +145,6 @@ def _check_stop_loss(
                         f"⏳ [{symbol}] #{trade_id} HEDGE COOLDOWN: {seconds_since_rev:.0f}s/{dynamic_cooldown:.0f}s passed. Holding..."
                     )
                 return False
-
-            # 4. Time Pressure Exit (less than 2 minutes left)
-            if time_left < 120:
-                log(
-                    f"🛑 [{symbol}] #{trade_id} HEDGE TIMEOUT: Only {time_left:.0f}s left. Clearing both sides."
-                )
-            else:
-                # 5. Strategy Confirmation with Relative Confidence
-                try:
-                    client = get_clob_client()
-                    up_id, _ = get_token_ids(symbol)
-                    if not up_id:
-                        return False
-
-                    conf, bias, _, _, _, _, _ = calculate_confidence(
-                        symbol, up_id, client
-                    )
-
-                    target_bias = "DOWN" if side == "UP" else "UP"
-
-                    # Fetch original confidence from database for relative comparison
-                    c.execute("SELECT confidence FROM trades WHERE id = ?", (trade_id,))
-                    orig_conf_row = c.fetchone()
-                    original_confidence = orig_conf_row[0] if orig_conf_row else 0.50
-
-                    # Hedge confidence must be significantly better than original adjusted threshold
-                    confidence_threshold = max(0.30, (1.0 - original_confidence * 0.50))
-
-                    if bias == target_bias and conf > confidence_threshold:
-                        log(
-                            f"🛡️  [{symbol}] #{trade_id} HEDGE CONFIRMED: Strategy favors {bias} @ {conf:.1%} (threshold: {confidence_threshold:.1%}). Clearing losing side."
-                        )
-                    elif seconds_since_rev > 180 and conf < 0.35:
-                        # Confidence improvement timeout: after 3 minutes with weak signal, cut losses
-                        log(
-                            f"🛑 [{symbol}] #{trade_id} HEDGE FAILED: Confidence {conf:.1%} below 35% after 180s. Clearing losing side."
-                        )
-                    else:
-                        # Still holding hedge
-                        if int(seconds_since_rev) % 60 == 0:
-                            log(
-                                f"🛡️  [{symbol}] #{trade_id} HEDGE ACTIVE: Waiting for strategy flip (Current: {bias} @ {conf:.1%}, threshold: {confidence_threshold:.1%})"
-                            )
-                        return False
-                except Exception as e:
-                    log_error(f"Error checking hedge confirmation for {symbol}: {e}")
-                    return False
 
             # 4. Time Pressure Exit (less than 2 minutes left)
             if time_left < 120:
@@ -344,7 +297,7 @@ def _check_stop_loss(
             log(
                 f"   🔓 [{symbol}] #{trade_id} Cancelled existing exit plan to execute stop loss."
             )
-            # Clear the exit order ID to prevent re-using it
+            # Clear of exit order ID to prevent re-using it
             c.execute(
                 "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
                 (trade_id,),
