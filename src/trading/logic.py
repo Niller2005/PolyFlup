@@ -135,16 +135,22 @@ def _check_target_price_alignment(
 ) -> bool:
     """Check if target price alignment allows trading"""
 
-    # 1. Winning Side Only Filter: Strictly skip underdog positions (price < $0.50)
-    # This enforces the "Only winning side" mandate.
+    # 1. Winning Side Only Filter: Skip underdog positions (price < $0.50) unless confidence is high
+    # This allows underdog trades only when the signal is strong (confidence >= 60%)
     is_underdog = current_price < 0.50
 
-    if is_underdog:
+    if is_underdog and confidence < 0.60:
         if verbose:
             log(
-                f"[{symbol}] ⚠️  {side} is UNDERDOG (${current_price:.2f}). Only entering WINNING side positions. SKIPPING."
+                f"[{symbol}] ⚠️  {side} is UNDERDOG (${current_price:.2f}) with LOW confidence ({confidence:.1%}). SKIPPING."
             )
         return False
+
+    if is_underdog and confidence >= 0.60:
+        if verbose:
+            log(
+                f"[{symbol}] ✅ {side} is UNDERDOG (${current_price:.2f}) but HIGH confidence ({confidence:.1%}). ALLOWING."
+            )
 
     # 2. Spot-vs-Target Alignment (Safety Layer)
     if target_price > 0 and current_spot > 0:
@@ -249,7 +255,7 @@ def _prepare_trade_params(
     if verbose and bias != "NEUTRAL":
         log(
             f"[{symbol}] 🧪 A/B TEST: Using {method_used} confidence (p_up={p_up:.3f}): "
-            f"{confidence:.1%} | {method_used}: {confidence:.1%}, ADDITIVE: {raw_scores.get('additive_confidence', 0):.1%}"
+            f"{confidence:.1%} | BAYESIAN: {raw_scores.get('bayesian_confidence', 0):.1%}, ADDITIVE: {raw_scores.get('additive_confidence', 0):.1%}"
         )
 
     if bias == "NEUTRAL" or best_bid is None or best_ask is None:
