@@ -18,7 +18,12 @@ from src.trading.orders import (
 )
 from src.trading.logic import MIN_SIZE
 
-from .shared import _last_exit_attempt, _last_balance_sync, _recent_fills
+from .shared import (
+    _last_exit_attempt,
+    _last_balance_sync,
+    _recent_fills,
+    _last_blocked_sync_warning,
+)
 
 
 def get_optimal_exit_price(
@@ -188,12 +193,17 @@ def _check_exit_plan(
                     needs_sync = True
                 else:
                     # SUSPICIOUS: Balance higher but no confirmed fill
-                    log(
-                        f"   🚨 [{symbol}] #{trade_id} BLOCKED BALANCE SYNC: "
-                        f"Balance={actual_bal:.2f} > DB size={size:.2f} "
-                        f"but scale-in order {scale_in_id[:10] if scale_in_id else 'none'} "
-                        f"not confirmed filled. Skipping sync to prevent phantom share inflation."
-                    )
+                    # Rate-limit warning to prevent log spam (max once per 60 seconds)
+                    last_warning_time = _last_blocked_sync_warning.get(trade_id, 0)
+                    warning_interval = now.timestamp() - last_warning_time
+                    if warning_interval >= 60 or last_warning_time == 0:
+                        log(
+                            f"   🚨 [{symbol}] #{trade_id} BLOCKED BALANCE SYNC: "
+                            f"Balance={actual_bal:.2f} > DB size={size:.2f} "
+                            f"but scale-in order {scale_in_id[:10] if scale_in_id else 'none'} "
+                            f"not confirmed filled. Skipping sync to prevent phantom share inflation."
+                        )
+                        _last_blocked_sync_warning[trade_id] = now.timestamp()
             elif age > 60 and scale_in_age > 60 and abs(actual_bal - size) > 0.0001:
                 needs_sync = True  # Periodic sync for other cases
 
@@ -392,12 +402,17 @@ def _check_exit_plan(
                         needs_sync = True
                     else:
                         # SUSPICIOUS: Balance higher but no confirmed fill
-                        log(
-                            f"   🚨 [{symbol}] #{trade_id} BLOCKED BALANCE SYNC (LIVE order): "
-                            f"Balance={actual_bal:.2f} > DB size={size:.2f} "
-                            f"but scale-in order {scale_in_id[:10] if scale_in_id else 'none'} "
-                            f"not confirmed filled. Skipping sync to prevent phantom share inflation."
-                        )
+                        # Rate-limit warning to prevent log spam (max once per 60 seconds)
+                        last_warning_time = _last_blocked_sync_warning.get(trade_id, 0)
+                        warning_interval = now.timestamp() - last_warning_time
+                        if warning_interval >= 60 or last_warning_time == 0:
+                            log(
+                                f"   🚨 [{symbol}] #{trade_id} BLOCKED BALANCE SYNC (LIVE order): "
+                                f"Balance={actual_bal:.2f} > DB size={size:.2f} "
+                                f"but scale-in order {scale_in_id[:10] if scale_in_id else 'none'} "
+                                f"not confirmed filled. Skipping sync to prevent phantom share inflation."
+                            )
+                            _last_blocked_sync_warning[trade_id] = now.timestamp()
                 elif age > 60 and scale_in_age > 60 and abs(actual_bal - size) > 0.0001:
                     needs_sync = (
                         True  # Periodic sync for other cases (e.g. fewer tokens)

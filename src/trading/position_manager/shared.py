@@ -14,3 +14,6 @@ _last_balance_sync = {}
 
 # Track recent fills to add cooldown before balance queries (prevents zero balance API lag issues)
 _recent_fills = {}
+
+# Track last blocked balance sync warning to prevent log spam
+_last_blocked_sync_warning = {}
