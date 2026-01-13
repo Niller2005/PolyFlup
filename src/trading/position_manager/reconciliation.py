@@ -259,31 +259,3 @@ def verify_order_unfilled(order_id: str, max_retries: int = 2) -> bool:
     log(f"   ⚠️  RECONCILIATION AUDIT: Inconclusive verification for {order_id_str[:10]} after {max_retries} attempts, assuming unfilled for safety")
     return True
 
-            # Unknown status, try again
-            if attempt < max_retries - 1:
-                # AUDIT: Retrying verification
-                log(
-                    f"   ⏳ RECONCILIATION AUDIT: Unknown status for {order_id[:10]}, retrying in 0.1s..."
-                )
-                time.sleep(0.1)  # Brief delay before retry
-
-        except Exception as e:
-            if attempt < max_retries - 1:
-                # AUDIT: Error on attempt, retrying
-                log(
-                    f"   ⚠️  RECONCILIATION AUDIT: Error on attempt {attempt + 1} for {order_id[:10]}: {e}, retrying..."
-                )
-                time.sleep(0.1)  # Brief delay before retry
-            else:
-                # AUDIT: Final verification failure
-                log(
-                    f"   ❌ RECONCILIATION AUDIT: Failed to verify order status for {order_id[:10]} after {max_retries} attempts: {e}"
-                )
-                return False
-
-    # If we get here, we couldn't confirm status - assume it's unfilled (safer)
-    # AUDIT: Inconclusive verification, assuming unfilled for safety
-    log(
-        f"   ⚠️  RECONCILIATION AUDIT: Inconclusive verification for {order_id[:10]} after {max_retries} attempts, assuming unfilled for safety"
-    )
-    return True
