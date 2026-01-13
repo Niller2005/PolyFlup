@@ -290,6 +290,12 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                     order_id_short = order_id[:10] if len(order_id) > 10 else order_id
                     log(f"🔍 [{symbol}] CANCEL {order_id_short}")
 
+                    # Clear order_id and mark as cancelled to prevent monitoring ghost orders
+                    c.execute(
+                        "UPDATE trades SET order_id = NULL, order_status = 'CANCELLED' WHERE id = ?",
+                        (trade_id,),
+                    )
+
     except Exception as e:
         log_error(f"Error handling order cancellation notification: {e}")
 
