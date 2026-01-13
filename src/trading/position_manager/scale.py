@@ -44,6 +44,16 @@ def _check_scale_in(
     if not ENABLE_SCALE_IN:
         return
 
+    # Scale-in gating: Skip if USDC balance is too low (< $5.00 minimum)
+    bal_info = get_balance_allowance()
+    usdc_balance = bal_info.get("balance", 0) if bal_info else 0
+    if usdc_balance < 5.0:
+        if verbose:
+            log(
+                f"   ⏭️  [{symbol}] #{trade_id} Scale-in skipped: USDC balance too low (${usdc_balance:.2f} < $5.00 minimum)"
+            )
+        return
+
     # Early exit: Do not scale in to unfilled orders
     if buy_order_status not in ["FILLED", "MATCHED"]:
         return
@@ -198,9 +208,13 @@ def _check_scale_in(
     maker_price = bid if bid else current_price
     maker_price = max(0.01, min(0.99, round(maker_price, 2)))
 
+    # Check USDC balance before attempt for better debugging
+    bal_info = get_balance_allowance()
+    usdc_balance = bal_info.get("balance", 0) if bal_info else 0
+
     # AUDIT: Scale-in order placement initiated
     log(
-        f"📈 [{symbol}] Trade #{trade_id} {side} | 🎯 SCALE-IN PLACEMENT: Initiating maker order | size={s_size:.2f}, price=${maker_price:.2f}, time_left={t_left:.0f}s, confidence={confidence:.2f}"
+        f"📈 [{symbol}] Trade #{trade_id} {side} | 🎯 SCALE-IN PLACEMENT: Initiating maker order | size={s_size:.2f}, price=${maker_price:.2f}, time_left={t_left:.0f}s, confidence={confidence:.2f} | 💰 USDC: ${usdc_balance:.2f}"
     )
 
     # Use LIMIT order for scale-in to ensure maker fill
@@ -263,7 +277,7 @@ def _check_scale_in(
                 )
     else:
         # AUDIT: Scale-in order placement failed
-        error_msg = res.get('error', 'Unknown error')
+        error_msg = res.get("error", "Unknown error")
         log(
             f"📈 [{symbol}] Trade #{trade_id} {side} | ❌ SCALE-IN PLACEMENT FAILED: {error_msg}"
         )

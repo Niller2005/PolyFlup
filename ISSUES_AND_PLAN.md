@@ -265,9 +265,11 @@ Balance API is returning inflated values (20.00 instead of 10.00) even though al
     - Verify no funds locked in pending orders
 
 ### Phase 2: Short-term (Next Week)
-4. **IMPROVE**: Balance API lag handling (Issue #2)
-   - Add 2-3 second cooldown after fills before balance queries
-   - Implement retry with backoff for zero balance responses
+4. ✅ **COMPLETED**: Balance API lag handling (Issue #2, commit `2d5b0c8`)
+   - ✅ Add 3-second cooldown after fills before balance queries
+   - ✅ Track recent fills to prevent premature balance API calls
+   - ✅ Prevents "Insufficient funds" errors from balance API lag after fills
+5. **IMPROVE**: Scale-in failure root cause (Issue #3)
 5. **ANALYZE**: Scale-in failure root cause (Issue #3)
    - Add USDC balance monitoring and logging
    - Implement scale-in gating based on available funds
