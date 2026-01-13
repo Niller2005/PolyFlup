@@ -83,7 +83,9 @@ def calculate_metrics(trades: List[Dict], method: str) -> Dict:
     filtered = []
     for trade in trades:
         conf = trade[method_conf]
-        if conf and conf > 0:
+        # Only include trades where bot actually used this method
+        # (edge column stores the method actually used)
+        if conf and conf > 0 and abs(trade["edge"] - conf) < 0.001:
             filtered.append(trade)
 
     results["total"] = len(filtered)
@@ -98,8 +100,8 @@ def calculate_metrics(trades: List[Dict], method: str) -> Dict:
         results["wins"] / results["total"] if results["total"] > 0 else 0
     )
 
-    # Average edge and PnL
-    results["avg_edge"] = sum(t["edge"] for t in filtered) / results["total"]
+    # Average edge and PnL - use method-specific confidence, not shared 'edge' column
+    results["avg_edge"] = sum(t[method_conf] for t in filtered) / results["total"]
     results["avg_pnl"] = sum(t["pnl_usd"] for t in filtered) / results["total"]
 
     # By confidence buckets
@@ -237,8 +239,14 @@ def compare_methods(trades: List[Dict]) -> None:
         ("Additive", "additive_confidence"),
         ("Bayesian", "bayesian_confidence"),
     ]:
+        # Filter trades where this method's confidence matches the 'edge' column (actual used method)
+        # This shows trades that were actually executed using this method
         top_trades = sorted(
-            [t for t in trades if t.get(method_conf, 0) > 0],
+            [
+                t
+                for t in trades
+                if t.get(method_conf, 0) > 0 and abs(t["edge"] - t[method_conf]) < 0.001
+            ],
             key=lambda x: x["pnl_usd"],
             reverse=True,
         )[:3]
@@ -251,6 +259,8 @@ def compare_methods(trades: List[Dict]) -> None:
                     f"   {i}. {trade['symbol']} UP ${trade['pnl_usd']:.2f} "
                     f"| {ts} | Conf: {trade[method_conf]:.1%}"
                 )
+        else:
+            print(f"\n{method}: No trades executed with this method")
 
     print()
 
@@ -268,10 +278,47 @@ def main():
         if not trades:
             print("\n❌ No trades found with migration 007 data")
             print("   Make sure you've:")
-            print("   1. Run the bot after migration 007")
+            print("   1. Run bot after migration 007")
             print("   2. Let trades settle (result recorded)")
             print("   3. Have at least 10-20 trades for meaningful comparison")
             return
+
+        # Check if we have actual trades executed with both methods
+        trades_with_additive = sum(
+            1 for t in trades if abs(t["edge"] - t["additive_confidence"]) < 0.001
+        )
+        trades_with_bayesian = sum(
+            1 for t in trades if abs(t["edge"] - t["bayesian_confidence"]) < 0.001
+        )
+
+        if trades_with_additive == 0 and trades_with_bayesian == 0:
+            print("\n⚠️  WARNING: No trades matched either confidence method")
+            print("   This may indicate a database issue")
+            return
+        elif trades_with_bayesian == 0:
+            print(
+                f"\n⚠️  WARNING: Only additive confidence data ({trades_with_additive} trades)"
+            )
+            print("   No trades executed with BAYESIAN_CONFIDENCE=YES")
+            print("   To collect Bayesian data:")
+            print("   1. Stop the bot")
+            print("   2. Set BAYESIAN_CONFIDENCE=YES in .env")
+            print("   3. Run bot for 100+ trades")
+            print("   4. Let trades settle")
+            print("   5. Run this comparison again")
+            print("\n   Continuing with additive-only analysis...")
+        elif trades_with_additive == 0:
+            print(
+                f"\n⚠️  WARNING: Only Bayesian confidence data ({trades_with_bayesian} trades)"
+            )
+            print("   No trades executed with BAYESIAN_CONFIDENCE=NO (default)")
+            print("   To collect additive data:")
+            print("   1. Stop the bot")
+            print("   2. Set BAYESIAN_CONFIDENCE=NO in .env or remove the line")
+            print("   3. Run bot for 100+ trades")
+            print("   4. Let trades settle")
+            print("   5. Run this comparison again")
+            print("\n   Continuing with Bayesian-only analysis...")
 
         compare_methods(trades)
 
