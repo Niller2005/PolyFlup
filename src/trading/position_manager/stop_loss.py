@@ -47,6 +47,7 @@ def _check_stop_loss(
     scale_in_order_id=None,
     reversal_triggered=False,
     reversal_triggered_at=None,
+    window_end_str=None,
 ):
     """
     Check and execute stop loss.
@@ -62,7 +63,7 @@ def _check_stop_loss(
         return False
 
     # STOP LOSS / REVERSAL TRIGGER: Dynamic Headroom
-    # We use the $0.30 floor, but ensure at least $0.10 headspace for low-priced entries
+    # We use a $0.30 floor, but ensure at least $0.10 headspace for low-priced entries
     dynamic_trigger = min(STOP_LOSS_PRICE, entry_price - 0.10)
 
     # If price is above trigger, no action needed
@@ -85,57 +86,159 @@ def _check_stop_loss(
         if reversed_triggered:
             return False  # Don't stop loss in the same cycle as reversal trigger
 
-    # HEDGED STOP LOSS LOGIC (Triple Check)
+    # HEDGED STOP LOSS LOGIC (Enhanced Multi-Check)
+    # First, calculate time since reversal for all checks
+    try:
+        if not reversal_triggered_at:
+            seconds_since_rev = 0
+        else:
+            rev_time = datetime.fromisoformat(reversal_triggered_at)
+            seconds_since_rev = (now - rev_time).total_seconds()
+    except:
+        seconds_since_rev = 0
+
+    # 0. Hedge Size Balance Check (if hedge is much larger than original)
+    if reversal_triggered and seconds_since_rev > 10:
+        try:
+            # Query opposite side position for this symbol and window
+            c.execute(
+                "SELECT size, side FROM trades WHERE symbol = ? AND id != ? AND settled = 0 AND window_end = ?",
+                (symbol, trade_id, window_end_str),
+            )
+            hedge_positions = c.fetchall()
+
+            for hedge_size, hedge_side in hedge_positions:
+                # Check if this is an opposite side hedge
+                opposite_side = "DOWN" if side == "UP" else "UP"
+                if hedge_side == opposite_side:
+                    hedge_ratio = hedge_size / size if size > 0 else 1.0
+                    if hedge_ratio > 1.2:
+                        log(
+                            f"⚠️  [{symbol}] #{trade_id} HEDGE OVERSIZED: Hedge {hedge_size:.1f} ({hedge_ratio:.1f}x) vs original {size:.1f}. Clearing original to reduce waste."
+                        )
+        except Exception as e:
+            pass  # Non-critical check, don't fail if it errors
+
     # 1. Immediate Price Floor
     if current_price <= 0.15:
         log(
             f"🛑 [{symbol}] #{trade_id} CRITICAL FLOOR hit (${current_price:.2f}). Executing immediate stop loss."
         )
     else:
-        # 2. Time Check (Cooldown)
-        try:
-            if not reversal_triggered_at:
-                # Should not happen if triggered is True, but for safety
-                seconds_since_rev = 0
-            else:
-                rev_time = datetime.fromisoformat(reversal_triggered_at)
-                seconds_since_rev = (now - rev_time).total_seconds()
-        except:
-            seconds_since_rev = 0
+        # 2. PnL-Based Early Exit (if already deep in loss)
+        if pnl_pct < -40:
+            log(
+                f"🛑 [{symbol}] #{trade_id} HEDGE PNL EXIT: Original position down {pnl_pct:.1f}%. Cutting losses."
+            )
+        else:
+            # 3. Time Check (Dynamic Cooldown)
+            # Dynamic cooldown: max 10% of remaining window time, capped at 120s
+            window_end = (
+                datetime.fromisoformat(window_end_str) if window_end_str else None
+            )
+            time_left = (window_end - now).total_seconds() if window_end else 900
+            dynamic_cooldown = min(120, time_left * 0.10)
 
-        if seconds_since_rev < 120:
-            # Only log every 60s to avoid spam
-            if int(seconds_since_rev) % 60 == 0:
-                log(
-                    f"⏳ [{symbol}] #{trade_id} HEDGE COOLDOWN: {seconds_since_rev:.0f}s/120s passed. Holding..."
-                )
-            return False
-
-        # 3. Strategy Confirmation
-        # Check if the strategy now favors the opposite side with decent confidence
-        try:
-            client = get_clob_client()
-            up_id, _ = get_token_ids(symbol)
-            if not up_id:
-                return False
-
-            conf, bias, _, _, _, _, _ = calculate_confidence(symbol, up_id, client)
-
-            target_bias = "DOWN" if side == "UP" else "UP"
-            if bias == target_bias and conf > 0.30:
-                log(
-                    f"🛡️  [{symbol}] #{trade_id} HEDGE CONFIRMED: Strategy favors {bias} @ {conf:.1%}. Clearing losing side."
-                )
-            else:
-                # Still holding hedge
+            if seconds_since_rev < dynamic_cooldown:
                 if int(seconds_since_rev) % 60 == 0:
                     log(
-                        f"🛡️  [{symbol}] #{trade_id} HEDGE ACTIVE: Waiting for strategy flip (Current: {bias} @ {conf:.1%})"
+                        f"⏳ [{symbol}] #{trade_id} HEDGE COOLDOWN: {seconds_since_rev:.0f}s/{dynamic_cooldown:.0f}s passed. Holding..."
                     )
                 return False
-        except Exception as e:
-            log_error(f"Error checking hedge confirmation for {symbol}: {e}")
-            return False
+
+            # 4. Time Pressure Exit (less than 2 minutes left)
+            if time_left < 120:
+                log(
+                    f"🛑 [{symbol}] #{trade_id} HEDGE TIMEOUT: Only {time_left:.0f}s left. Clearing both sides."
+                )
+            else:
+                # 5. Strategy Confirmation with Relative Confidence
+                try:
+                    client = get_clob_client()
+                    up_id, _ = get_token_ids(symbol)
+                    if not up_id:
+                        return False
+
+                    conf, bias, _, _, _, _, _ = calculate_confidence(
+                        symbol, up_id, client
+                    )
+
+                    target_bias = "DOWN" if side == "UP" else "UP"
+
+                    # Fetch original confidence from database for relative comparison
+                    c.execute("SELECT confidence FROM trades WHERE id = ?", (trade_id,))
+                    orig_conf_row = c.fetchone()
+                    original_confidence = orig_conf_row[0] if orig_conf_row else 0.50
+
+                    # Hedge confidence must be significantly better than original adjusted threshold
+                    confidence_threshold = max(0.30, (1.0 - original_confidence * 0.50))
+
+                    if bias == target_bias and conf > confidence_threshold:
+                        log(
+                            f"🛡️  [{symbol}] #{trade_id} HEDGE CONFIRMED: Strategy favors {bias} @ {conf:.1%} (threshold: {confidence_threshold:.1%}). Clearing losing side."
+                        )
+                    elif seconds_since_rev > 180 and conf < 0.35:
+                        # Confidence improvement timeout: after 3 minutes with weak signal, cut losses
+                        log(
+                            f"🛑 [{symbol}] #{trade_id} HEDGE FAILED: Confidence {conf:.1%} below 35% after 180s. Clearing losing side."
+                        )
+                    else:
+                        # Still holding hedge
+                        if int(seconds_since_rev) % 60 == 0:
+                            log(
+                                f"🛡️  [{symbol}] #{trade_id} HEDGE ACTIVE: Waiting for strategy flip (Current: {bias} @ {conf:.1%}, threshold: {confidence_threshold:.1%})"
+                            )
+                        return False
+                except Exception as e:
+                    log_error(f"Error checking hedge confirmation for {symbol}: {e}")
+                    return False
+
+            # 4. Time Pressure Exit (less than 2 minutes left)
+            if time_left < 120:
+                log(
+                    f"🛑 [{symbol}] #{trade_id} HEDGE TIMEOUT: Only {time_left:.0f}s left. Clearing both sides."
+                )
+            else:
+                # 5. Strategy Confirmation with Relative Confidence
+                try:
+                    client = get_clob_client()
+                    up_id, _ = get_token_ids(symbol)
+                    if not up_id:
+                        return False
+
+                    conf, bias, _, _, _, _, _ = calculate_confidence(
+                        symbol, up_id, client
+                    )
+
+                    target_bias = "DOWN" if side == "UP" else "UP"
+
+                    # Fetch original confidence from database for relative comparison
+                    c.execute("SELECT confidence FROM trades WHERE id = ?", (trade_id,))
+                    orig_conf_row = c.fetchone()
+                    original_confidence = orig_conf_row[0] if orig_conf_row else 0.50
+
+                    # Hedge confidence must be significantly better than original adjusted threshold
+                    confidence_threshold = max(0.30, (1.0 - original_confidence * 0.50))
+
+                    if bias == target_bias and conf > confidence_threshold:
+                        log(
+                            f"🛡️  [{symbol}] #{trade_id} HEDGE CONFIRMED: Strategy favors {bias} @ {conf:.1%} (threshold: {confidence_threshold:.1%}). Clearing losing side."
+                        )
+                    elif seconds_since_rev > 180 and conf < 0.35:
+                        # Confidence improvement timeout: after 3 minutes with weak signal, cut losses
+                        log(
+                            f"🛑 [{symbol}] #{trade_id} HEDGE FAILED: Confidence {conf:.1%} below 35% after 180s. Clearing losing side."
+                        )
+                    else:
+                        # Still holding hedge
+                        if int(seconds_since_rev) % 60 == 0:
+                            log(
+                                f"🛡️  [{symbol}] #{trade_id} HEDGE ACTIVE: Waiting for strategy flip (Current: {bias} @ {conf:.1%}, threshold: {confidence_threshold:.1%})"
+                            )
+                        return False
+                except Exception as e:
+                    log_error(f"Error checking hedge confirmation for {symbol}: {e}")
+                    return False
 
     # STOP LOSS: Only if SL is enabled
     if not ENABLE_STOP_LOSS:

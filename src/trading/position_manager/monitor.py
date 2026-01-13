@@ -399,6 +399,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                         sc_id,
                         rev_trig,
                         rev_trig_at,
+                        w_end,
                     ):
                         continue
 
