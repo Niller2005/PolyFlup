@@ -2,9 +2,15 @@
 
 ## Critical Issues (High Priority)
 
-### 1. ✅ FIXED: Missing Bayesian Comparison Data (COMMITTED)
+### 1. ✅ FIXED: Missing Bayesian Comparison Data (COMMITTED & TESTED)
 
-**Status**: FIXED in commit `59ecad8`
+**Status**: FIXED in commit `59ecad8`, TESTED on 2026-01-13
+
+**Test Results** (54 trades with Bayesian data):
+- Additive: 51.9% win rate, $0.97 avg PnL per trade
+- Bayesian: 51.9% win rate, $0.97 avg PnL per trade
+- **Conclusion**: No significant difference (0.0% delta)
+- **Recommendation**: Continue using additive formula
 
 **Problem**: Migration 007 added 5 new columns (`additive_confidence`, `bayesian_confidence`, etc.) but bot code wasn't passing them to `save_trade()`, causing all NULL values in database.
 
@@ -272,9 +278,10 @@ Balance API is returning inflated values (20.00 instead of 10.00) even though al
 5. ✅ **COMPLETED**: Scale-in failure root cause (Issue #3, commit `24af1b9`)
    - ✅ Add USDC balance monitoring and logging
    - ✅ Implement scale-in gating based on available funds (< $5.00 minimum)
-6. **TEST**: Run `compare_bayesian_additive.py` after 50-100 trades
-   - Determine if Bayesian performs better than additive
-   - Potentially enable Bayesian if superior
+6. ✅ **COMPLETED**: Run `compare_bayesian_additive.py` (57 trades with data)
+    - Result: No significant difference between Bayesian and additive
+    - Both methods: 51.9% win rate, identical edge (35.8%), identical PnL ($0.97)
+    - Recommendation: Continue using additive formula (Bayesian adds no value)
 
 ### Phase 3: Long-term (Month 2)
 7. **ARCHITECT**: Balance API reliability improvements
