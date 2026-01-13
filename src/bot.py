@@ -328,6 +328,61 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
 
                 except Exception as e:
                     log(f"   ❌ [{p['symbol']}] Failed to save trade: {e}")
+            elif verified_status.upper() in ["LIVE", "OPEN", "PENDING"]:
+                # Save LIVE orders to database to prevent phantom order issue
+                try:
+                    trade_id = save_trade(
+                        symbol=p["symbol"],
+                        window_start=p["window_start"].isoformat(),
+                        window_end=p["window_end"].isoformat(),
+                        slug=p["slug"],
+                        token_id=p["token_id"],
+                        side=p["side"],
+                        edge=p["confidence"],
+                        price=actual_price,
+                        size=actual_size,
+                        bet_usd=p["bet_usd"],
+                        p_yes=p["p_up"],
+                        best_bid=p["best_bid"],
+                        best_ask=p["best_ask"],
+                        imbalance=p["imbalance"],
+                        funding_bias=p["funding_bias"],
+                        order_status=verified_status,
+                        order_id=result["order_id"],
+                        limit_sell_order_id=None,
+                        is_reversal=is_reversal,
+                        target_price=p["target_price"],
+                        up_total=p["raw_scores"].get("up_total"),
+                        down_total=p["raw_scores"].get("down_total"),
+                        momentum_score=p["raw_scores"].get("momentum_score"),
+                        momentum_dir=p["raw_scores"].get("momentum_dir"),
+                        flow_score=p["raw_scores"].get("flow_score"),
+                        flow_dir=p["raw_scores"].get("flow_dir"),
+                        divergence_score=p["raw_scores"].get("divergence_score"),
+                        divergence_dir=p["raw_scores"].get("divergence_dir"),
+                        vwm_score=p["raw_scores"].get("vwm_score"),
+                        vwm_dir=p["raw_scores"].get("vwm_dir"),
+                        pm_mom_score=p["raw_scores"].get("pm_mom_score"),
+                        pm_mom_dir=p["raw_scores"].get("pm_mom_dir"),
+                        adx_score=p["raw_scores"].get("adx_score"),
+                        adx_dir=p["raw_scores"].get("adx_dir"),
+                        lead_lag_bonus=p["raw_scores"].get("lead_lag_bonus"),
+                        additive_confidence=p["raw_scores"].get("additive_confidence"),
+                        additive_bias=p["raw_scores"].get("additive_bias"),
+                        bayesian_confidence=p["raw_scores"].get("bayesian_confidence"),
+                        bayesian_bias=p["raw_scores"].get("bayesian_bias"),
+                        market_prior_p_up=p["raw_scores"].get("market_prior_p_up"),
+                    )
+                    if trade_id:
+                        log(
+                            f"   📝 [{p['symbol']}] {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | Saved as {verified_status}"
+                        )
+                    else:
+                        log(
+                            f"   ❌ [{p['symbol']}] Failed to save LIVE trade to database"
+                        )
+                except Exception as e:
+                    log(f"   ❌ [{p['symbol']}] Failed to save LIVE trade: {e}")
 
     return placed_count
 

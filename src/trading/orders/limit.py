@@ -1,6 +1,7 @@
 """Limit order placement logic"""
 
 from typing import List, Dict, Optional, Any
+from datetime import datetime, timedelta, timezone
 from py_clob_client.clob_types import (
     OrderArgs,
     OrderType,
@@ -150,4 +151,74 @@ def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
         return results
     except Exception as e:
         log_error(f"Batch order error: {e}")
+
+        # Try to recover orders that may have been placed despite exception
+        # This handles network timeouts where orders were sent but response was lost
+        try:
+            from .management import get_orders
+
+            all_open_orders = get_orders()
+            now = datetime.now(timezone.utc)
+
+            for op in validated:
+                found_match = False
+                for o in all_open_orders:
+                    if not isinstance(o, dict):
+                        continue
+
+                    # Match by token_id, price, size (within small epsilon)
+                    o_price = float(o.get("price", 0))
+                    o_size = float(o.get("original_size", 0))
+                    o_token = str(o.get("asset_id", ""))
+                    req_price = float(op["price"])
+                    req_size = float(op["size"])
+                    req_token = str(op["token_id"])
+
+                    price_match = abs(o_price - req_price) < 0.0001
+                    size_match = abs(o_size - req_size) < 0.01
+                    token_match = o_token == req_token
+
+                    if price_match and size_match and token_match:
+                        # Order was placed - add to results
+                        order_id = o.get("id") or o.get("orderID")
+                        if order_id:
+                            results.append(
+                                {
+                                    "success": True,
+                                    "status": o.get("status", "LIVE"),
+                                    "order_id": order_id,
+                                    "error": None,
+                                }
+                            )
+                            log(
+                                f"   🔄 Recovered order {order_id[:10]} from batch exception"
+                            )
+                            found_match = True
+                            break
+
+                if not found_match:
+                    # No match found - order likely failed
+                    results.append(
+                        {
+                            "success": False,
+                            "status": "ERROR",
+                            "order_id": None,
+                            "error": "Order not found in exchange after batch exception",
+                        }
+                    )
+        except Exception as recovery_error:
+            log(
+                f"   ⚠️  Failed to recover orders from batch exception: {recovery_error}"
+            )
+            # Fall back to empty results for validated orders
+            for _ in validated:
+                results.append(
+                    {
+                        "success": False,
+                        "status": "ERROR",
+                        "order_id": None,
+                        "error": str(e),
+                    }
+                )
+
         return results
