@@ -135,14 +135,14 @@ def _check_stop_loss(
                 f"🛑 [{symbol}] #{trade_id} HEDGE PNL EXIT: Original position down {pnl_pct:.1f}%. Cutting losses."
             )
         else:
-            # 3. Time Check (Dynamic Cooldown)
-            # Dynamic cooldown: max 10% of remaining window time, capped at 120s
-            dynamic_cooldown = min(120, time_left * 0.10)
+            # 3. Time Check (Fixed Cooldown at 60s)
+            # Fixed 60s cooldown - not dynamic to allow more hedge flexibility
+            cooldown_duration = 60
 
-            if seconds_since_rev < dynamic_cooldown:
+            if seconds_since_rev < cooldown_duration:
                 if int(seconds_since_rev) % 60 == 0:
                     log(
-                        f"⏳ [{symbol}] #{trade_id} HEDGE COOLDOWN: {seconds_since_rev:.0f}s/{dynamic_cooldown:.0f}s passed. Holding..."
+                        f"⏳ [{symbol}] #{trade_id} HEDGE COOLDOWN: {seconds_since_rev:.0f}s/{cooldown_duration:.0f}s passed. Holding..."
                     )
                 return False
 
@@ -170,8 +170,8 @@ def _check_stop_loss(
                     orig_conf_row = c.fetchone()
                     original_confidence = orig_conf_row[0] if orig_conf_row else 0.50
 
-                    # Hedge confidence must be significantly better than original adjusted threshold
-                    confidence_threshold = max(0.30, (1.0 - original_confidence * 0.50))
+                    # Hedge confidence must be better than original (lowered from 65% to 40%)
+                    confidence_threshold = max(0.40, (1.0 - original_confidence * 0.50))
 
                     if bias == target_bias and conf > confidence_threshold:
                         log(
