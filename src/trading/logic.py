@@ -142,7 +142,7 @@ def _check_target_price_alignment(
     if is_underdog and confidence < 0.60:
         if verbose:
             log(
-                f"[{symbol}] ⚠️  {side} is UNDERDOG (${current_price:.2f}) with LOW confidence ({confidence:.1%}). SKIPPING."
+                f"[{symbol}] ⚠️  {side} is UNDERDOG (${current_price:.2f}) with LOW confidence ({confidence:.1%}). WAITING."
             )
         return False
 
