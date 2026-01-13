@@ -203,7 +203,7 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
                 # Check if this is a scale-in order
                 c.execute(
-                    "SELECT id, symbol, side, size, entry_price, bet_usd, token_id, limit_sell_order_id FROM trades WHERE scale_in_order_id = ? AND settled = 0",
+                    "SELECT id, symbol, side, size, entry_price, bet_usd, token_id, limit_sell_order_id, scale_in_order_id FROM trades WHERE scale_in_order_id = ? AND settled = 0",
                     (order_id,),
                 )
                 row = c.fetchone()
@@ -218,7 +218,17 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                         db_bet,
                         token_id,
                         l_sell_id,
+                        existing_scale_in_id,
                     ) = row
+
+                    # Skip if this fill has already been processed
+                    # (scale_in_order_id matches, meaning this is a duplicate notification)
+                    if (
+                        existing_scale_in_id
+                        and existing_scale_in_id.lower() == order_id.lower()
+                    ):
+                        return
+
                     new_scale_price = float(fill_price) if fill_price else db_price
                     new_scale_size = float(fill_size) if fill_size else 0
 
@@ -240,8 +250,10 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                         new_total_bet = db_bet + (new_scale_size * new_scale_price)
                         new_avg_price = new_total_bet / new_total_size
 
+                        # CRITICAL: Keep scale_in_order_id set to track this order
+                        # This prevents duplicate notifications from causing infinite scale-in loops
                         c.execute(
-                            "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1, scale_in_order_id=NULL WHERE id=?",
+                            "UPDATE trades SET size=?, bet_usd=?, entry_price=?, scaled_in=1 WHERE id=?",
                             (new_total_size, new_total_bet, new_avg_price, trade_id),
                         )
                     return
