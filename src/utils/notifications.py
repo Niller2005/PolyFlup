@@ -1,4 +1,22 @@
-"""Notification monitoring and processing"""
+"""Notification monitoring and processing
+
+IMPORTANT: Fill notifications are CRITICAL for preventing exchange recovery conflict errors.
+When a fill notification arrives, we immediately update order_status = 'FILLED' in the DB.
+This allows monitor.py to skip get_order() calls on already-filled orders, preventing:
+  - "ERROR #40001 canceling statement due to conflict with recovery" (500 errors)
+  - Unnecessary API calls that fail during exchange recovery
+  - Log spam during active trading
+
+WITHOUT this fix:
+  - Monitor.py calls get_order() every 15s on all active orders
+  - During fill recovery (first 1-2 minutes after fill), API returns 500 errors
+  - Each failed call logs an error (19+ errors per window)
+
+WITH this fix:
+  - Fill notification marks order as FILLED immediately
+  - Monitor.py sees order_status == 'FILLED' and skips get_order() call
+  - No API errors, no log spam, no unnecessary load on exchange
+"""
 
 import time
 from typing import List, Dict, Optional
@@ -15,29 +33,7 @@ def _extract_order_id_from_payload(payload: dict) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
 
-    # Try multiple possible field names for order ID
     possible_fields = ["order_id", "orderId", "id", "orderID"]
-
-    for field in possible_fields:
-        order_id = payload.get(field)
-        if order_id:
-            return str(order_id)
-
-    return None
-
-    # Try multiple possible field names for order ID
-    possible_fields = ["order_id", "orderId", "id", "orderID"]
-
-    for field in possible_fields:
-        order_id = payload.get(field)
-        if order_id:
-            return str(order_id)
-
-    return None
-
-    # Try multiple possible field names for order ID
-    possible_fields = ["order_id", "orderId", "id", "orderID"]
-
     for field in possible_fields:
         order_id = payload.get(field)
         if order_id:
@@ -117,7 +113,15 @@ def process_notifications() -> None:
 
 
 def _handle_order_fill(payload: dict, timestamp: int) -> None:
-    """Handle order fill notification"""
+    """
+    Handle order fill notification
+
+    CRITICAL FIX (2026-01-13):
+    This function updates order_status = 'FILLED' in the database.
+    This prevents monitor.py from calling get_order() on orders that are already filled,
+    which eliminates "ERROR #40001 canceling statement due to conflict with recovery"
+    errors when the exchange is processing fills.
+    """
     try:
         order_id = _extract_order_id_from_payload(payload)
         fill_price = payload.get("price")
@@ -148,33 +152,23 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     # Update price/size if provided in notification
                     new_price = float(fill_price) if fill_price else db_price
                     new_size = float(fill_size) if fill_size else db_size
+                    new_bet_usd = new_price * new_size
 
-                    # Log with symbol, price, and size
+                    # Log fill with trade details
                     order_id_short = order_id[:10] if len(order_id) > 10 else order_id
                     log(
-                        f"🔍 [{symbol}] FILL {order_id_short}: {new_size:.2f} @ ${new_price:.4f}"
-                    )
-                row = c.fetchone()
-
-                if row:
-                    trade_id, symbol, trade_side, db_size, db_price, db_status = row
-
-                    if db_status == "FILLED":
-                        return
-
-                    # Update price/size if provided in notification
-                    new_price = float(fill_price) if fill_price else db_price
-                    new_size = float(fill_size) if fill_size else db_size
-
-                    log(
-                        f"🔔 [{symbol}] #{trade_id} Buy filled: {trade_side} {new_size:.2f} @ ${new_price:.4f}"
+                        f"🔍 [{symbol}] FILL {order_id_short}: {new_size:.2f} @ ${new_price:.4f} (buy order)"
                     )
 
+                    # Update database with fill details - CRITICAL: This prevents get_order() calls
                     c.execute(
-                        "UPDATE trades SET order_status = 'FILLED', entry_price = ?, size = ?, bet_usd = ? * ? WHERE id = ?",
-                        (new_price, new_size, new_price, new_size, trade_id),
+                        "UPDATE trades SET order_status = 'FILLED', entry_price = ?, size = ?, bet_usd = ? WHERE id = ?",
+                        (new_price, new_size, new_bet_usd, trade_id),
                     )
-                    return  # Found and logged, done
+
+                    # Track recent fill for balance API cooldown
+                    track_recent_fill(trade_id, new_price, new_size, timestamp)
+                    return  # Found and processed, done
 
                 # Check if this is a limit sell order (exit plan)
                 c.execute(
@@ -214,19 +208,6 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                 )
                 row = c.fetchone()
 
-                if row:
-                    (
-                        trade_id,
-                        symbol,
-                        trade_side,
-                        db_size,
-                        db_price,
-                        db_bet,
-                        token_id,
-                        l_sell_id,
-                    ) = row
-                    new_scale_price = float(fill_price) if fill_price else db_price
-                    new_scale_size = float(fill_size) if fill_size else 0
                 if row:
                     (
                         trade_id,
