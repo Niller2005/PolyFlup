@@ -3,9 +3,8 @@
 
 import sqlite3
 from typing import List, Tuple
-from collections import defaultdict
 
-DB_FILE = "trades.db"
+DB_FILE = "/mnt/d/dev/polyastra/trades.db"
 
 
 def analyze_confidence_performance():
@@ -19,7 +18,8 @@ def analyze_confidence_performance():
         FROM trades
         WHERE settled=1
         AND final_outcome IN ('RESOLVED', 'STOP_LOSS', 'STOP_LOSS_GHOST_FILL', 'REVERSAL_STOP_LOSS')
-        ORDER BY edge
+        AND edge IS NOT NULL
+        ORDER BY edge DESC
     """
     cursor.execute(query)
     trades = cursor.fetchall()
@@ -30,7 +30,7 @@ def analyze_confidence_performance():
         return
 
     # Analyze by confidence buckets (percentiles)
-    edges = [t[0] for t in trades if t[0] > 0]
+    edges = [t[0] for t in trades if t[0] is not None]
     n_buckets = 10
 
     # Create percentile buckets
@@ -85,6 +85,7 @@ def analyze_by_edge_threshold(trades: List[Tuple], thresholds: List[float]):
     results = []
 
     for threshold in thresholds:
+        # Filter by edge >= threshold (higher edge = more selective)
         filtered_trades = [t for t in trades if t[0] >= threshold]
 
         if not filtered_trades:
@@ -124,7 +125,7 @@ def main():
     print(f"\nCONFIDENCE BUCKET ANALYSIS:")
     print("-" * 80)
     print(
-        f"{'Bucket':<8} {'Edge Range':<20} {'Count':<8} {'Wins':<8} {'Losses':<8} {'Win Rate':<10} {'Avg ROI':<12} {'Avg PnL':<12}"
+        f"{'Bucket':<8} {'Edge Range':<20} {'Count':<8} {'Wins':<8} {'Losses':<8} {'Win Rate':<10} {'Avg ROI':<12} {'Avg PnL':<12} {'Avg Edge':<12}"
     )
     print("-" * 80)
 
@@ -133,7 +134,7 @@ def main():
         print(
             f"{stat['bucket']:<8} {edge_range:<20} {stat['count']:<8} "
             f"{stat['wins']:<8} {stat['losses']:<8} {stat['win_rate']:.1%}    "
-            f"{stat['avg_roi']:+7.1f}%   ${stat['avg_pnl']:+7.2f}"
+            f"{stat['avg_roi']:+7.1f}%   ${stat['avg_pnl']:+7.2f}  {stat['avg_edge']:.2f}%"
         )
 
     # Test different MIN_EDGE thresholds
@@ -190,7 +191,7 @@ def main():
     print("\n" + "=" * 80)
     print("RECOMMENDATION: Start logging raw signal scores")
     print("=" * 80)
-    print("\nTo properly calibrate the confidence formula with different variants:")
+    print("\nTo properly calibrate confidence formula with different variants:")
     print("1. Modify calculate_confidence() to return and log raw signal scores")
     print("2. Store up_total, down_total, momentum_score, flow_score, etc. in database")
     print("3. After collecting 100+ trades, re-run this analysis with formula variants")
@@ -199,6 +200,8 @@ def main():
     print("  - Pure ratio: up_total / (up_total + down_total)")
     print("  - No discount: up_total")
     print("  - Various k1 values: 0.0, 0.1, 0.2, 0.3, 0.4")
+
+    print("\n" + "=" * 80)
 
 
 if __name__ == "__main__":

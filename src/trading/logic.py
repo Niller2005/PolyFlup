@@ -229,6 +229,29 @@ def _prepare_trade_params(
         calculate_confidence(symbol, up_id, client)
     )
 
+    # A/B TESTING: Randomly select between Additive and Bayesian (50/50)
+    import random
+
+    use_bayesian = random.random() < 0.5  # 50% chance
+
+    if use_bayesian:
+        # Override with Bayesian method
+        confidence = raw_scores.get("bayesian_confidence", confidence)
+        bias = raw_scores.get("bayesian_bias", bias)
+        method_used = "BAYESIAN"
+    else:
+        # Use Additive method (default)
+        confidence = raw_scores.get("additive_confidence", confidence)
+        bias = raw_scores.get("additive_bias", bias)
+        method_used = "ADDITIVE"
+
+    # Log which method was selected for A/B testing
+    if verbose and bias != "NEUTRAL":
+        log(
+            f"[{symbol}] 🧪 A/B TEST: Using {method_used} confidence (p_up={p_up:.3f}): "
+            f"{confidence:.1%} | {method_used}: {confidence:.1%}, ADDITIVE: {raw_scores.get('additive_confidence', 0):.1%}"
+        )
+
     if bias == "NEUTRAL" or best_bid is None or best_ask is None:
         if verbose:
             if bias == "NEUTRAL":
