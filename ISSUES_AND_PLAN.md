@@ -269,10 +269,9 @@ Balance API is returning inflated values (20.00 instead of 10.00) even though al
    - ✅ Add 3-second cooldown after fills before balance queries
    - ✅ Track recent fills to prevent premature balance API calls
    - ✅ Prevents "Insufficient funds" errors from balance API lag after fills
-5. **IMPROVE**: Scale-in failure root cause (Issue #3)
-5. **ANALYZE**: Scale-in failure root cause (Issue #3)
-   - Add USDC balance monitoring and logging
-   - Implement scale-in gating based on available funds
+5. ✅ **COMPLETED**: Scale-in failure root cause (Issue #3, commit `24af1b9`)
+   - ✅ Add USDC balance monitoring and logging
+   - ✅ Implement scale-in gating based on available funds (< $5.00 minimum)
 6. **TEST**: Run `compare_bayesian_additive.py` after 50-100 trades
    - Determine if Bayesian performs better than additive
    - Potentially enable Bayesian if superior
