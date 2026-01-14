@@ -14,6 +14,43 @@ _current_master_log: str = LOG_FILE
 _last_rotation_date: str = ""
 
 
+def _format_window_filename(window_id: str) -> str:
+    """Convert UTC window_id to user-friendly format for easy searching
+
+    Input: "2026-01-14 15:30:00" (UTC)
+    Output: "Jan14_3:30-1545" (matches "WINDOW: January 14, 3:30-3:45PM ET")
+    """
+    if not window_id:
+        return window_id
+
+    parts = window_id.split()
+    if len(parts) < 2:
+        return window_id
+
+    date_part, time_part = parts[0], parts[1]
+
+    # Parse date "2026-01-14"
+    try:
+        date_obj = datetime.strptime(date_part, "%Y-%m-%d")
+        month_name = date_obj.strftime("%b")  # "Jan", "Feb", etc.
+        day_num = date_obj.strftime("%d")  # "14"
+        month_day = f"{month_name}{day_num}"  # "Jan14"
+    except Exception:
+        return window_id
+
+    # Parse time "15:30:00" to "3:30" format
+    time_parts = time_part.split(":")
+    if len(time_parts) >= 2:
+        hour = time_parts[0]
+        minute = time_parts[1]
+        # Remove seconds if present
+        hour_min = f"{hour}:{minute}"
+    else:
+        return window_id
+
+    return f"{month_day}_{hour_min}"
+
+
 def _rotate_logs_if_needed():
     """Check if log file should be rotated to a new day"""
     global _current_log_file, _current_master_log, _last_rotation_date
@@ -60,31 +97,21 @@ def _rotate_logs_if_needed():
 
 
 def set_log_window(window_id: str = "") -> None:
-    """Set the log file for the current window"""
+    """Set the log file for a specific trading window"""
     global _current_log_file
+
     if not window_id:
         _current_log_file = _current_master_log
-    else:
-        # Create a filename from window_id, e.g., 2026-01-06_15-45
-        # If window_id is like '2026-01-06 15:45:00', it will be '2026-01-06_15-45'
-        # We replace T, spaces and colons with underscores/dashes for filesystem safety
-        safe_id = window_id.replace(" ", "_").replace(":", "-").replace("T", "_")
+        return
 
-        # Remove any timezone offset or microseconds to keep filename clean and stable
-        # Handles both +00:00 and -05:00 formats
-        if "+" in safe_id:
-            safe_id = safe_id.split("+")[0]
-        elif "-" in safe_id and len(safe_id.split("-")) > 3:
-            # Only split on the last dash if it looks like an offset (e.g. 2026-01-06_13-15-00-05-00)
-            # A better way is to split on the last 3-4 characters if they match an offset pattern,
-            # but let's just use a more surgical approach.
-            parts = safe_id.split("-")
-            # Reconstruct date (first 3 parts) and time (next 3 parts)
-            # window_2026-01-06_13-15-00-05-00
-            if len(parts) >= 6:
-                safe_id = "-".join(parts[:5])  # 2026-01-06_13-15-00
+    # Convert to user-friendly format: "Jan14_3:30-1545" from "2026-01-14 15:30:00"
+    window_name = _format_window_filename(window_id)
 
-        _current_log_file = os.path.join(BASE_DIR, "logs", f"window_{safe_id}.log")
+    # Ensure windows folder exists
+    windows_dir = os.path.join(BASE_DIR, "logs", "windows")
+    os.makedirs(windows_dir, exist_ok=True)
+
+    _current_log_file = os.path.join(windows_dir, f"window_{window_name}.log")
 
 
 def log(text: str) -> None:
