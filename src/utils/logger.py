@@ -14,19 +14,20 @@ _current_master_log: str = LOG_FILE
 _last_rotation_date: str = ""
 
 
-def _format_window_filename(window_id: str) -> str:
-    """Convert UTC window_id to user-friendly format for easy searching
+def _format_window_filename(window_id: str, window_range: str = "") -> str:
+    """Convert window_id and optional range to user-friendly filename
 
-    Input can be:
-    - ISO format: "2026-01-14T15:30:00+00:00" (from datetime.isoformat())
-    - Simple format: "2026-01-14 15:30:00"
+    window_id: ISO datetime like "2026-01-14T15:30:00+00:00" or simple "2026-01-14 15:30:00"
+    window_range: Human-readable range like "January 14, 3:30-3:45PM ET"
 
-    Output: "Jan14_3:30PM" (matches "WINDOW: January 14, 3:30-3:45PM ET")
+    Output examples:
+    - With range: "window_Jan14_3:30-3:45PM.log"
+    - Without range: "window_Jan14_3:30PM.log"
     """
     if not window_id:
         return window_id
 
-    # Normalize: replace 'T' with space, remove timezone offset
+    # Normalize: replace 'T' with ' ' and remove timezone offset
     normalized = window_id.replace("T", " ").split("+")[0]
     parts = normalized.split()
 
@@ -72,7 +73,11 @@ def _format_window_filename(window_id: str) -> str:
     else:
         return window_id
 
-    return f"{month_day}_{hour_min}"
+    # Append range if provided
+    if window_range:
+        return f"{month_day}_{hour_min}-{window_range}"
+    else:
+        return f"{month_day}_{hour_min}"
 
 
 def _rotate_logs_if_needed():
@@ -120,7 +125,7 @@ def _rotate_logs_if_needed():
     return None
 
 
-def set_log_window(window_id: str = "") -> None:
+def set_log_window(window_id: str = "", window_range: str = "") -> None:
     """Set the log file for a specific trading window"""
     global _current_log_file
 
@@ -128,8 +133,10 @@ def set_log_window(window_id: str = "") -> None:
         _current_log_file = _current_master_log
         return
 
-    # Convert to user-friendly format: "Jan14_3:30-1545" from "2026-01-14 15:30:00"
-    window_name = _format_window_filename(window_id)
+    # Convert window_id and optional range to user-friendly filename
+    # Input: "2026-01-14 15:30:00" and "January 14, 3:30-3:45PM ET"
+    # Output: "window_Jan14_3:30-3:45PM.log"
+    window_name = _format_window_filename(window_id, window_range)
 
     # Ensure windows folder exists
     windows_dir = os.path.join(BASE_DIR, "logs", "windows")

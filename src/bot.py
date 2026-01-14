@@ -469,7 +469,7 @@ def main():
                 if last_window_logged != w_start:
                     range_str = format_window_range(w_start, w_end)
                     # Update logger to use a new file for this window
-                    set_log_window(w_start.isoformat())
+                    set_log_window(w_start.isoformat(), range_str)
                     log("")
                     log(f"🪟  NEW WINDOW: {range_str}")
                     last_window_logged = w_start
