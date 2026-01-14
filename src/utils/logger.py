@@ -17,13 +17,19 @@ _last_rotation_date: str = ""
 def _format_window_filename(window_id: str) -> str:
     """Convert UTC window_id to user-friendly format for easy searching
 
-    Input: "2026-01-14 15:30:00" (UTC)
-    Output: "Jan14_3:30-1545" (matches "WINDOW: January 14, 3:30-3:45PM ET")
+    Input can be:
+    - ISO format: "2026-01-14T15:30:00+00:00" (from datetime.isoformat())
+    - Simple format: "2026-01-14 15:30:00"
+
+    Output: "Jan14_3:30PM" (matches "WINDOW: January 14, 3:30-3:45PM ET")
     """
     if not window_id:
         return window_id
 
-    parts = window_id.split()
+    # Normalize: replace 'T' with space, remove timezone offset
+    normalized = window_id.replace("T", " ").split("+")[0]
+    parts = normalized.split()
+
     if len(parts) < 2:
         return window_id
 
