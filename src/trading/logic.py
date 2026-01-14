@@ -60,6 +60,7 @@ def _determine_trade_side(
     bias: str,
     confidence: float,
     raw_scores: Optional[Dict[str, Any]] = None,
+    verbose: bool = True,
 ) -> tuple[str, float]:
     """
     Determine actual trading side and confidence for sizing.
@@ -143,7 +144,7 @@ def _determine_trade_side(
         sizing_confidence = 0.0
 
     # Log partial sizing for transparency
-    if actual_side == bias and confidence < MIN_EDGE:
+    if actual_side == bias and confidence < MIN_EDGE and verbose:
         log(
             f"[{symbol}] 📊 PARTIAL CONFIDENCE: {confidence:.1%} → {sizing_confidence:.1%} sizing (70% of confidence)"
         )
@@ -263,7 +264,7 @@ def _prepare_trade_params(
 
     client = get_clob_client()
     confidence, bias, p_up, best_bid, best_ask, signals, raw_scores = (
-        calculate_confidence(symbol, up_id, client)
+        calculate_confidence(symbol, up_id, client, verbose=verbose)
     )
 
     # A/B TESTING: Randomly select between Additive and Bayesian (50/50)
@@ -334,7 +335,7 @@ def _prepare_trade_params(
 
             # Recalculate sizing confidence with reduced confidence
             actual_side, sizing_confidence = _determine_trade_side(
-                symbol, bias, confidence, raw_scores
+                symbol, bias, confidence, raw_scores, verbose=verbose
             )
 
             if verbose:
@@ -346,7 +347,7 @@ def _prepare_trade_params(
                     log(f"   Reason: {reason}")
 
     actual_side, sizing_confidence = _determine_trade_side(
-        symbol, bias, confidence, raw_scores
+        symbol, bias, confidence, raw_scores, verbose=verbose
     )
 
     if actual_side == "NEUTRAL":

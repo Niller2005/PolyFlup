@@ -35,7 +35,9 @@ import requests
 import numpy as np
 
 
-def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
+def calculate_confidence(
+    symbol: str, up_token: str, client: ClobClient, verbose: bool = True
+):
     """
     Calculate confidence score and directional bias combining Polymarket and Binance data.
     Goal: Higher quality entries, fewer stop losses.
@@ -358,10 +360,11 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
     if BAYESIAN_CONFIDENCE:
         confidence = bayesian_confidence
         bias = bayesian_bias
-        log(
-            f"[{symbol}] 🔬 Using Bayesian confidence (p_up={p_up:.3f}): "
-            f"{confidence:.1%} | Additive would be: {additive_confidence:.1%}"
-        )
+        if verbose:
+            log(
+                f"[{symbol}] 🔬 Using Bayesian confidence (p_up={p_up:.3f}): "
+                f"{confidence:.1%} | Additive would be: {additive_confidence:.1%}"
+            )
     else:
         confidence = additive_confidence
         bias = additive_bias
@@ -423,16 +426,18 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
             confidence_reduction = (3 - strongly_aligned) * 0.10 * confidence_factor
             confidence = max(0.60, confidence - confidence_reduction)
 
-            log(
-                f"[{symbol}] ⚠️  Insufficient confirmation: {strongly_aligned}/5 signals aligned | "
-                f"Confidence: {confidence + confidence_reduction:.1%} → {confidence:.1%}"
-            )
+            if verbose:
+                log(
+                    f"[{symbol}] ⚠️  Insufficient confirmation: {strongly_aligned}/5 signals aligned | "
+                    f"Confidence: {confidence + confidence_reduction:.1%} → {confidence:.1%}"
+                )
         else:
             # Strong confirmation - log the strong signal
-            log(
-                f"[{symbol}] ✅ Strong confirmation: {strongly_aligned}/5 signals aligned | "
-                f"Confirmation score: {confirmation_score:.2f}"
-            )
+            if verbose:
+                log(
+                    f"[{symbol}] ✅ Strong confirmation: {strongly_aligned}/5 signals aligned | "
+                    f"Confirmation score: {confirmation_score:.2f}"
+                )
 
     # Additional validation: cap maximum confidence at 85% for extreme signals
     if confidence > 0.85:
@@ -473,7 +478,7 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
             # Add validation data to signals for logging
             signals["price_validation"] = validation_result["price_data"]
 
-            if validation_result["reduction_reason"]:
+            if validation_result["reduction_reason"] and verbose:
                 reason = validation_result["reduction_reason"]
                 log(
                     f"[{symbol}] 📉 Price validation reduced confidence: {original_confidence:.1%} → {confidence:.1%} | {reason}"
@@ -483,9 +488,10 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
             if confidence < MIN_EDGE:
                 bias = "NEUTRAL"
                 confidence = 0.0
-                log(
-                    f"[{symbol}] ⚠️  Price validation blocked trade (confidence too low after reduction)"
-                )
+                if verbose:
+                    log(
+                        f"[{symbol}] ⚠️  Price validation blocked trade (confidence too low after reduction)"
+                    )
 
     signals = {
         "momentum": momentum,
@@ -540,7 +546,7 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
             # Add validation data to signals for logging
             signals["price_validation"] = validation_result["price_data"]
 
-            if validation_result["reduction_reason"]:
+            if validation_result["reduction_reason"] and verbose:
                 reason = validation_result["reduction_reason"]
                 log(
                     f"[{symbol}] 📉 Price validation reduced confidence: {original_confidence:.1%} → {confidence:.1%} | {reason}"
@@ -550,9 +556,10 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
             if confidence < MIN_EDGE:
                 bias = "NEUTRAL"
                 confidence = 0.0
-                log(
-                    f"[{symbol}] ⚠️  Price validation blocked trade (confidence too low after reduction)"
-                )
+                if verbose:
+                    log(
+                        f"[{symbol}] ⚠️  Price validation blocked trade (confidence too low after reduction)"
+                    )
 
     return confidence, bias, p_up, best_bid, best_ask, signals, raw_scores
 

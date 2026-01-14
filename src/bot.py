@@ -40,6 +40,7 @@ from src.config.settings import (
     ENABLE_DIVERGENCE,
     ENABLE_VWM,
     ENABLE_BFXD,
+    VERBOSE_MODE,
 )
 
 from src.utils.logger import log, log_error, send_discord, set_log_window
@@ -474,7 +475,7 @@ def main():
                     log(f"🪟  NEW WINDOW: {range_str}")
                     last_window_logged = w_start
 
-            is_verbose_cycle = now_ts - last_verbose_log >= 60
+            is_verbose_cycle = VERBOSE_MODE and (now_ts - last_verbose_log >= 60)
             is_order_check_cycle = now_ts - last_order_check >= 10
 
             if now_ts - last_position_check >= 1:

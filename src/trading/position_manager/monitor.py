@@ -27,6 +27,7 @@ from .scale import _check_scale_in
 from .exit import _check_exit_plan
 
 _failed_pnl_checks = {}
+_last_monitoring_log_time = 0.0
 
 
 def check_open_positions(verbose=True, check_orders=False, user_address=None):
@@ -44,7 +45,11 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
             open_positions = c.fetchall()
             if not open_positions:
                 if verbose:
-                    log("💤 No open positions. Monitoring markets...")
+                    now = time.time()
+                    global _last_monitoring_log_time
+                    if now - _last_monitoring_log_time >= 60:
+                        log("💤 Monitoring markets...")
+                        _last_monitoring_log_time = now
                 return
 
             # PRIORITY 1: Batch price fetching

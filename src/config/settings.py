@@ -158,6 +158,9 @@ PRICE_VALIDATION_VOLATILITY_THRESHOLD = float(
 # Bayesian Confidence Calculation
 BAYESIAN_CONFIDENCE = os.getenv("BAYESIAN_CONFIDENCE", "NO").upper() == "YES"
 
+# Verbose Mode
+VERBOSE_MODE = os.getenv("VERBOSE_MODE", "YES").upper() == "YES"
+
 # Constants
 BINANCE_FUNDING_MAP = {
     "BTC": "BTCUSDT",
