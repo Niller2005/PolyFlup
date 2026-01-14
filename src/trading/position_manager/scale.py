@@ -187,8 +187,17 @@ def _check_scale_in(
                 )
             return
 
-    # Pre-flight balance check to prevent insufficient funds loop
-    est_cost = s_size * current_price
+    # Use MAKER order (limit) for scale-in to avoid fees and earn rebates
+    from src.utils.websocket_manager import ws_manager
+
+    bid, _ = ws_manager.get_bid_ask(token_id)
+
+    # Fallback to current_price (midpoint) if WS bid not available
+    maker_price = bid if bid else current_price
+    maker_price = max(0.01, min(0.99, round(maker_price, 2)))
+
+    # Pre-flight balance check using ACTUAL maker price (not current_price)
+    est_cost = s_size * maker_price
     bal_info = get_balance_allowance()
     if bal_info:
         usdc_balance = bal_info.get("balance", 0)
@@ -198,15 +207,6 @@ def _check_scale_in(
                     f"   ⏳ [{symbol}] Scale-in skipped: Insufficient funds (Need ${est_cost:.2f}, Have ${usdc_balance:.2f})"
                 )
             return
-
-    # Use MAKER order (limit) for scale-in to avoid fees and earn rebates
-    from src.utils.websocket_manager import ws_manager
-
-    bid, _ = ws_manager.get_bid_ask(token_id)
-
-    # Fallback to current_price (midpoint) if WS bid not available
-    maker_price = bid if bid else current_price
-    maker_price = max(0.01, min(0.99, round(maker_price, 2)))
 
     # Check USDC balance before attempt for better debugging
     bal_info = get_balance_allowance()
