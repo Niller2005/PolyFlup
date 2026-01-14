@@ -30,8 +30,8 @@ def _trigger_price_based_reversal(
             return False
 
         client = get_clob_client()
-        confidence, bias, p_up, best_bid, best_ask, _, _ = calculate_confidence(
-            symbol, up_id, client
+        confidence, bias, p_up, best_bid, best_ask, signals, raw_scores = (
+            calculate_confidence(symbol, up_id, client)
         )
 
         # Opposite side
@@ -106,6 +106,7 @@ def _trigger_price_based_reversal(
             "window_start": window_start,
             "window_end": window_end,
             "slug": get_current_slug(symbol),
+            "raw_scores": raw_scores,
         }
 
         rev_id = execute_trade(trade_params, is_reversal=True, cursor=c)
