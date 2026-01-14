@@ -202,16 +202,18 @@ def _calculate_bet_size(
 
     # Use MAX_SIZE strategy
     if MAX_SIZE:
+        max_size_bet = MAX_SIZE * price
+
         if MAX_SIZE_MODE == "MAXIMIZE":
             # Use higher of balance % or MAX_SIZE
-            max_size_usd = MAX_SIZE * price
-            if bet_usd_effective < max_size_usd:
+            if max_size_bet > bet_usd_effective:
+                bet_usd_effective = max_size_bet
                 size = MAX_SIZE
-                bet_usd_effective = max_size_usd
         else:  # CAP mode (default)
-            if size > MAX_SIZE:
+            # Use smaller of balance % or MAX_SIZE
+            if max_size_bet < bet_usd_effective:
+                bet_usd_effective = max_size_bet
                 size = MAX_SIZE
-                bet_usd_effective = size * price
 
     return size, bet_usd_effective
 
