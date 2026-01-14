@@ -38,13 +38,31 @@ def _format_window_filename(window_id: str) -> str:
     except Exception:
         return window_id
 
-    # Parse time "15:30:00" to "3:30" format
+    # Parse time "15:30:00" to "3:30PM" format
     time_parts = time_part.split(":")
     if len(time_parts) >= 2:
-        hour = time_parts[0]
-        minute = time_parts[1]
-        # Remove seconds if present
-        hour_min = f"{hour}:{minute}"
+        hour = int(time_parts[0])
+        minute = (
+            time_parts[1].split(":")[0]
+            if len(time_parts[1].split(":")) > 1
+            else time_parts[1]
+        )
+
+        # Convert to 12-hour format with AM/PM
+        if hour == 0:
+            hour_12 = 12
+            ampm = "AM"
+        elif hour < 12:
+            hour_12 = hour
+            ampm = "AM"
+        elif hour == 12:
+            hour_12 = 12
+            ampm = "PM"
+        else:
+            hour_12 = hour - 12
+            ampm = "PM"
+
+        hour_min = f"{hour_12}:{minute}{ampm}"
     else:
         return window_id
 
