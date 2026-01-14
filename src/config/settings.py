@@ -168,7 +168,7 @@ BINANCE_FUNDING_MAP = {
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.makedirs(f"{BASE_DIR}/logs", exist_ok=True)
-LOG_FILE = f"{BASE_DIR}/logs/trades_2025.log"
+LOG_FILE = f"{BASE_DIR}/logs/trades.log"
 ERROR_LOG_FILE = f"{BASE_DIR}/logs/errors.log"
 # Database Configuration
 DB_FILE = f"{BASE_DIR}/trades.db"
