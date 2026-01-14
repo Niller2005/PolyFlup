@@ -3,6 +3,33 @@
 from typing import Optional, Tuple, Dict, Any
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import time
+
+# Track A/B test logs per window to limit to once per symbol
+_ab_test_logged: set[tuple[str, str]] = set()  # (symbol, window_start)
+
+
+def _cleanup_old_ab_test_logs():
+    """Clean up old A/B test log entries (>15 minutes old)"""
+    global _ab_test_logged
+    now = time.time()
+    cutoff = now - 900  # 15 minutes in seconds
+
+    # Convert window timestamps to time and remove old entries
+    to_remove = []
+    for symbol, window_iso in _ab_test_logged:
+        try:
+            window_dt = datetime.fromisoformat(window_iso)
+            window_ts = window_dt.timestamp()
+            if window_ts < cutoff:
+                to_remove.append((symbol, window_iso))
+        except Exception:
+            to_remove.append((symbol, window_iso))
+
+    for entry in to_remove:
+        _ab_test_logged.discard(entry)
+
+
 from src.config.settings import (
     MIN_EDGE,
     BET_PERCENT,
@@ -222,8 +249,10 @@ def _prepare_trade_params(
     symbol: str, balance: float, add_spacing: bool = True, verbose: bool = True
 ) -> Optional[dict]:
     """
-    Prepare trade parameters without executing the order
+    Prepare trade parameters without executing order
     """
+    _cleanup_old_ab_test_logs()
+
     up_id, down_id = get_token_ids(symbol)
     if not up_id or not down_id:
         if verbose:
@@ -253,12 +282,17 @@ def _prepare_trade_params(
         bias = raw_scores.get("additive_bias", bias)
         method_used = "ADDITIVE"
 
-    # Log which method was selected for A/B testing (always log when bias != NEUTRAL)
-    if bias != "NEUTRAL":
+    # Get window start for tracking
+    window_start, window_end = get_window_times(symbol)
+    window_key = (symbol, window_start.isoformat())
+
+    # Log which method was selected for A/B testing (limit to once per symbol per window, during verbose cycle)
+    if bias != "NEUTRAL" and verbose and window_key not in _ab_test_logged:
         log(
             f"[{symbol}] 🧪 A/B TEST: Using {method_used} confidence (p_up={p_up:.3f}): "
             f"{confidence:.1%} | BAYESIAN: {raw_scores.get('bayesian_confidence', 0):.1%}, ADDITIVE: {raw_scores.get('additive_confidence', 0):.1%}"
         )
+        _ab_test_logged.add(window_key)
 
     if bias == "NEUTRAL" or best_bid is None or best_ask is None:
         if verbose:
