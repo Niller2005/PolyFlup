@@ -287,8 +287,8 @@ def _prepare_trade_params(
     window_start, window_end = get_window_times(symbol)
     window_key = (symbol, window_start.isoformat())
 
-    # Log which method was selected for A/B testing (limit to once per symbol per window, during verbose cycle)
-    if bias != "NEUTRAL" and verbose and window_key not in _ab_test_logged:
+    # Log which method was selected for A/B testing (limit to once per symbol per window)
+    if bias != "NEUTRAL" and window_key not in _ab_test_logged:
         log(
             f"[{symbol}] 🧪 A/B TEST: Using {method_used} confidence (p_up={p_up:.3f}): "
             f"{confidence:.1%} | BAYESIAN: {raw_scores.get('bayesian_confidence', 0):.1%}, ADDITIVE: {raw_scores.get('additive_confidence', 0):.1%}"
