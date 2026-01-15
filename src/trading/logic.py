@@ -7,11 +7,15 @@ import time
 
 # Track A/B test logs per window to limit to once per symbol
 _ab_test_logged: set[tuple[str, str]] = set()  # (symbol, window_start)
+# Track which method was selected for each window to ensure consistency
+_ab_test_method: dict[
+    tuple[str, str], str
+] = {}  # {(symbol, window_start): "BAYESIAN" or "ADDITIVE"}
 
 
 def _cleanup_old_ab_test_logs():
-    """Clean up old A/B test log entries (>15 minutes old)"""
-    global _ab_test_logged
+    """Clean up old A/B test log entries and method selections (>15 minutes old)"""
+    global _ab_test_logged, _ab_test_method
     now = time.time()
     cutoff = now - 900  # 15 minutes in seconds
 
@@ -28,6 +32,7 @@ def _cleanup_old_ab_test_logs():
 
     for entry in to_remove:
         _ab_test_logged.discard(entry)
+        _ab_test_method.pop(entry, None)
 
 
 from src.config.settings import (
@@ -269,21 +274,29 @@ def _prepare_trade_params(
         calculate_confidence(symbol, up_id, client, verbose=verbose)
     )
 
+    # Get window start for tracking (needed before A/B test selection)
+    window_start, window_end = get_window_times(symbol)
+    window_key = (symbol, window_start.isoformat())
+
     # A/B TESTING: Randomly select between Additive and Bayesian (50/50)
     # Or use configured method if A/B testing is disabled
+    # IMPORTANT: Method selection is PERSISTENT per window to ensure consistency
     import random
 
     if ENABLE_AB_TESTING:
-        use_bayesian = random.random() < 0.5  # 50% chance
+        # Check if method already selected for this window
+        if window_key not in _ab_test_method:
+            use_bayesian = random.random() < 0.5  # 50% chance
+            _ab_test_method[window_key] = "BAYESIAN" if use_bayesian else "ADDITIVE"
 
-        if use_bayesian:
+        method_used = _ab_test_method[window_key]
+
+        if method_used == "BAYESIAN":
             confidence = raw_scores.get("bayesian_confidence", confidence)
             bias = raw_scores.get("bayesian_bias", bias)
-            method_used = "BAYESIAN"
         else:
             confidence = raw_scores.get("additive_confidence", confidence)
             bias = raw_scores.get("additive_bias", bias)
-            method_used = "ADDITIVE"
     else:
         # Use configured method from BAYESIAN_CONFIDENCE setting
         if BAYESIAN_CONFIDENCE:
@@ -294,10 +307,6 @@ def _prepare_trade_params(
             confidence = raw_scores.get("additive_confidence", confidence)
             bias = raw_scores.get("additive_bias", bias)
             method_used = "ADDITIVE (CONFIGURED)"
-
-    # Get window start for tracking
-    window_start, window_end = get_window_times(symbol)
-    window_key = (symbol, window_start.isoformat())
 
     # Log which method was selected (limit to once per symbol per window)
     if bias != "NEUTRAL" and window_key not in _ab_test_logged:
