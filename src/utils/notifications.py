@@ -147,6 +147,15 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     trade_id, symbol, trade_side, db_size, db_price, db_status = row
 
                     if db_status == "FILLED":
+                        # Already filled by verification step, but still log for visibility
+                        new_price = float(fill_price) if fill_price else db_price
+                        new_size = float(fill_size) if fill_size else db_size
+                        order_id_short = (
+                            order_id[:10] if len(order_id) > 10 else order_id
+                        )
+                        log(
+                            f"🔍 [{symbol}] FILL {order_id_short}: {new_size:.2f} @ ${new_price:.4f} (buy order, verified)"
+                        )
                         return
 
                     # Update price/size if provided in notification
