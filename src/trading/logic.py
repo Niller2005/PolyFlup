@@ -38,6 +38,8 @@ from src.config.settings import (
     MAX_SIZE_MODE,
     MAX_ENTRY_LATENESS_SEC,
     ENABLE_BFXD,
+    BAYESIAN_CONFIDENCE,
+    ENABLE_AB_TESTING,
 )
 from src.utils.logger import log
 from src.data.database import has_trade_for_window, has_side_for_window
@@ -268,31 +270,47 @@ def _prepare_trade_params(
     )
 
     # A/B TESTING: Randomly select between Additive and Bayesian (50/50)
+    # Or use configured method if A/B testing is disabled
     import random
 
-    use_bayesian = random.random() < 0.5  # 50% chance
+    if ENABLE_AB_TESTING:
+        use_bayesian = random.random() < 0.5  # 50% chance
 
-    if use_bayesian:
-        # Override with Bayesian method
-        confidence = raw_scores.get("bayesian_confidence", confidence)
-        bias = raw_scores.get("bayesian_bias", bias)
-        method_used = "BAYESIAN"
+        if use_bayesian:
+            confidence = raw_scores.get("bayesian_confidence", confidence)
+            bias = raw_scores.get("bayesian_bias", bias)
+            method_used = "BAYESIAN"
+        else:
+            confidence = raw_scores.get("additive_confidence", confidence)
+            bias = raw_scores.get("additive_bias", bias)
+            method_used = "ADDITIVE"
     else:
-        # Use Additive method (default)
-        confidence = raw_scores.get("additive_confidence", confidence)
-        bias = raw_scores.get("additive_bias", bias)
-        method_used = "ADDITIVE"
+        # Use configured method from BAYESIAN_CONFIDENCE setting
+        if BAYESIAN_CONFIDENCE:
+            confidence = raw_scores.get("bayesian_confidence", confidence)
+            bias = raw_scores.get("bayesian_bias", bias)
+            method_used = "BAYESIAN (CONFIGURED)"
+        else:
+            confidence = raw_scores.get("additive_confidence", confidence)
+            bias = raw_scores.get("additive_bias", bias)
+            method_used = "ADDITIVE (CONFIGURED)"
 
     # Get window start for tracking
     window_start, window_end = get_window_times(symbol)
     window_key = (symbol, window_start.isoformat())
 
-    # Log which method was selected for A/B testing (limit to once per symbol per window)
+    # Log which method was selected (limit to once per symbol per window)
     if bias != "NEUTRAL" and window_key not in _ab_test_logged:
-        log(
-            f"[{symbol}] 🧪 A/B TEST: Using {method_used} confidence (p_up={p_up:.3f}): "
-            f"{confidence:.1%} | BAYESIAN: {raw_scores.get('bayesian_confidence', 0):.1%}, ADDITIVE: {raw_scores.get('additive_confidence', 0):.1%}"
-        )
+        if ENABLE_AB_TESTING:
+            log(
+                f"[{symbol}] 🧪 A/B TEST: Using {method_used} confidence (p_up={p_up:.3f}): "
+                f"{confidence:.1%} | BAYESIAN: {raw_scores.get('bayesian_confidence', 0):.1%}, ADDITIVE: {raw_scores.get('additive_confidence', 0):.1%}"
+            )
+        else:
+            log(
+                f"[{symbol}] ✅ Using {method_used} confidence (p_up={p_up:.3f}): "
+                f"{confidence:.1%} | BAYESIAN: {raw_scores.get('bayesian_confidence', 0):.1%}, ADDITIVE: {raw_scores.get('additive_confidence', 0):.1%}"
+            )
         _ab_test_logged.add(window_key)
 
     if bias == "NEUTRAL" or best_bid is None or best_ask is None:
