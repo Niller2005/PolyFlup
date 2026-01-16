@@ -451,6 +451,17 @@ def _prepare_trade_params(
             f"   📈 [{symbol}] Bumping size to {MIN_SIZE} shares (${bet_usd_effective:.2f})"
         )
 
+    HEDGE_COST_MULTIPLIER = 2 * 0.99
+    required_balance = size * HEDGE_COST_MULTIPLIER
+
+    if balance < required_balance:
+        log(
+            f"   💸 [{symbol}] Cannot hedge position (Need ${required_balance:.2f}, Have ${balance:.2f}). Skipping."
+        )
+        if add_spacing:
+            log("")
+        return None
+
     return {
         "symbol": symbol,
         "token_id": token_id,

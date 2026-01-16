@@ -129,6 +129,7 @@ def check_and_trigger_reversal(
     conn,
     now,
     reversal_triggered=False,
+    is_hedged=False,
 ):
     """
     Check if reversal should be triggered based on price.
@@ -143,11 +144,16 @@ def check_and_trigger_reversal(
         conn: Database connection
         now: Current datetime
         reversal_triggered: Whether reversal was already triggered
+        is_hedged: Whether position is already hedged
 
     Returns:
         True if reversal was triggered in this call, False otherwise
     """
     if reversal_triggered:
+        return False
+
+    # Skip reversal for hedged positions (hedge provides protection)
+    if is_hedged:
         return False
 
     # Dynamic trigger based on entry price with minimum headroom

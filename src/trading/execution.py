@@ -3,7 +3,70 @@
 from typing import Optional, Dict, Any
 from src.utils.logger import log, log_error, send_discord
 from src.data.database import save_trade
-from src.trading.orders import place_order, get_order, get_balance_allowance
+from src.trading.orders import (
+    place_order,
+    get_order,
+    get_balance_allowance,
+    get_clob_client,
+)
+from src.data.market_data import get_token_ids
+
+
+def place_hedge_order(
+    trade_id: int, symbol: str, entry_side: str, entry_price: float, entry_size: float
+) -> Optional[str]:
+    """
+    Place a limit order on the opposite side to hedge the position.
+
+    Hedge price is calculated to ensure combined price is under $0.99.
+    Example: Enter UP @ $0.52, hedge DOWN @ $0.47 = $0.99 total
+
+    Args:
+        trade_id: ID of the entry trade
+        symbol: Trading symbol
+        entry_side: Side of entry trade (UP or DOWN)
+        entry_price: Price of entry trade
+        entry_size: Size of entry trade
+
+    Returns:
+        Order ID if successful, None otherwise
+    """
+    try:
+        up_id, down_id = get_token_ids(symbol)
+        if not up_id or not down_id:
+            return None
+
+        # Calculate opposite side and token
+        if entry_side == "UP":
+            hedge_side = "DOWN"
+            hedge_token_id = down_id
+        else:
+            hedge_side = "UP"
+            hedge_token_id = up_id
+
+        # Calculate hedge price to ensure combined price < $0.99
+        # hedge_price = $0.99 - entry_price
+        hedge_price = round(0.99 - entry_price, 2)
+
+        # Ensure price is within valid range
+        hedge_price = max(0.01, min(0.99, hedge_price))
+
+        # Place hedge order
+        result = place_order(hedge_token_id, hedge_price, entry_size)
+
+        if not result["success"]:
+            log(f"   ❌ [{symbol}] Hedge order failed: {result.get('error')}")
+            return None
+
+        order_id = result["order_id"]
+        log(
+            f"   🛡️  [{symbol}] Hedge order placed: {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f} (ID: {order_id[:10]}) | Combined: ${entry_price:.2f} + ${hedge_price:.2f} = ${(entry_price + hedge_price):.2f}"
+        )
+
+        return order_id
+    except Exception as e:
+        log_error(f"[{symbol}] Error placing hedge order: {e}")
+        return None
 
 
 def execute_trade(

@@ -168,6 +168,39 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
                     # Track recent fill for balance API cooldown
                     track_recent_fill(trade_id, new_price, new_size, timestamp)
+
+                    # NEW: Place hedge order immediately after entry fill
+                    # We place the hedge order here to ensure fast execution after fill
+                    try:
+                        from src.trading.execution import place_hedge_order
+
+                        # Get trade details
+                        c.execute(
+                            "SELECT symbol, side, entry_price, size FROM trades WHERE id = ?",
+                            (trade_id,),
+                        )
+                        row = c.fetchone()
+
+                        if row:
+                            symbol, side, entry_price, size = row
+
+                            # Place hedge order
+                            hedge_order_id = place_hedge_order(
+                                trade_id, symbol, side, entry_price, size
+                            )
+
+                            # Update trade with hedge order ID
+                            if hedge_order_id:
+                                c.execute(
+                                    "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
+                                    (hedge_order_id, trade_id),
+                                )
+                                conn.commit()
+                    except Exception as e:
+                        log_error(
+                            f"[{symbol}] Error placing hedge order after fill: {e}"
+                        )
+
                     return  # Found and processed, done
 
                 # Check if this is a limit sell order (exit plan)
@@ -197,6 +230,28 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     # Mark order status so position manager knows to check it
                     c.execute(
                         "UPDATE trades SET order_status = 'EXIT_PLAN_PENDING_SETTLEMENT' WHERE id = ?",
+                        (trade_id,),
+                    )
+                    return
+
+                # Check if this is a hedge order fill
+                c.execute(
+                    "SELECT id, symbol, side, entry_price, size FROM trades WHERE hedge_order_id = ? AND settled = 0",
+                    (order_id,),
+                )
+                row = c.fetchone()
+
+                if row:
+                    trade_id, symbol, trade_side, entry_price, size = row
+                    order_id_short = order_id[:10] if len(order_id) > 10 else order_id
+
+                    log(
+                        f"🛡️  [{symbol}] HEDGE FILL {order_id_short}: {size:.1f} shares | Position is now HEDGED"
+                    )
+
+                    # Mark trade as hedged and stop further action
+                    c.execute(
+                        "UPDATE trades SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
                         (trade_id,),
                     )
                     return

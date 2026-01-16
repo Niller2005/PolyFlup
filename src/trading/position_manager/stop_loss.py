@@ -48,6 +48,7 @@ def _check_stop_loss(
     reversal_triggered=False,
     reversal_triggered_at=None,
     window_end_str=None,
+    is_hedged=False,
 ):
     """
     Check and execute stop loss.
@@ -57,6 +58,10 @@ def _check_stop_loss(
     c.execute("SELECT settled FROM trades WHERE id = ?", (trade_id,))
     if (row := c.fetchone()) and row[0] == 1:
         return True
+
+    # Skip stop loss for hedged positions (hedge provides protection)
+    if is_hedged:
+        return False
 
     # Early exit: Do not check stop loss for unfilled orders
     if buy_order_status not in ["FILLED", "MATCHED"]:
@@ -82,6 +87,7 @@ def _check_stop_loss(
             conn,
             now,
             reversal_triggered,
+            is_hedged,
         )
         if reversed_triggered:
             return False  # Don't stop loss in the same cycle as reversal trigger
