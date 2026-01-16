@@ -55,6 +55,14 @@ UNFILLED_CANCEL_THRESHOLD = float(
 UNFILLED_TIMEOUT_SECONDS = int(
     os.getenv("UNFILLED_TIMEOUT_SECONDS", "300")
 )  # Cancel unfilled orders after 5 minutes (300s)
+
+# Hedge Order Monitoring
+HEDGE_FILL_TIMEOUT_SECONDS = int(
+    os.getenv("HEDGE_FILL_TIMEOUT_SECONDS", "30")
+)  # Time to wait for hedge to fill before cancelling entry
+HEDGE_POLL_INTERVAL_SECONDS = int(
+    os.getenv("HEDGE_POLL_INTERVAL_SECONDS", "5")
+)  # Check hedge fill status every N seconds
 # Enhanced Balance Validation for API Reliability Issues
 ENABLE_ENHANCED_BALANCE_VALIDATION = (
     os.getenv("ENABLE_ENHANCED_BALANCE_VALIDATION", "YES").upper() == "YES"

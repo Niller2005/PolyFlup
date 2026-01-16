@@ -421,6 +421,122 @@ def place_entry_and_hedge_atomic(
         else:
             log(f"   ❌ [{symbol}] Hedge order failed: {hedge_result.get('error')}")
 
+        # MONITOR: Poll hedge fill status with early exit
+        # If hedge doesn't fill within timeout, cancel entry to prevent unhedged position
+        if entry_result.get("success") and hedge_result.get("success"):
+            from src.config.settings import (
+                HEDGE_FILL_TIMEOUT_SECONDS,
+                HEDGE_POLL_INTERVAL_SECONDS,
+            )
+
+            entry_order_id = entry_result.get("order_id")
+            hedge_order_id = hedge_result.get("order_id")
+
+            if not entry_order_id or not hedge_order_id:
+                log(f"   ⚠️  [{symbol}] Missing order IDs, skipping hedge monitoring")
+            else:
+                log(
+                    f"   ⏱️  [{symbol}] Monitoring hedge fill for {HEDGE_FILL_TIMEOUT_SECONDS}s (polling every {HEDGE_POLL_INTERVAL_SECONDS}s)..."
+                )
+
+                elapsed = 0
+                hedge_filled = False
+                entry_filled = False
+
+                while elapsed < HEDGE_FILL_TIMEOUT_SECONDS:
+                    time.sleep(HEDGE_POLL_INTERVAL_SECONDS)
+                    elapsed += HEDGE_POLL_INTERVAL_SECONDS
+
+                    try:
+                        # Check hedge status
+                        hedge_status = get_order(hedge_order_id)
+                        if hedge_status:
+                            hedge_filled_size = float(
+                                hedge_status.get("size_matched", 0)
+                            )
+                            hedge_filled = hedge_filled_size >= (entry_size - 0.01)
+
+                            if hedge_filled:
+                                log(
+                                    f"   ✅ [{symbol}] Hedge filled after {elapsed}s: {hedge_filled_size:.2f}/{entry_size:.1f} shares"
+                                )
+                                break
+                            elif hedge_filled_size > 0:
+                                log(
+                                    f"   ⏳ [{symbol}] Hedge partially filled ({elapsed}s): {hedge_filled_size:.2f}/{entry_size:.1f} shares"
+                                )
+
+                        # Check entry status
+                        entry_status = get_order(entry_order_id)
+                        if entry_status:
+                            entry_filled_size = float(
+                                entry_status.get("size_matched", 0)
+                            )
+                            entry_filled = entry_filled_size >= (entry_size - 0.01)
+
+                            if entry_filled and not hedge_filled:
+                                log(
+                                    f"   ⚠️  [{symbol}] Entry filled but hedge not filled after {elapsed}s"
+                                )
+
+                    except Exception as poll_err:
+                        log(f"   ⚠️  [{symbol}] Error polling order status: {poll_err}")
+
+                # TIMEOUT: If hedge didn't fill and entry did, cancel entry to prevent unhedged position
+                if not hedge_filled:
+                    try:
+                        # Check final status
+                        entry_status = get_order(entry_order_id)
+                        if entry_status:
+                            entry_filled_size = float(
+                                entry_status.get("size_matched", 0)
+                            )
+                            entry_filled = entry_filled_size >= (entry_size - 0.01)
+
+                            if entry_filled:
+                                log(
+                                    f"   ❌ [{symbol}] HEDGE TIMEOUT: Entry filled ({entry_filled_size:.2f}) but hedge unfilled after {HEDGE_FILL_TIMEOUT_SECONDS}s"
+                                )
+                                log(
+                                    f"   ⚠️  [{symbol}] CRITICAL: Position is UNHEDGED - consider manual intervention"
+                                )
+                                # Don't cancel already-filled entry, but flag it
+                                # Return results so position manager can handle it
+                            else:
+                                # Entry not filled yet, cancel it
+                                log(
+                                    f"   ⏱️  [{symbol}] HEDGE TIMEOUT: Hedge unfilled after {HEDGE_FILL_TIMEOUT_SECONDS}s, cancelling entry order"
+                                )
+                                from src.trading.orders import cancel_order
+
+                                cancel_result = cancel_order(entry_order_id)
+                                if cancel_result:
+                                    log(
+                                        f"   ✅ [{symbol}] Entry order cancelled to prevent unhedged position"
+                                    )
+                                    return None, None
+                                else:
+                                    log(
+                                        f"   ⚠️  [{symbol}] Failed to cancel entry order - check position manually"
+                                    )
+
+                        # Also cancel unfilled hedge
+                        hedge_status = get_order(hedge_order_id)
+                        if hedge_status:
+                            hedge_filled_size = float(
+                                hedge_status.get("size_matched", 0)
+                            )
+                            if hedge_filled_size < (entry_size - 0.01):
+                                log(f"   🚫 [{symbol}] Cancelling unfilled hedge order")
+                                from src.trading.orders import cancel_order
+
+                                cancel_order(hedge_order_id)
+
+                    except Exception as timeout_err:
+                        log_error(
+                            f"[{symbol}] Error handling hedge timeout: {timeout_err}"
+                        )
+
         return entry_result, hedge_result
 
     except Exception as e:
