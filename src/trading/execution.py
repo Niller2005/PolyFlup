@@ -217,7 +217,8 @@ def place_hedge_order(
             hedge_status = get_order(order_id)
             if hedge_status:
                 hedge_filled_size = float(hedge_status.get("size_matched", 0))
-                if hedge_filled_size >= actual_entry_size - 0.0001:
+                # Use 0.01 tolerance (99%+ filled = fully hedged)
+                if hedge_filled_size >= actual_entry_size - 0.01:
                     log(
                         f"   ✅ [{symbol}] Hedge immediately verified: {hedge_filled_size:.2f}/{actual_entry_size:.2f} shares filled"
                     )
@@ -556,7 +557,8 @@ def execute_trade(
                 hedge_status = get_order(hedge_order_id)
                 if hedge_status:
                     hedge_filled_size = float(hedge_status.get("size_matched", 0))
-                    is_hedge_filled = hedge_filled_size >= actual_size - 0.0001
+                    # Use 0.01 tolerance (99%+ filled = fully hedged)
+                    is_hedge_filled = hedge_filled_size >= actual_size - 0.01
 
                     if cursor:
                         if is_hedge_filled:

@@ -539,7 +539,9 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                             )
 
                     # Check if hedge is fully filled
-                    is_fully_hedged = abs(hedge_filled_size - size) < 0.0001
+                    # Use >= comparison with 0.01 tolerance (99%+ filled = fully hedged)
+                    # This handles partial fills like 9.994/10.0 shares (99.94% filled)
+                    is_fully_hedged = hedge_filled_size >= (size - 0.01)
 
                     if is_fully_hedged:
                         log(
