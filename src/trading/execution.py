@@ -388,6 +388,24 @@ def place_entry_and_hedge_atomic(
         entry_result = results[0]
         hedge_result = results[1]
 
+        # CRITICAL: If hedge fails, cancel entry to prevent unhedged position
+        if entry_result.get("success") and not hedge_result.get("success"):
+            entry_order_id = entry_result.get("order_id")
+            log(
+                f"   ⚠️  [{symbol}] Hedge order failed, cancelling entry order {entry_order_id[:10]} to prevent unhedged position"
+            )
+            try:
+                from src.trading.orders import cancel_order
+
+                cancel_order(entry_order_id)
+                log(f"   ✅ [{symbol}] Entry order cancelled successfully")
+                return None, None
+            except Exception as cancel_err:
+                log_error(
+                    f"[{symbol}] CRITICAL: Failed to cancel entry order {entry_order_id[:10]}: {cancel_err}"
+                )
+                # Continue with original flow - entry might already be filled
+
         # Log results
         if entry_result.get("success"):
             log(
@@ -424,6 +442,8 @@ def execute_trade(
     size = trade_params["size"]
 
     # Pre-flight balance check - MUST include hedge cost!
+    # This prevents entry if we can't afford the full position + hedge
+    # CRITICAL: Protects against unhedged positions due to insufficient balance
     entry_cost = size * price
     hedge_cost = size * (0.99 - price)  # Actual hedge cost (always $0.99 combined)
     total_cost_needed = entry_cost + hedge_cost
