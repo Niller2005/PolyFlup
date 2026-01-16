@@ -136,10 +136,52 @@ def sync_positions_with_exchange(user_address: str):
                             log(
                                 f"   📊 [{symbol}] #{trade_id} Sync: Size mismatch {db_size:.2f} -> {actual_size:.2f}"
                             )
-                            c.execute(
-                                "UPDATE trades SET size = ?, bet_usd = ? * ? WHERE id = ?",
-                                (actual_size, actual_size, actual_price, trade_id),
-                            )
+
+                            # Check if position grew (scale-in filled) and needs additional hedge
+                            if actual_size > db_size:
+                                size_increase = actual_size - db_size
+
+                                # Check if we have a hedge order for this position
+                                c.execute(
+                                    "SELECT hedge_order_id, is_hedged FROM trades WHERE id = ?",
+                                    (trade_id,),
+                                )
+                                hedge_row = c.fetchone()
+
+                                if hedge_row and hedge_row[0] and not hedge_row[1]:
+                                    # Hedge was placed but not fully filled yet
+                                    log(
+                                        f"   🔍 [{symbol}] #{trade_id} Position grew by {size_increase:.2f} shares. Checking hedge status..."
+                                    )
+
+                                    # Need to check if hedge needs to be increased
+                                    # This will be handled by the monitoring loop
+                                    c.execute(
+                                        "UPDATE trades SET size = ?, bet_usd = ? * ?, order_status = 'HEDGE_SIZE_MISMATCH' WHERE id = ?",
+                                        (
+                                            actual_size,
+                                            actual_size,
+                                            actual_price,
+                                            trade_id,
+                                        ),
+                                    )
+                                else:
+                                    # Normal size update
+                                    c.execute(
+                                        "UPDATE trades SET size = ?, bet_usd = ? * ? WHERE id = ?",
+                                        (
+                                            actual_size,
+                                            actual_size,
+                                            actual_price,
+                                            trade_id,
+                                        ),
+                                    )
+                            else:
+                                # Position decreased or normal update
+                                c.execute(
+                                    "UPDATE trades SET size = ?, bet_usd = ? * ? WHERE id = ?",
+                                    (actual_size, actual_size, actual_price, trade_id),
+                                )
 
                     # Check for entry price mismatch
                     if abs(actual_price - db_entry) > 0.0001:

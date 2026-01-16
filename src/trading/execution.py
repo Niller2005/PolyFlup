@@ -121,6 +121,26 @@ def place_hedge_order(
             f"   🛡️  [{symbol}] Hedge order placed{merge_status}: {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f} (ID: {order_id[:10]}) | Combined: ${entry_price:.2f} + ${hedge_price:.2f} = ${(entry_price + hedge_price):.2f}"
         )
 
+        # Check remaining capital after hedge - warn if insufficient for scale-ins
+        try:
+            from src.trading.orders import get_balance_allowance
+
+            bal_info = get_balance_allowance()
+            remaining_usdc = float(bal_info.get("balance", 0)) if bal_info else 0.0
+
+            # Scale-in typically needs ~$6-8 (size * price for similar position)
+            scale_in_reserve = entry_size * entry_price
+
+            if remaining_usdc < scale_in_reserve:
+                log(
+                    f"   ⚠️  [{symbol}] Low capital after hedge: ${remaining_usdc:.2f} remaining (scale-in needs ~${scale_in_reserve:.2f})"
+                )
+                log(
+                    f"   💡 [{symbol}] Consider disabling scale-ins or reducing BET_SIZE to preserve capital for hedges"
+                )
+        except Exception as cap_check_err:
+            pass  # Don't fail hedge placement if balance check errors
+
         # Store hedge price in database
         if cursor:
             # Use existing transaction cursor

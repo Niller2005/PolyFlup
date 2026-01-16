@@ -306,6 +306,115 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                         f"[{sym}] Error placing hedge order in monitor: {hedge_err}"
                                     )
 
+                    # Check for hedge size mismatch (position grew after hedge was placed)
+                    if curr_b_status == "HEDGE_SIZE_MISMATCH" or (
+                        curr_b_status == "FILLED" and is_hed == 0
+                    ):
+                        # Position is filled but not hedged, or size mismatch detected
+                        c.execute(
+                            "SELECT hedge_order_id FROM trades WHERE id = ?",
+                            (tid,),
+                        )
+                        hedge_check = c.fetchone()
+
+                        if hedge_check and hedge_check[0]:
+                            # We have a hedge order, check its filled size
+                            try:
+                                hedge_order = get_order(hedge_check[0])
+                                if hedge_order:
+                                    hedge_filled_size = float(
+                                        hedge_order.get("size_matched", 0)
+                                    )
+                                    hedge_original_size = float(
+                                        hedge_order.get("original_size", 0)
+                                    )
+
+                                    # Check if there's a gap between position size and hedge size
+                                    unhedged_amount = size - hedge_filled_size
+
+                                    if (
+                                        unhedged_amount > 0.1
+                                    ):  # More than 0.1 shares unhedged
+                                        log(
+                                            f"   ⚠️  [{sym}] #{tid} HEDGE MISMATCH: Position={size:.2f}, Hedge filled={hedge_filled_size:.2f}, Unhedged={unhedged_amount:.2f}"
+                                        )
+
+                                        # Check if we have enough capital to place corrective hedge
+                                        bal_data = get_balance_allowance()
+                                        usdc_balance = float(bal_data.get("balance", 0))
+
+                                        # Calculate hedge cost (opposite side price)
+                                        hedge_side = "DOWN" if side == "UP" else "UP"
+                                        hedge_cost = unhedged_amount * (
+                                            1.0 - entry
+                                        )  # Approximate
+
+                                        if usdc_balance >= hedge_cost:
+                                            log(
+                                                f"   🛡️  [{sym}] #{tid} Placing corrective hedge for {unhedged_amount:.2f} unhedged shares..."
+                                            )
+
+                                            # Place additional hedge order
+                                            try:
+                                                from src.trading.execution import (
+                                                    place_hedge_order,
+                                                )
+
+                                                # We can't use place_hedge_order directly as it expects full position
+                                                # Instead, place a manual order for the unhedged amount
+                                                from src.trading.orders import (
+                                                    place_order,
+                                                )
+                                                from src.data.market_data import (
+                                                    get_token_ids,
+                                                )
+
+                                                token_ids = get_token_ids(slug)
+                                                if token_ids:
+                                                    hedge_token_id = (
+                                                        token_ids.get("DOWN")
+                                                        if side == "UP"
+                                                        else token_ids.get("UP")
+                                                    )
+                                                    hedge_price = round(0.99 - entry, 2)
+                                                    hedge_price = max(
+                                                        0.01, min(0.99, hedge_price)
+                                                    )
+
+                                                    result = place_order(
+                                                        hedge_token_id,
+                                                        hedge_price,
+                                                        unhedged_amount,
+                                                    )
+                                                    if result.get("success"):
+                                                        log(
+                                                            f"   ✅ [{sym}] #{tid} Corrective hedge placed: {unhedged_amount:.2f} @ ${hedge_price}"
+                                                        )
+                                                        # Update status to indicate we've addressed it
+                                                        c.execute(
+                                                            "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
+                                                            (tid,),
+                                                        )
+                                                    else:
+                                                        log(
+                                                            f"   ❌ [{sym}] #{tid} Corrective hedge failed: {result.get('error')}"
+                                                        )
+                                            except Exception as corr_err:
+                                                log_error(
+                                                    f"[{sym}] #{tid} Error placing corrective hedge: {corr_err}"
+                                                )
+                                        else:
+                                            log(
+                                                f"   💸 [{sym}] #{tid} Cannot place corrective hedge: Need ${hedge_cost:.2f}, Have ${usdc_balance:.2f}"
+                                            )
+                                            log(
+                                                f"   ⚠️  [{sym}] #{tid} Position has {unhedged_amount:.2f} shares UNHEDGED - relying on exit plan for protection"
+                                            )
+                            except Exception as hedge_check_err:
+                                log_error(
+                                    f"[{sym}] #{tid} Error checking hedge size: {hedge_check_err}"
+                                )
+
                     if curr_b_status not in ["FILLED", "MATCHED"]:
                         continue
 
