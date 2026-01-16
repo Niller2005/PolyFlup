@@ -260,6 +260,15 @@ def merge_hedged_position(
                     f"[{symbol}] #{trade_id} Relayer merge failed, falling back to Web3"
                 )
         except Exception as e:
+            error_str = str(e)
+
+            # Check if error is due to quota exceeded (429)
+            if "429" in error_str or "quota exceeded" in error_str:
+                log(
+                    f"   ⚠️  [{symbol}] #{trade_id} Relayer quota exhausted, skipping merge (position will settle normally)"
+                )
+                return None  # Don't fallback to Web3, just let it settle
+
             log_error(
                 f"[{symbol}] #{trade_id} Relayer error: {e}, falling back to Web3"
             )
@@ -312,6 +321,19 @@ def merge_hedged_position(
                 f"   ⛽ [{symbol}] Gas estimate: {tx_params['gas']} (${(tx_params['gas'] * gas_price / 1e18):.4f})"
             )
         except Exception as e:
+            error_str = str(e)
+
+            # Check if error indicates tokens don't exist yet (SafeMath overflow, execution reverted)
+            if (
+                "SafeMath" in error_str
+                or "execution reverted" in error_str
+                or "subtraction overflow" in error_str
+            ):
+                log(
+                    f"   ⚠️  [{symbol}] Tokens not yet indexed on-chain, skipping merge (will retry later or settle normally)"
+                )
+                return None  # Don't attempt merge if tokens don't exist
+
             log_error(f"[{symbol}] Gas estimation failed: {e}")
             # Use conservative default
             tx_params["gas"] = 300000
