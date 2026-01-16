@@ -135,288 +135,37 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
 
 
 def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> int:
-    """Execute trading logic for multiple symbols using batch orders"""
-    market_tokens = {}
-    all_token_ids = []
+    """
+    Execute trading logic for multiple symbols using ATOMIC entry+hedge for each.
 
-    for symbol in symbols:
-        up_id, down_id = get_token_ids(symbol)
-        if up_id and down_id:
-            market_tokens[symbol] = (up_id, down_id)
-            all_token_ids.extend([up_id, down_id])
+    This function now calls execute_trade() for each symbol individually to ensure
+    every trade gets a hedge order placed atomically with the entry order.
 
-    if all_token_ids:
-        ws_manager.subscribe_to_prices(all_token_ids)
-
-    spreads = get_bulk_spreads(all_token_ids)
-
-    valid_symbols = []
-    skipped_due_to_empty_book = 0
-    for symbol in symbols:
-        if symbol not in market_tokens:
-            continue
-
-        up_id, down_id = market_tokens[symbol]
-        up_spread = spreads.get(str(up_id))
-        if up_spread is None:
-            up_spread = get_spread(up_id)
-
-        down_spread = spreads.get(str(down_id))
-        if down_spread is None:
-            down_spread = get_spread(down_id)
-
-        up_spread = float(up_spread) if up_spread is not None else 0.0
-        down_spread = float(down_spread) if down_spread is not None else 0.0
-
-        if up_spread >= 1.0 or down_spread >= 1.0:
-            if verbose:
-                log(
-                    f"[{symbol}] ⏳ No liquidity yet (Spread: 1.0). Waiting for market makers..."
-                )
-            skipped_due_to_empty_book += 1
-            continue
-
-        if up_spread > MAX_SPREAD or down_spread > MAX_SPREAD:
-            if verbose:
-                log(
-                    f"[{symbol}] ⚠️  Spread too wide (UP: {up_spread:.3f}, DOWN: {down_spread:.3f}). SKIPPING."
-                )
-            continue
-        valid_symbols.append(symbol)
-
-    if not valid_symbols:
-        if skipped_due_to_empty_book > 0 and skipped_due_to_empty_book == len(
-            market_tokens
-        ):
-            return -1
-        return 0
-
-    trade_params_list = []
-    remaining_balance = balance
-    last_symbol_logged = False
-    skipped_count = 0
-
-    for i, symbol in enumerate(valid_symbols):
-        if last_symbol_logged and verbose:
-            log("")
-            last_symbol_logged = False
-
-        params = _prepare_trade_params(
-            symbol, remaining_balance, add_spacing=False, verbose=verbose
-        )
-        if params:
-            trade_params_list.append(params)
-            # Deduct required balance for this trade from remaining balance
-            remaining_balance -= params["required_balance"]
-            if verbose and remaining_balance < 0:
-                log(
-                    f"   💰 [{symbol}] Cumulative balance tracking: ${balance:.2f} - ${params['required_balance']:.2f} reserved = ${remaining_balance + params['required_balance']:.2f} remaining"
-                )
-            last_symbol_logged = True
-        elif verbose:
-            skipped_count += 1
-
-    # Log grouped summary of symbols skipped due to low balance
-    if verbose:
-        log_skipped_symbols_summary(balance)
-
-    if not trade_params_list:
-        return 0
-
-    # Final aggregate balance check before batch submission
-    total_required = sum(p["required_balance"] for p in trade_params_list)
-    if total_required > balance:
-        if verbose:
-            log(
-                f"   ⚠️  Aggregate balance check failed: Need ${total_required:.2f}, Have ${balance:.2f}"
-            )
-            log(
-                f"   ⚠️  Rejecting {len(trade_params_list)} trades to prevent over-commitment"
-            )
-        return 0
-
-    # Log batch summary
-    if verbose and len(trade_params_list) > 1:
-        symbols_str = ", ".join(p["symbol"] for p in trade_params_list)
-        log(
-            f"   📦 Batch: {len(trade_params_list)} trades ({symbols_str}) | Total required: ${total_required:.2f} | Available: ${balance:.2f} | Remaining: ${balance - total_required:.2f}"
-        )
-
-    orders = [
-        {
-            "token_id": p["token_id"],
-            "price": p["price"],
-            "size": p["size"],
-            "side": BUY,
-        }
-        for p in trade_params_list
-    ]
-
-    results = place_batch_orders(orders)
-
+    Previous implementation used batch orders without hedges, which caused unhedged
+    positions when balance was insufficient for fallback hedge placement.
+    """
     placed_count = 0
-    from src.data.db_connection import db_connection
+    remaining_balance = balance
 
-    # Wait for order fills to verify before saving as FILLED
-    # This prevents false FILLED status from exchange API
-    import time
+    for symbol in symbols:
+        # Each trade is executed independently with atomic entry+hedge
+        trade_id = execute_first_entry(symbol, remaining_balance, verbose=verbose)
 
-    time.sleep(2.0)  # Wait 2 seconds for fills to process
-
-    for i, result in enumerate(results):
-        if i < len(trade_params_list) and result["success"]:
+        if trade_id:
             placed_count += 1
-            p = trade_params_list[i]
+            # Update remaining balance for next symbol
+            # Note: We get fresh balance after each trade since hedge may have filled and merged
+            from src.trading.orders import get_balance_allowance
 
-            actual_size = p["size"]
-            actual_price = p["price"]
-            actual_status = result["status"]
-            is_reversal = "HEDGED REVERSAL" in str(p.get("core_summary", ""))
+            bal_info = get_balance_allowance()
+            if bal_info:
+                remaining_balance = bal_info.get("balance", 0)
 
-            # Verify order status after 2-second delay
-            order_id = result.get("order_id")
-            verified_status = actual_status
-            try:
-                o_data = get_order(order_id)
-                if o_data:
-                    api_status = o_data.get("status", "").upper()
-                    # Use verified status from get_order() instead of batch response
-                    if api_status in ["FILLED", "MATCHED"]:
-                        verified_status = api_status
-                        sz_m = float(o_data.get("size_matched", 0))
-                        pr_m = float(o_data.get("price", 0))
-                        if sz_m > 0:
-                            actual_size = sz_m
-                            if pr_m > 0:
-                                actual_price = pr_m
-                                p["bet_usd"] = actual_size * actual_price
-                    elif api_status in ["LIVE", "OPEN", "PENDING"]:
-                        # Order still waiting on book - use LIVE status
-                        verified_status = api_status
-                        log(
-                            f"   ⏳ [{p['symbol']}] Order {order_id[:10]} verified as {verified_status} (2s delay check)"
-                        )
-                    else:
-                        # Unexpected status - use original
-                        log(
-                            f"   ⚠️  [{p['symbol']}] Order {order_id[:10]} has unexpected status: {api_status}"
-                        )
-            except Exception as e:
-                log(
-                    f"   ⚠️  [{p['symbol']}] Could not verify order {order_id[:10]}: {e}"
-                )
+        # Small delay between trades to avoid rate limits
+        if placed_count > 0 and symbol != symbols[-1]:
+            import time
 
-            if verified_status.upper() in ["FILLED", "MATCHED"]:
-                try:
-                    send_discord(
-                        f"**{'🔄 ' if is_reversal else ''}[{p['symbol']}] {p['side']} ${p['bet_usd']:.2f}** | Confidence {p['confidence']:.1%} | Price {actual_price:.4f}"
-                    )
-                    trade_id = save_trade(
-                        symbol=p["symbol"],
-                        window_start=p["window_start"].isoformat(),
-                        window_end=p["window_end"].isoformat(),
-                        slug=p["slug"],
-                        token_id=p["token_id"],
-                        side=p["side"],
-                        edge=p["confidence"],
-                        price=actual_price,
-                        size=actual_size,
-                        bet_usd=p["bet_usd"],
-                        p_yes=p["p_up"],
-                        best_bid=p["best_bid"],
-                        best_ask=p["best_ask"],
-                        imbalance=p["imbalance"],
-                        funding_bias=p["funding_bias"],
-                        order_status=verified_status,
-                        order_id=result["order_id"],
-                        limit_sell_order_id=None,
-                        is_reversal=is_reversal,
-                        target_price=p["target_price"],
-                        up_total=p["raw_scores"].get("up_total"),
-                        down_total=p["raw_scores"].get("down_total"),
-                        momentum_score=p["raw_scores"].get("momentum_score"),
-                        momentum_dir=p["raw_scores"].get("momentum_dir"),
-                        flow_score=p["raw_scores"].get("flow_score"),
-                        flow_dir=p["raw_scores"].get("flow_dir"),
-                        divergence_score=p["raw_scores"].get("divergence_score"),
-                        divergence_dir=p["raw_scores"].get("divergence_dir"),
-                        vwm_score=p["raw_scores"].get("vwm_score"),
-                        vwm_dir=p["raw_scores"].get("vwm_dir"),
-                        pm_mom_score=p["raw_scores"].get("pm_mom_score"),
-                        pm_mom_dir=p["raw_scores"].get("pm_mom_dir"),
-                        adx_score=p["raw_scores"].get("adx_score"),
-                        adx_dir=p["raw_scores"].get("adx_dir"),
-                        lead_lag_bonus=p["raw_scores"].get("lead_lag_bonus"),
-                        additive_confidence=p["raw_scores"].get("additive_confidence"),
-                        additive_bias=p["raw_scores"].get("additive_bias"),
-                        bayesian_confidence=p["raw_scores"].get("bayesian_confidence"),
-                        bayesian_bias=p["raw_scores"].get("bayesian_bias"),
-                        market_prior_p_up=p["raw_scores"].get("market_prior_p_up"),
-                    )
-                    if trade_id:
-                        log(
-                            f"   🚀 [{p['symbol']}] {p['side']} {actual_size:.1f} @ ${actual_price:.4f} | Edge: {p['confidence']:.1%}"
-                        )
-                    else:
-                        log(f"   ❌ [{p['symbol']}] Failed to save trade to database")
-
-                except Exception as e:
-                    log(f"   ❌ [{p['symbol']}] Failed to save trade: {e}")
-            elif verified_status.upper() in ["LIVE", "OPEN", "PENDING"]:
-                # Save LIVE orders to database to prevent phantom order issue
-                try:
-                    trade_id = save_trade(
-                        symbol=p["symbol"],
-                        window_start=p["window_start"].isoformat(),
-                        window_end=p["window_end"].isoformat(),
-                        slug=p["slug"],
-                        token_id=p["token_id"],
-                        side=p["side"],
-                        edge=p["confidence"],
-                        price=actual_price,
-                        size=actual_size,
-                        bet_usd=p["bet_usd"],
-                        p_yes=p["p_up"],
-                        best_bid=p["best_bid"],
-                        best_ask=p["best_ask"],
-                        imbalance=p["imbalance"],
-                        funding_bias=p["funding_bias"],
-                        order_status=verified_status,
-                        order_id=result["order_id"],
-                        limit_sell_order_id=None,
-                        is_reversal=is_reversal,
-                        target_price=p["target_price"],
-                        up_total=p["raw_scores"].get("up_total"),
-                        down_total=p["raw_scores"].get("down_total"),
-                        momentum_score=p["raw_scores"].get("momentum_score"),
-                        momentum_dir=p["raw_scores"].get("momentum_dir"),
-                        flow_score=p["raw_scores"].get("flow_score"),
-                        flow_dir=p["raw_scores"].get("flow_dir"),
-                        divergence_score=p["raw_scores"].get("divergence_score"),
-                        divergence_dir=p["raw_scores"].get("divergence_dir"),
-                        vwm_score=p["raw_scores"].get("vwm_score"),
-                        vwm_dir=p["raw_scores"].get("vwm_dir"),
-                        pm_mom_score=p["raw_scores"].get("pm_mom_score"),
-                        pm_mom_dir=p["raw_scores"].get("pm_mom_dir"),
-                        adx_score=p["raw_scores"].get("adx_score"),
-                        adx_dir=p["raw_scores"].get("adx_dir"),
-                        lead_lag_bonus=p["raw_scores"].get("lead_lag_bonus"),
-                        additive_confidence=p["raw_scores"].get("additive_confidence"),
-                        additive_bias=p["raw_scores"].get("additive_bias"),
-                        bayesian_confidence=p["raw_scores"].get("bayesian_confidence"),
-                        bayesian_bias=p["raw_scores"].get("bayesian_bias"),
-                        market_prior_p_up=p["raw_scores"].get("market_prior_p_up"),
-                    )
-                    if trade_id:
-                        log(
-                            f"   📝 [{p['symbol']}] {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | Saved as {verified_status}"
-                        )
-                    else:
-                        log(
-                            f"   ❌ [{p['symbol']}] Failed to save LIVE trade to database"
-                        )
-                except Exception as e:
-                    log(f"   ❌ [{p['symbol']}] Failed to save LIVE trade: {e}")
+            time.sleep(0.5)
 
     return placed_count
 
