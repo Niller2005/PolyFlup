@@ -317,6 +317,9 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                         )
 
                         user_address = Account.from_key(PROXY_PK).address
+                        log(
+                            f"   🔍 [{symbol}] Fetching condition_id for trade #{trade_id}..."
+                        )
 
                         # Get token_id from trade
                         c.execute(
@@ -326,19 +329,37 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
                         if token_row:
                             token_id = token_row[0]
+                            log(f"   🔍 [{symbol}] Token ID: {token_id}")
+
                             position_data = get_position_from_data_api(
                                 user_address, token_id, symbol
                             )
 
-                            if position_data and position_data.get("condition_id"):
-                                condition_id = position_data["condition_id"]
-                                c.execute(
-                                    "UPDATE trades SET condition_id = ? WHERE id = ?",
-                                    (condition_id, trade_id),
-                                )
+                            if position_data:
                                 log(
-                                    f"   📍 [{symbol}] Stored condition_id: {condition_id[:16]}..."
+                                    f"   🔍 [{symbol}] Position data received: {position_data}"
                                 )
+                                if position_data.get("condition_id"):
+                                    condition_id = position_data["condition_id"]
+                                    c.execute(
+                                        "UPDATE trades SET condition_id = ? WHERE id = ?",
+                                        (condition_id, trade_id),
+                                    )
+                                    log(
+                                        f"   📍 [{symbol}] Stored condition_id: {condition_id[:16]}..."
+                                    )
+                                else:
+                                    log(
+                                        f"   ⚠️  [{symbol}] Position data missing condition_id field"
+                                    )
+                            else:
+                                log(
+                                    f"   ⚠️  [{symbol}] No position data returned from Data API"
+                                )
+                        else:
+                            log(
+                                f"   ⚠️  [{symbol}] No token_id found for trade #{trade_id}"
+                            )
                     except Exception as e:
                         log_error(
                             f"[{symbol}] Error fetching condition_id after fill: {e}"
