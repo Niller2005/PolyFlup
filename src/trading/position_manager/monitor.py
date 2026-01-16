@@ -28,6 +28,8 @@ from .exit import _check_exit_plan
 
 _failed_pnl_checks = {}
 _recent_hedge_placements = {}  # Track recent hedge order placements to avoid race condition
+_last_no_positions_log = 0.0  # Rate-limit "No open positions" message
+_NO_POSITIONS_LOG_COOLDOWN = 30  # Log once per 30 seconds
 
 # Monitor health tracking
 _last_monitor_check = time.time()
@@ -75,7 +77,15 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
             open_positions = c.fetchall()
             if not open_positions:
                 if verbose:
-                    log("💤 No open positions. Monitoring markets...")
+                    # Rate-limit this log message (once per 30 seconds)
+                    global _last_no_positions_log
+                    current_time = time.time()
+                    if (
+                        current_time - _last_no_positions_log
+                        >= _NO_POSITIONS_LOG_COOLDOWN
+                    ):
+                        log("💤 No open positions. Monitoring markets...")
+                        _last_no_positions_log = current_time
                 return
 
             # PRIORITY 1: Batch price fetching

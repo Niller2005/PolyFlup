@@ -47,6 +47,10 @@ NOTIF_ORDER_CANCELLED = 1
 NOTIF_ORDER_FILLED = 2
 NOTIF_MARKET_RESOLVED = 4
 
+# Track processed notifications to prevent duplicates (notif_id -> timestamp)
+_processed_notifications: Dict[str, float] = {}
+_NOTIFICATION_CACHE_DURATION = 3600  # Keep for 1 hour
+
 
 def init_ws_callbacks():
     """Register WebSocket callbacks for real-time updates"""
@@ -90,11 +94,35 @@ def process_notifications() -> None:
         if not notifications:
             return
 
+        # Clean up old processed notifications (older than 1 hour)
+        current_time = time.time()
+        expired_ids = [
+            nid
+            for nid, ts in _processed_notifications.items()
+            if current_time - ts > _NOTIFICATION_CACHE_DURATION
+        ]
+        for nid in expired_ids:
+            del _processed_notifications[nid]
+
+        # Filter out already-processed notifications
+        new_notifications = []
+        for notif in notifications:
+            notif_id = str(notif.get("id", ""))
+            if notif_id and notif_id not in _processed_notifications:
+                new_notifications.append(notif)
+
+        if not new_notifications:
+            # All notifications were already processed - just drop them silently
+            notification_ids = [str(n.get("id")) for n in notifications if n.get("id")]
+            if notification_ids:
+                drop_notifications(notification_ids)
+            return
+
         processed_ids = []
 
-        # Log batch summary
+        # Log batch summary (only for new notifications)
         type_counts = {}
-        for notif in notifications:
+        for notif in new_notifications:
             notif_type = notif.get("type")
             type_name = {
                 NOTIF_ORDER_CANCELLED: "CANCELLED",
@@ -106,9 +134,9 @@ def process_notifications() -> None:
         counts_str = ", ".join(
             f"{name}: {count}" for name, count in type_counts.items()
         )
-        log(f"📬 Processing {len(notifications)} notification(s) [{counts_str}]")
+        log(f"📬 Processing {len(new_notifications)} notification(s) [{counts_str}]")
 
-        for notif in notifications:
+        for notif in new_notifications:
             notif_id = notif.get("id")
             notif_type = notif.get("type")
             timestamp = notif.get("timestamp")
@@ -205,10 +233,13 @@ def process_notifications() -> None:
 
             if notif_id:
                 processed_ids.append(str(notif_id))
+                # Mark as processed in our deduplication cache
+                _processed_notifications[str(notif_id)] = current_time
 
-        # Mark notifications as read
-        if processed_ids:
-            drop_notifications(processed_ids)
+        # Mark notifications as read (drop all notifications, not just new ones)
+        all_notification_ids = [str(n.get("id")) for n in notifications if n.get("id")]
+        if all_notification_ids:
+            drop_notifications(all_notification_ids)
 
     except Exception as e:
         log_error(f"Error processing notifications: {e}")

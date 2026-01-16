@@ -3,6 +3,7 @@
 from typing import Optional, Tuple, Dict, Any
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import time
 from src.config.settings import (
     MIN_EDGE,
     BET_PERCENT,
@@ -26,6 +27,10 @@ from src.data.market_data import validate_price_movement_for_trade
 from src.trading.orders import get_clob_client
 
 MIN_SIZE = 5.0
+
+# Rate-limit "Cannot hedge" messages (symbol -> last_log_time)
+_last_hedge_skip_log: Dict[str, float] = {}
+_HEDGE_SKIP_LOG_COOLDOWN = 60  # Log once per minute per symbol
 
 
 def _determine_trade_side(
@@ -117,9 +122,7 @@ def _determine_trade_side(
 
     # Log partial sizing for transparency (only if significant)
     if actual_side == bias and confidence >= 0.20 and confidence < MIN_EDGE:
-        log(
-            f"[{symbol}] 📊 PARTIAL CONFIDENCE: {confidence:.1%} → {sizing_confidence:.1%} sizing (70% of confidence)"
-        )
+        log(f"[{symbol}] 📊 PARTIAL CONFIDENCE: {confidence:.1%} (sizing at 70%)")
 
     return actual_side, sizing_confidence
 
@@ -464,9 +467,14 @@ def _prepare_trade_params(
     required_balance = size * HEDGE_COST_MULTIPLIER
 
     if balance < required_balance:
-        log(
-            f"   💸 [{symbol}] Cannot hedge position (Need ${required_balance:.2f}, Have ${balance:.2f}). Skipping."
-        )
+        # Rate-limit this log message (once per minute per symbol)
+        current_time = time.time()
+        last_log = _last_hedge_skip_log.get(symbol, 0)
+        if current_time - last_log >= _HEDGE_SKIP_LOG_COOLDOWN:
+            log(
+                f"   💸 [{symbol}] Cannot hedge position (Need ${required_balance:.2f}, Have ${balance:.2f}). Skipping."
+            )
+            _last_hedge_skip_log[symbol] = current_time
         if add_spacing:
             log("")
         return None
