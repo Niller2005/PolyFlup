@@ -282,6 +282,31 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             # Track recent fill for balance API cooldown
                             _recent_fills[tid] = now.timestamp()
 
+                            # Place hedge order if not already placed (prevents race condition with notifications)
+                            c.execute(
+                                "SELECT hedge_order_id, condition_id FROM trades WHERE id = ?",
+                                (tid,),
+                            )
+                            hedge_row = c.fetchone()
+                            if hedge_row and not hedge_row[0]:  # No hedge order yet
+                                try:
+                                    from src.trading.execution import place_hedge_order
+
+                                    hedge_order_id = place_hedge_order(
+                                        tid, sym, side, entry, size
+                                    )
+
+                                    if hedge_order_id:
+                                        c.execute(
+                                            "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
+                                            (hedge_order_id, tid),
+                                        )
+                                        conn.commit()
+                                except Exception as hedge_err:
+                                    log_error(
+                                        f"[{sym}] Error placing hedge order in monitor: {hedge_err}"
+                                    )
+
                     if curr_b_status not in ["FILLED", "MATCHED"]:
                         continue
 

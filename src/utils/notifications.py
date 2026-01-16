@@ -176,16 +176,31 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
                 # Check if this is a buy order
                 c.execute(
-                    "SELECT id, symbol, side, size, entry_price, order_status FROM trades WHERE order_id = ? AND settled = 0",
+                    "SELECT id, symbol, side, size, entry_price, order_status, hedge_order_id FROM trades WHERE order_id = ? AND settled = 0",
                     (order_id,),
                 )
                 row = c.fetchone()
 
                 if row:
-                    trade_id, symbol, trade_side, db_size, db_price, db_status = row
+                    (
+                        trade_id,
+                        symbol,
+                        trade_side,
+                        db_size,
+                        db_price,
+                        db_status,
+                        hedge_order_id,
+                    ) = row
 
-                    if db_status == "FILLED":
+                    # Skip if already filled AND hedge is already placed (nothing to do)
+                    if db_status == "FILLED" and hedge_order_id:
                         return
+
+                    # If already FILLED but no hedge, continue to place hedge
+                    if db_status == "FILLED":
+                        log(
+                            f"🔍 [{symbol}] Fill already detected by monitor, placing hedge..."
+                        )
 
                     # Update price/size if provided in notification
                     new_price = float(fill_price) if fill_price else db_price
