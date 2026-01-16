@@ -340,8 +340,18 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
     ]:
         bayesian_log_odds += log_likelihood(score, direction, quality) * weight
 
-    # Convert log-odds back to probability
-    bayesian_confidence = 1 / (1 + np.exp(-bayesian_log_odds))
+    # Convert log-odds back to probability (P(UP))
+    bayesian_prob_up = 1 / (1 + np.exp(-bayesian_log_odds))
+
+    # Convert to symmetric confidence (distance from 50% neutral)
+    # This makes confidence symmetric for UP and DOWN sides
+    # Example: 60% UP → 20% confidence, 40% UP → 20% confidence (same conviction)
+    if bayesian_prob_up > 0.5:
+        bayesian_confidence = (bayesian_prob_up - 0.5) * 2
+    elif bayesian_prob_up < 0.5:
+        bayesian_confidence = (0.5 - bayesian_prob_up) * 2
+    else:
+        bayesian_confidence = 0.0
 
     # Apply lead-lag bonus as multiplier on final confidence
     bayesian_confidence *= lead_lag_bonus
