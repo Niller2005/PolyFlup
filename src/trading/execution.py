@@ -65,9 +65,37 @@ def place_hedge_order(
             # Target $0.99 combined (guarantee profit on settlement)
             target_combined = 0.99
 
-        hedge_price = round(target_combined - entry_price, 2)
+        target_hedge_price = round(target_combined - entry_price, 2)
+        target_hedge_price = max(0.01, min(0.99, target_hedge_price))
 
-        # Ensure price is within valid range
+        # CRITICAL: Check orderbook to ensure hedge will fill
+        # If best ask is higher than our target, we need to pay more to fill immediately
+        hedge_price = target_hedge_price
+        try:
+            clob_client = get_clob_client()
+            orderbook = clob_client.get_order_book(hedge_token_id)
+
+            if orderbook and isinstance(orderbook, dict):
+                asks = orderbook.get("asks", [])
+                if asks and len(asks) > 0:
+                    # Get best ask (lowest sell price)
+                    best_ask = float(asks[0].get("price", 0))
+
+                    if best_ask > target_hedge_price:
+                        # Market is more expensive than our target
+                        # Use best ask to ensure immediate fill
+                        hedge_price = best_ask
+                        log(
+                            f"   📊 [{symbol}] Hedge adjusted: target ${target_hedge_price:.2f} → ${hedge_price:.2f} (market best ask)"
+                        )
+                    else:
+                        log(
+                            f"   💰 [{symbol}] Hedge pricing favorable: target ${target_hedge_price:.2f}, market ${best_ask:.2f}"
+                        )
+        except Exception as e:
+            log(f"   ⚠️  [{symbol}] Could not check orderbook, using target price: {e}")
+
+        # Ensure final price is within valid range
         hedge_price = max(0.01, min(0.99, hedge_price))
 
         # Place hedge order

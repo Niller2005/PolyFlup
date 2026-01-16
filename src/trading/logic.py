@@ -115,8 +115,8 @@ def _determine_trade_side(
         actual_side = "NEUTRAL"
         sizing_confidence = 0.0
 
-    # Log partial sizing for transparency
-    if actual_side == bias and confidence < MIN_EDGE:
+    # Log partial sizing for transparency (only if significant)
+    if actual_side == bias and confidence >= 0.20 and confidence < MIN_EDGE:
         log(
             f"[{symbol}] 📊 PARTIAL CONFIDENCE: {confidence:.1%} → {sizing_confidence:.1%} sizing (70% of confidence)"
         )

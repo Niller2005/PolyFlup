@@ -449,6 +449,21 @@ def main():
     ws_manager.start()
     init_ws_callbacks()
 
+    # Clear any stale notifications from previous runs
+    try:
+        from src.trading.orders import get_notifications, drop_notifications
+
+        stale_notifs = get_notifications()
+        if stale_notifs:
+            stale_ids = [str(n.get("id")) for n in stale_notifs if n.get("id")]
+            if stale_ids:
+                drop_notifications(stale_ids)
+                log(
+                    f"🧹 Cleared {len(stale_ids)} stale notification(s) from previous session"
+                )
+    except Exception as e:
+        log_error(f"Failed to clear stale notifications: {e}")
+
     if FUNDER_PROXY and FUNDER_PROXY.startswith("0x"):
         addr = FUNDER_PROXY
     else:

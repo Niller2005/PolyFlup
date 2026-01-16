@@ -368,10 +368,12 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
     if BAYESIAN_CONFIDENCE:
         confidence = bayesian_confidence
         bias = bayesian_bias
-        log(
-            f"[{symbol}] 🔬 Using Bayesian confidence (p_up={p_up:.3f}): "
-            f"{confidence:.1%} | Additive would be: {additive_confidence:.1%}"
-        )
+        # Only log confidence if it's significant (>40% edge potential)
+        if confidence > 0.40:
+            log(
+                f"[{symbol}] 🔬 Using Bayesian confidence (p_up={p_up:.3f}): "
+                f"{confidence:.1%} | Additive would be: {additive_confidence:.1%}"
+            )
     else:
         confidence = additive_confidence
         bias = additive_bias

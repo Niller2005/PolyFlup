@@ -60,11 +60,19 @@ def drop_notifications(notification_ids: List[str]) -> bool:
         params: Any = DropNotificationParams(ids=notification_ids)
         result = client.drop_notifications(params)
 
+        # Check if the API call actually succeeded
+        if result and hasattr(result, "success"):
+            if not result.success:
+                log(
+                    f"⚠️  Failed to drop notifications: {getattr(result, 'error', 'Unknown error')}"
+                )
+                return False
+
         # Only log if there are notifications to drop
         if len(notification_ids) > 0:
             log(f"🧹 Dropped {len(notification_ids)} notification(s)")
         return True
 
     except Exception as e:
-        log(f"❌ NOTIFICATION ERROR: {e}")
+        log(f"❌ Drop notifications error: {e}")
         return False
