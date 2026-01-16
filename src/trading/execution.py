@@ -514,23 +514,17 @@ def place_entry_and_hedge_atomic(
                                     log(
                                         f"   ✅ [{symbol}] Entry order cancelled to prevent unhedged position"
                                     )
+                                    log(
+                                        f"   📌 [{symbol}] Hedge order left live (may still fill later)"
+                                    )
                                     return None, None
                                 else:
                                     log(
                                         f"   ⚠️  [{symbol}] Failed to cancel entry order - check position manually"
                                     )
 
-                        # Also cancel unfilled hedge
-                        hedge_status = get_order(hedge_order_id)
-                        if hedge_status:
-                            hedge_filled_size = float(
-                                hedge_status.get("size_matched", 0)
-                            )
-                            if hedge_filled_size < (entry_size - 0.01):
-                                log(f"   🚫 [{symbol}] Cancelling unfilled hedge order")
-                                from src.trading.orders import cancel_order
-
-                                cancel_order(hedge_order_id)
+                        # NOTE: Do NOT cancel the hedge order - leave it live so it can still fill later
+                        # The hedge provides protection even if entry was cancelled
 
                     except Exception as timeout_err:
                         log_error(
