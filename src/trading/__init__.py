@@ -1,6 +1,11 @@
 from .strategy import calculate_confidence, bfxd_allows_trade
 from .execution import execute_trade
-from .logic import _determine_trade_side, _calculate_bet_size, _prepare_trade_params
+from .logic import (
+    _determine_trade_side,
+    _calculate_bet_size,
+    _prepare_trade_params,
+    log_skipped_symbols_summary,
+)
 from .orders import (
     setup_api_creds,
     place_order,
@@ -44,6 +49,7 @@ __all__ = [
     "_determine_trade_side",
     "_calculate_bet_size",
     "_prepare_trade_params",
+    "log_skipped_symbols_summary",
     "setup_api_creds",
     "place_order",
     "place_limit_order",
