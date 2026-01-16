@@ -6,9 +6,11 @@ from src.utils.logger import log, log_error, send_discord
 from src.data.database import save_trade
 from src.trading.orders import (
     place_order,
+    place_batch_orders,
     get_order,
     get_balance_allowance,
     get_clob_client,
+    BUY,
 )
 from src.data.market_data import get_token_ids
 
@@ -292,6 +294,121 @@ def place_hedge_order(
         return None
 
 
+def place_entry_and_hedge_atomic(
+    symbol: str,
+    entry_token_id: str,
+    entry_side: str,
+    entry_price: float,
+    entry_size: float,
+) -> tuple[Optional[dict], Optional[dict]]:
+    """
+    Place entry and hedge orders simultaneously using batch order API.
+    This eliminates timing gaps and improves hedge fill rates.
+
+    Returns:
+        (entry_result, hedge_result) - Both are dicts with success, order_id, status
+    """
+    try:
+        # Get token IDs
+        up_id, down_id = get_token_ids(symbol)
+        if not up_id or not down_id:
+            return None, None
+
+        # Determine hedge token and price
+        if entry_side == "UP":
+            hedge_token_id = down_id
+            hedge_side = "DOWN"
+        else:
+            hedge_token_id = up_id
+            hedge_side = "UP"
+
+        # Calculate hedge price (always target $0.99 combined)
+        target_hedge_price = round(0.99 - entry_price, 2)
+        hedge_price = max(0.01, min(0.99, target_hedge_price))
+
+        # Check orderbook to adjust hedge price for immediate fill
+        try:
+            clob_client = get_clob_client()
+            orderbook = clob_client.get_order_book(hedge_token_id)
+
+            if orderbook and isinstance(orderbook, dict):
+                asks = orderbook.get("asks", [])
+                if asks and len(asks) > 0:
+                    best_ask = float(asks[0].get("price", 0))
+
+                    if best_ask > hedge_price:
+                        # Market wants more, check if still profitable
+                        combined_price = entry_price + best_ask
+
+                        if combined_price < 1.00:
+                            # Still profitable, use market price
+                            hedge_price = best_ask
+                            log(
+                                f"   📊 [{symbol}] Hedge adjusted for immediate fill: ${target_hedge_price:.2f} → ${hedge_price:.2f} (market best ask)"
+                            )
+                        else:
+                            # Would create loss, skip hedge
+                            log(
+                                f"   ⚠️  [{symbol}] Cannot hedge atomically: market ${best_ask:.2f} + entry ${entry_price:.2f} = ${combined_price:.2f} > $1.00"
+                            )
+                            return None, None
+        except Exception as book_err:
+            log(
+                f"   ⚠️  [{symbol}] Could not check orderbook, using target hedge price: {book_err}"
+            )
+
+        # Create batch order
+        orders = [
+            {
+                "token_id": entry_token_id,
+                "price": entry_price,
+                "size": entry_size,
+                "side": BUY,
+            },
+            {
+                "token_id": hedge_token_id,
+                "price": hedge_price,
+                "size": entry_size,
+                "side": BUY,
+            },
+        ]
+
+        log(
+            f"   🔄 [{symbol}] Placing ATOMIC entry+hedge: {entry_side} {entry_size:.1f} @ ${entry_price:.2f} + {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f}"
+        )
+
+        # Submit both orders simultaneously
+        results = place_batch_orders(orders)
+
+        if len(results) < 2:
+            log_error(f"[{symbol}] Batch order returned insufficient results")
+            return None, None
+
+        entry_result = results[0]
+        hedge_result = results[1]
+
+        # Log results
+        if entry_result.get("success"):
+            log(
+                f"   ✅ [{symbol}] Entry order placed: {entry_side} {entry_size:.1f} @ ${entry_price:.2f} (ID: {entry_result.get('order_id', 'unknown')[:10]})"
+            )
+        else:
+            log(f"   ❌ [{symbol}] Entry order failed: {entry_result.get('error')}")
+
+        if hedge_result.get("success"):
+            log(
+                f"   ✅ [{symbol}] Hedge order placed: {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f} (ID: {hedge_result.get('order_id', 'unknown')[:10]})"
+            )
+        else:
+            log(f"   ❌ [{symbol}] Hedge order failed: {hedge_result.get('error')}")
+
+        return entry_result, hedge_result
+
+    except Exception as e:
+        log_error(f"[{symbol}] Error in atomic entry+hedge placement: {e}")
+        return None, None
+
+
 def execute_trade(
     trade_params: Dict[str, Any], is_reversal: bool = False, cursor=None
 ) -> Optional[int]:
@@ -307,7 +424,7 @@ def execute_trade(
 
     # Pre-flight balance check - MUST include hedge cost!
     entry_cost = size * price
-    hedge_cost = size * (1.0 - price)  # Approximate hedge cost (opposite side)
+    hedge_cost = size * (0.99 - price)  # Actual hedge cost (always $0.99 combined)
     total_cost_needed = entry_cost + hedge_cost
 
     bal_info = get_balance_allowance()
@@ -319,34 +436,45 @@ def execute_trade(
             )
             return None
 
-    # Place order
-    result = place_order(token_id, price, size)
-
-    if not result["success"]:
-        log(f"[{symbol}] ❌ Order failed: {result.get('error')}")
-        return None
-
-    # Log confidence method used (Bayesian vs Additive) - only on actual execution
-    raw_scores = trade_params.get("raw_scores", {})
-    bayesian_conf = raw_scores.get("bayesian_confidence", 0)
-    additive_conf = raw_scores.get("additive_confidence", 0)
-    p_up = trade_params.get("p_up", 0.5)
-
-    # Only log if we have both methods available and confidence is significant
-    if bayesian_conf > 0 and additive_conf > 0 and bayesian_conf > 0.40:
-        from src.config.settings import BAYESIAN_CONFIDENCE
-
-        if BAYESIAN_CONFIDENCE:
-            log(
-                f"[{symbol}] 🔬 Using Bayesian confidence (p_up={p_up:.3f}): "
-                f"{bayesian_conf:.1%} | Additive would be: {additive_conf:.1%}"
-            )
-
+    # ATOMIC PLACEMENT: Place entry and hedge simultaneously (unless reversal)
+    hedge_order_id = None
     actual_size = size
     actual_price = price
-    actual_status = result["status"]
-    order_id = result["order_id"]
 
+    if not is_reversal:
+        entry_result, hedge_result = place_entry_and_hedge_atomic(
+            symbol, token_id, side, price, size
+        )
+
+        if not entry_result or not entry_result.get("success"):
+            log(
+                f"[{symbol}] ❌ Entry order failed: {entry_result.get('error') if entry_result else 'unknown error'}"
+            )
+            return None
+
+        result = entry_result
+        order_id = result.get("order_id")
+        actual_status = result.get("status", "UNKNOWN")
+
+        # Store hedge order ID if successful
+        if hedge_result and hedge_result.get("success"):
+            hedge_order_id = hedge_result.get("order_id")
+        else:
+            log(
+                f"   ⚠️  [{symbol}] Hedge order failed, position will be unhedged: {hedge_result.get('error') if hedge_result else 'unknown error'}"
+            )
+    else:
+        # Reversal trades don't get hedged - place single order
+        result = place_order(token_id, price, size)
+
+        if not result["success"]:
+            log(f"[{symbol}] ❌ Order failed: {result.get('error')}")
+            return None
+
+        order_id = result["order_id"]
+        actual_status = result["status"]
+
+    # Sync actual fill details
     # Try to sync execution details immediately if filled
     if actual_status.upper() in ["FILLED", "MATCHED"]:
         try:
@@ -361,26 +489,6 @@ def execute_trade(
                     trade_params["bet_usd"] = actual_size * actual_price
         except Exception as e:
             log_error(f"[{symbol}] Could not sync execution details immediately: {e}")
-
-    # CRITICAL: Place hedge order IMMEDIATELY after entry order (before notification handler)
-    # This ensures atomic capital reservation - we checked balance for entry+hedge,
-    # now we place both orders while capital is still reserved
-    hedge_order_id = None
-    if not is_reversal:  # Only hedge initial entries, not reversals
-        try:
-            hedge_order_id = place_hedge_order(
-                trade_id=0,  # Will be updated after save_trade
-                symbol=symbol,
-                entry_side=side,
-                entry_price=actual_price,
-                entry_size=actual_size,
-                entry_order_id=order_id,  # Pass order ID for fill verification
-                cursor=cursor,
-            )
-        except Exception as hedge_err:
-            log_error(
-                f"[{symbol}] Error placing hedge immediately after entry: {hedge_err}"
-            )
 
     # Discord notification
     reversal_prefix = "🔄 REVERSAL " if is_reversal else ""
