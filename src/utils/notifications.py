@@ -596,14 +596,55 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                             if ENABLE_CTF_MERGE:
                                 # Get condition_id from trade
                                 c.execute(
-                                    "SELECT condition_id FROM trades WHERE id = ?",
+                                    "SELECT condition_id, slug FROM trades WHERE id = ?",
                                     (trade_id,),
                                 )
                                 cond_row = c.fetchone()
 
-                                if cond_row and cond_row[0]:
-                                    condition_id = cond_row[0]
+                                condition_id = cond_row[0] if cond_row else None
+                                slug = cond_row[1] if cond_row else None
 
+                                # If no condition_id, try to fetch it from API now
+                                # (may have become available since trade creation)
+                                if not condition_id and slug:
+                                    log(
+                                        f"   🔍 [{symbol}] Fetching condition_id from API for merge..."
+                                    )
+                                    try:
+                                        import requests
+                                        from src.config.settings import GAMMA_API_BASE
+
+                                        r = requests.get(
+                                            f"{GAMMA_API_BASE}/markets/slug/{slug}",
+                                            timeout=5,
+                                        )
+                                        if r.status_code == 200:
+                                            data = r.json()
+                                            api_condition_id = (
+                                                data.get("conditionId")
+                                                or data.get("condition_id")
+                                                or ""
+                                            )
+                                            if (
+                                                api_condition_id
+                                                and api_condition_id
+                                                != "0x" + ("0" * 64)
+                                            ):
+                                                condition_id = api_condition_id
+                                                # Update database
+                                                c.execute(
+                                                    "UPDATE trades SET condition_id = ? WHERE id = ?",
+                                                    (condition_id, trade_id),
+                                                )
+                                                log(
+                                                    f"   ✅ [{symbol}] Retrieved condition_id: {condition_id[:16]}..."
+                                                )
+                                    except Exception as fetch_err:
+                                        log(
+                                            f"   ⚠️  [{symbol}] Failed to fetch condition_id: {fetch_err}"
+                                        )
+
+                                if condition_id:
                                     # Use actual hedge filled size (minimum of entry and hedge fills)
                                     merge_size = min(hedge_filled_size, size)
                                     amount = int(merge_size * 1_000_000)
@@ -635,7 +676,7 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                                         )
                                 else:
                                     log(
-                                        f"   ⚠️  [{symbol}] No condition_id found, skipping merge"
+                                        f"   ⚠️  [{symbol}] No condition_id found (market too new), merge will happen at settlement"
                                     )
                         except Exception as e:
                             log_error(f"[{symbol}] Error merging hedged position: {e}")
@@ -851,7 +892,7 @@ def _handle_market_resolved(payload: dict, timestamp: int) -> None:
             c.execute(
                 """
                 SELECT id, symbol, side, size, entry_price, bet_usd, 
-                       exited_early, merge_tx_hash, redeem_tx_hash, condition_id
+                       exited_early, merge_tx_hash, redeem_tx_hash, condition_id, slug
                 FROM trades 
                 WHERE condition_id = ? AND settled = 0
                 ORDER BY id DESC
@@ -863,10 +904,73 @@ def _handle_market_resolved(payload: dict, timestamp: int) -> None:
             trades = c.fetchall()
 
             if not trades:
-                # If not found by condition_id, this might be an old trade
-                # Just log the resolution without details
-                log("   🔔 MARKET RESOLVED")
-                return
+                # If not found by condition_id, might be NULL in DB
+                # Try updating condition_id from API for recent unsettled trades
+                log("   🔔 MARKET RESOLVED (condition_id not in DB, updating...)")
+
+                # Find recent unsettled trades and update their condition_id
+                c.execute(
+                    """
+                    SELECT id, symbol, slug
+                    FROM trades
+                    WHERE settled = 0
+                        AND condition_id IS NULL
+                        AND datetime(created_at) > datetime('now', '-1 hour')
+                    ORDER BY id DESC
+                    LIMIT 10
+                    """
+                )
+
+                pending_trades = c.fetchall()
+
+                if pending_trades:
+                    import requests
+                    from src.config.settings import GAMMA_API_BASE
+
+                    for tid, sym, slug in pending_trades:
+                        try:
+                            r = requests.get(
+                                f"{GAMMA_API_BASE}/markets/slug/{slug}", timeout=3
+                            )
+                            if r.status_code == 200:
+                                data = r.json()
+                                api_condition_id = (
+                                    data.get("conditionId")
+                                    or data.get("condition_id")
+                                    or ""
+                                )
+                                if api_condition_id and api_condition_id != "0x" + (
+                                    "0" * 64
+                                ):
+                                    c.execute(
+                                        "UPDATE trades SET condition_id = ? WHERE id = ?",
+                                        (api_condition_id, tid),
+                                    )
+                                    if api_condition_id == market_id:
+                                        log(
+                                            f"   ✅ Updated condition_id for #{tid} {sym}"
+                                        )
+                        except Exception:
+                            pass
+
+                    # Retry query with updated condition_id
+                    c.execute(
+                        """
+                        SELECT id, symbol, side, size, entry_price, bet_usd, 
+                               exited_early, merge_tx_hash, redeem_tx_hash, condition_id, slug
+                        FROM trades 
+                        WHERE condition_id = ? AND settled = 0
+                        ORDER BY id DESC
+                        LIMIT 5
+                    """,
+                        (market_id,),
+                    )
+
+                    trades = c.fetchall()
+
+                if not trades:
+                    # Still not found - old trade
+                    return
 
             for trade_data in trades:
                 (
@@ -880,6 +984,7 @@ def _handle_market_resolved(payload: dict, timestamp: int) -> None:
                     merge_tx_hash,
                     redeem_tx_hash,
                     condition_id,
+                    slug,
                 ) = trade_data
 
                 # Determine if this side won
