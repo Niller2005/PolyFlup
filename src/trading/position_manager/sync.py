@@ -253,6 +253,23 @@ def sync_positions_with_exchange(user_address: str):
 
                         side = p_data.get("outcome", "UNKNOWN").upper()
 
+                        # CRITICAL: Check if this is a hedge position from an existing hedged trade
+                        # Hedge positions are held in wallet but not tracked as separate trades
+                        # Skip adopting them to prevent treating hedge side as new position
+                        opposite_side = "DOWN" if side == "UP" else "UP"
+                        c.execute(
+                            "SELECT id FROM trades WHERE slug = ? AND side = ? AND is_hedged = 1 AND settled = 0 LIMIT 1",
+                            (slug, opposite_side),
+                        )
+                        hedge_match = c.fetchone()
+                        if hedge_match:
+                            log(
+                                f"   ℹ Skipping hedge position: {symbol} ({side}) is hedge for trade #{hedge_match[0]}"
+                            )
+                            # Add to tracked IDs to prevent future adoption attempts
+                            all_tracked_token_ids.add(t_id_str)
+                            continue
+
                         # Check if already resolved before adopting
                         is_resolved, _ = get_market_resolution(slug)
                         if is_resolved:
