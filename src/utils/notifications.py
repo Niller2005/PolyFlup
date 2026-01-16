@@ -57,16 +57,21 @@ def _handle_ws_order_event(event: str, order: dict):
     """Bridge between WebSocket events and internal handlers"""
     # Map WebSocket event types to internal notification types
     # Polymarket WSS events: "fill", "cancel", etc.
+    order_id = order.get("id")
+    order_id_short = order_id[:10] if order_id and len(order_id) > 10 else order_id
+
     if event == "fill":
+        log(f"📡 WebSocket: FILL event | Order: {order_id_short}")
         # WebSocket 'order' message has the full order object
         payload = {
-            "order_id": order.get("id"),
+            "order_id": order_id,
             "price": order.get("price"),
             "size": order.get("size_matched") or order.get("original_size"),
         }
         _handle_order_fill(payload, int(time.time()))
     elif event == "cancel":
-        payload = {"order_id": order.get("id")}
+        log(f"📡 WebSocket: CANCEL event | Order: {order_id_short}")
+        payload = {"order_id": order_id}
         _handle_order_cancelled(payload, int(time.time()))
 
 
@@ -87,11 +92,44 @@ def process_notifications() -> None:
 
         processed_ids = []
 
+        # Log batch summary
+        type_counts = {}
+        for notif in notifications:
+            notif_type = notif.get("type")
+            type_name = {
+                NOTIF_ORDER_CANCELLED: "CANCELLED",
+                NOTIF_ORDER_FILLED: "FILLED",
+                NOTIF_MARKET_RESOLVED: "RESOLVED",
+            }.get(notif_type, f"UNKNOWN({notif_type})")
+            type_counts[type_name] = type_counts.get(type_name, 0) + 1
+
+        counts_str = ", ".join(
+            f"{name}: {count}" for name, count in type_counts.items()
+        )
+        log(f"📬 Processing {len(notifications)} notification(s) [{counts_str}]")
+
         for notif in notifications:
             notif_id = notif.get("id")
             notif_type = notif.get("type")
             timestamp = notif.get("timestamp")
             payload = notif.get("payload", {})
+
+            # Extract order_id for logging
+            order_id = _extract_order_id_from_payload(payload)
+            order_id_short = (
+                order_id[:10] if order_id and len(order_id) > 10 else order_id
+            )
+
+            # Log individual notification
+            type_name = {
+                NOTIF_ORDER_CANCELLED: "CANCELLED",
+                NOTIF_ORDER_FILLED: "FILLED",
+                NOTIF_MARKET_RESOLVED: "RESOLVED",
+            }.get(notif_type, f"UNKNOWN({notif_type})")
+
+            log(
+                f"   📨 Notification: {type_name} | Order: {order_id_short or 'N/A'} | ID: {notif_id}"
+            )
 
             # Process based on type
             if notif_type == NOTIF_ORDER_FILLED:
@@ -448,21 +486,27 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
 
                 # Check if this is a tracked order
                 c.execute(
-                    "SELECT id, symbol, side FROM trades WHERE order_id = ? AND settled = 0",
+                    "SELECT id, symbol, side, order_status FROM trades WHERE order_id = ? AND settled = 0",
                     (order_id,),
                 )
                 row = c.fetchone()
 
                 if row:
-                    trade_id, symbol, side = row
+                    trade_id, symbol, side, current_status = row
                     order_id_short = order_id[:10] if len(order_id) > 10 else order_id
-                    log(f"🔍 [{symbol}] CANCEL {order_id_short}")
+                    log(
+                        f"🔍 [{symbol}] CANCEL {order_id_short} | Previous status: {current_status}"
+                    )
 
                     # Clear order_id and mark as cancelled to prevent monitoring ghost orders
                     c.execute(
                         "UPDATE trades SET order_id = NULL, order_status = 'CANCELLED' WHERE id = ?",
                         (trade_id,),
                     )
+                else:
+                    # Order not found in database - might be a hedge or exit order
+                    order_id_short = order_id[:10] if len(order_id) > 10 else order_id
+                    log(f"🔍 CANCEL {order_id_short} (not tracked as entry order)")
 
     except Exception as e:
         log_error(f"Error handling order cancellation notification: {e}")

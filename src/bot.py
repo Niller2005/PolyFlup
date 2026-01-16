@@ -190,23 +190,51 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
         return 0
 
     trade_params_list = []
+    remaining_balance = balance
     last_symbol_logged = False
+    skipped_count = 0
+
     for i, symbol in enumerate(valid_symbols):
         if last_symbol_logged and verbose:
             log("")
             last_symbol_logged = False
 
         params = _prepare_trade_params(
-            symbol, balance, add_spacing=False, verbose=verbose
+            symbol, remaining_balance, add_spacing=False, verbose=verbose
         )
         if params:
             trade_params_list.append(params)
+            # Deduct required balance for this trade from remaining balance
+            remaining_balance -= params["required_balance"]
+            if verbose and remaining_balance < 0:
+                log(
+                    f"   💰 [{symbol}] Cumulative balance tracking: ${balance:.2f} - ${params['required_balance']:.2f} reserved = ${remaining_balance + params['required_balance']:.2f} remaining"
+                )
             last_symbol_logged = True
         elif verbose:
-            pass
+            skipped_count += 1
 
     if not trade_params_list:
         return 0
+
+    # Final aggregate balance check before batch submission
+    total_required = sum(p["required_balance"] for p in trade_params_list)
+    if total_required > balance:
+        if verbose:
+            log(
+                f"   ⚠️  Aggregate balance check failed: Need ${total_required:.2f}, Have ${balance:.2f}"
+            )
+            log(
+                f"   ⚠️  Rejecting {len(trade_params_list)} trades to prevent over-commitment"
+            )
+        return 0
+
+    # Log batch summary
+    if verbose and len(trade_params_list) > 1:
+        symbols_str = ", ".join(p["symbol"] for p in trade_params_list)
+        log(
+            f"   📦 Batch: {len(trade_params_list)} trades ({symbols_str}) | Total required: ${total_required:.2f} | Available: ${balance:.2f} | Remaining: ${balance - total_required:.2f}"
+        )
 
     orders = [
         {

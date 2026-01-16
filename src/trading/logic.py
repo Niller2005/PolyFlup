@@ -478,6 +478,7 @@ def _prepare_trade_params(
         "price": price,
         "size": size,
         "bet_usd": bet_usd_effective,
+        "required_balance": required_balance,
         "confidence": confidence,
         "core_summary": core_summary,
         "entry_type": entry_type,
