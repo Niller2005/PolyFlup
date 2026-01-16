@@ -429,17 +429,6 @@ def calculate_confidence(symbol: str, up_token: str, client: ClobClient):
             confidence_reduction = (3 - strongly_aligned) * 0.10 * confidence_factor
             confidence = max(0.60, confidence - confidence_reduction)
 
-            log(
-                f"[{symbol}] ⚠️  Insufficient confirmation: {strongly_aligned}/5 signals aligned | "
-                f"Confidence: {confidence + confidence_reduction:.1%} → {confidence:.1%}"
-            )
-        else:
-            # Strong confirmation - log the strong signal
-            log(
-                f"[{symbol}] ✅ Strong confirmation: {strongly_aligned}/5 signals aligned | "
-                f"Confirmation score: {confirmation_score:.2f}"
-            )
-
     # Additional validation: cap maximum confidence at 85% for extreme signals
     if confidence > 0.85:
         confidence = 0.85
