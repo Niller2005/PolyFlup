@@ -68,6 +68,7 @@ from src.trading import (
     _determine_trade_side,
     _calculate_bet_size,
     _prepare_trade_params,
+    log_skipped_symbols_summary,
 )
 
 
@@ -214,6 +215,10 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
             last_symbol_logged = True
         elif verbose:
             skipped_count += 1
+
+    # Log grouped summary of symbols skipped due to low balance
+    if verbose:
+        log_skipped_symbols_summary(balance)
 
     if not trade_params_list:
         return 0

@@ -277,6 +277,22 @@ def execute_trade(
         log(f"[{symbol}] ❌ Order failed: {result.get('error')}")
         return None
 
+    # Log confidence method used (Bayesian vs Additive) - only on actual execution
+    raw_scores = trade_params.get("raw_scores", {})
+    bayesian_conf = raw_scores.get("bayesian_confidence", 0)
+    additive_conf = raw_scores.get("additive_confidence", 0)
+    p_up = trade_params.get("p_up", 0.5)
+
+    # Only log if we have both methods available and confidence is significant
+    if bayesian_conf > 0 and additive_conf > 0 and bayesian_conf > 0.40:
+        from src.config.settings import BAYESIAN_CONFIDENCE
+
+        if BAYESIAN_CONFIDENCE:
+            log(
+                f"[{symbol}] 🔬 Using Bayesian confidence (p_up={p_up:.3f}): "
+                f"{bayesian_conf:.1%} | Additive would be: {additive_conf:.1%}"
+            )
+
     actual_size = size
     actual_price = price
     actual_status = result["status"]

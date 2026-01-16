@@ -1,6 +1,6 @@
 """Trade logic and parameter preparation"""
 
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import time
@@ -31,6 +31,9 @@ MIN_SIZE = 5.0
 # Rate-limit "Cannot hedge" messages (symbol -> last_log_time)
 _last_hedge_skip_log: Dict[str, float] = {}
 _HEDGE_SKIP_LOG_COOLDOWN = 60  # Log once per minute per symbol
+
+# Collect skipped symbols for grouped logging
+_skipped_symbols_low_balance: List[str] = []
 
 
 def _determine_trade_side(
@@ -467,14 +470,9 @@ def _prepare_trade_params(
     required_balance = size * HEDGE_COST_MULTIPLIER
 
     if balance < required_balance:
-        # Rate-limit this log message (once per minute per symbol)
-        current_time = time.time()
-        last_log = _last_hedge_skip_log.get(symbol, 0)
-        if current_time - last_log >= _HEDGE_SKIP_LOG_COOLDOWN:
-            log(
-                f"   💸 [{symbol}] Cannot hedge position (Need ${required_balance:.2f}, Have ${balance:.2f}). Skipping."
-            )
-            _last_hedge_skip_log[symbol] = current_time
+        # Collect symbol for grouped logging instead of logging immediately
+        if symbol not in _skipped_symbols_low_balance:
+            _skipped_symbols_low_balance.append(symbol)
         if add_spacing:
             log("")
         return None
@@ -502,3 +500,17 @@ def _prepare_trade_params(
         "slug": get_current_slug(symbol),
         "raw_scores": raw_scores,
     }
+
+
+def log_skipped_symbols_summary(balance: float) -> None:
+    """
+    Log grouped summary of symbols that were skipped due to insufficient balance.
+    Should be called after all trade preparation attempts.
+    """
+    global _skipped_symbols_low_balance
+    if _skipped_symbols_low_balance:
+        symbols_str = ", ".join(_skipped_symbols_low_balance)
+        log(
+            f"   💸 Cannot hedge {len(_skipped_symbols_low_balance)} symbol(s) - insufficient balance (${balance:.2f}): {symbols_str}"
+        )
+        _skipped_symbols_low_balance = []  # Clear for next cycle
