@@ -85,6 +85,7 @@ from src.trading.orders import (
 )
 from src.trading.position_manager import (
     check_open_positions,
+    check_monitor_health,
     get_exit_plan_stats,
     recover_open_positions,
     sync_positions_with_exchange,
@@ -519,6 +520,10 @@ def main():
 
             is_verbose_cycle = now_ts - last_verbose_log >= 60
             is_order_check_cycle = now_ts - last_order_check >= 10
+
+            # Health check: Verify monitor is running properly
+            if now_ts % 30 < 1:  # Check every 30 seconds
+                check_monitor_health()
 
             if now_ts - last_position_check >= 1:
                 check_open_positions(

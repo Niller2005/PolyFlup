@@ -29,8 +29,38 @@ from .exit import _check_exit_plan
 _failed_pnl_checks = {}
 _recent_hedge_placements = {}  # Track recent hedge order placements to avoid race condition
 
+# Monitor health tracking
+_last_monitor_check = time.time()
+_last_health_warning = 0
+
+
+def check_monitor_health():
+    """
+    Check if monitor is running properly and alert if stalled.
+    Called from main loop to detect situations where monitor stops checking positions.
+    """
+    global _last_monitor_check, _last_health_warning
+
+    now = time.time()
+    time_since_last_check = now - _last_monitor_check
+
+    # If monitor hasn't run in 5 seconds, something is wrong
+    if time_since_last_check > 5:
+        # Only log warning every 30 seconds to avoid spam
+        if now - _last_health_warning > 30:
+            log_error(
+                f"⚠️  MONITOR HEALTH WARNING: Position check hasn't run in {time_since_last_check:.1f}s (expected: 1s)"
+            )
+            _last_health_warning = now
+        return False
+
+    return True
+
 
 def check_open_positions(verbose=True, check_orders=False, user_address=None):
+    global _last_monitor_check
+    _last_monitor_check = time.time()  # Update health tracking
+
     if not _position_check_lock.acquire(blocking=False):
         return
     global _failed_pnl_checks
