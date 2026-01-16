@@ -110,6 +110,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             rev_trig_at,
                             edge,
                             last_sc_at,
+                            is_hedged,
                         ) = pos
 
                         if sym not in positions_by_symbol:
@@ -172,6 +173,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                             rev_trig_at,
                             edge,
                             last_sc_at,
+                            is_hedged,
                         ) = pos
 
                         if b_status in ["FILLED", "MATCHED"]:
@@ -185,6 +187,8 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                 pnl_pct_val = pnl_result["pnl_pct"]
                                 # Build status indicators
                                 status_parts = []
+                                if is_hedged:
+                                    status_parts.append("🛡️ Hedged")
                                 if sc_in:
                                     status_parts.append("📊 Scaled in")
                                 if l_sell:
@@ -193,7 +197,8 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                     # Check if position is below MIN_SIZE threshold
                                     if size < MIN_SIZE:
                                         status_parts.append("⏭️ Exit skipped")
-                                    else:
+                                    elif not is_hedged:
+                                        # Only show "Exit pending" if not hedged (hedged positions don't need exit plan)
                                         status_parts.append("⏳ Exit pending")
 
                                 status_str = (
