@@ -176,14 +176,17 @@ def execute_trade(
     price = trade_params["price"]
     size = trade_params["size"]
 
-    # Pre-flight balance check
-    est_cost = size * price
+    # Pre-flight balance check - MUST include hedge cost!
+    entry_cost = size * price
+    hedge_cost = size * (1.0 - price)  # Approximate hedge cost (opposite side)
+    total_cost_needed = entry_cost + hedge_cost
+
     bal_info = get_balance_allowance()
     if bal_info:
         usdc_balance = bal_info.get("balance", 0)
-        if usdc_balance < est_cost:
+        if usdc_balance < total_cost_needed:
             log(
-                f"[{symbol}] ❌ Insufficient funds (Need ${est_cost:.2f}, Have ${usdc_balance:.2f})"
+                f"[{symbol}] ❌ Insufficient funds for entry + hedge (Need ${total_cost_needed:.2f} [entry ${entry_cost:.2f} + hedge ${hedge_cost:.2f}], Have ${usdc_balance:.2f})"
             )
             return None
 
