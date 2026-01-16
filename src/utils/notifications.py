@@ -419,91 +419,135 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     trade_id, symbol, trade_side, entry_price, size = row
                     order_id_short = order_id[:10] if len(order_id) > 10 else order_id
 
-                    log(
-                        f"🛡️  [{symbol}] HEDGE FILL {order_id_short}: {size:.1f} shares | Position is now HEDGED"
-                    )
+                    # CRITICAL: Verify actual hedge fill size from exchange
+                    # Hedge orders can partially fill, which would leave position unhedged
+                    hedge_filled_size = float(fill_size) if fill_size else size
 
-                    # Mark trade as hedged
-                    c.execute(
-                        "UPDATE trades SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
-                        (trade_id,),
-                    )
-
-                    # Cancel exit plan order if it exists (hedge now provides full protection)
-                    c.execute(
-                        "SELECT limit_sell_order_id FROM trades WHERE id = ?",
-                        (trade_id,),
-                    )
-                    exit_row = c.fetchone()
-                    if exit_row and exit_row[0]:
-                        exit_order_id = exit_row[0]
+                    # If notification didn't include size, query exchange for actual filled amount
+                    if not fill_size:
                         try:
-                            from src.trading.orders import cancel_order
+                            from src.trading.orders import get_order
 
-                            cancel_result = cancel_order(exit_order_id)
-                            if cancel_result:
-                                log(
-                                    f"   🚫 [{symbol}] Exit plan cancelled (position fully hedged)"
+                            order_data = get_order(order_id)
+                            if order_data:
+                                actual_matched = float(
+                                    order_data.get("size_matched", 0)
                                 )
+                                if actual_matched > 0:
+                                    hedge_filled_size = actual_matched
+                                    log(
+                                        f"   📊 [{symbol}] Queried exchange: hedge filled {hedge_filled_size:.4f} shares"
+                                    )
+                        except Exception as e:
+                            log(
+                                f"   ⚠️  [{symbol}] Could not verify hedge fill size from exchange: {e}"
+                            )
+
+                    # Check if hedge is fully filled
+                    is_fully_hedged = abs(hedge_filled_size - size) < 0.0001
+
+                    if is_fully_hedged:
+                        log(
+                            f"🛡️  [{symbol}] HEDGE FILL {order_id_short}: {hedge_filled_size:.1f} shares | Position is now HEDGED"
+                        )
+                    else:
+                        log(
+                            f"⚠️  [{symbol}] PARTIAL HEDGE FILL {order_id_short}: {hedge_filled_size:.1f}/{size:.1f} shares | Position PARTIALLY hedged"
+                        )
+                        # TODO: Place additional hedge order for remaining shares
+
+                    # Mark trade as hedged (or partially hedged)
+                    c.execute(
+                        "UPDATE trades SET is_hedged = ?, order_status = ? WHERE id = ?",
+                        (
+                            1 if is_fully_hedged else 0,
+                            "HEDGED" if is_fully_hedged else "PARTIAL_HEDGE",
+                            trade_id,
+                        ),
+                    )
+
+                    # Cancel exit plan order ONLY if fully hedged (partial hedge still needs stop-loss)
+                    if is_fully_hedged:
+                        c.execute(
+                            "SELECT limit_sell_order_id FROM trades WHERE id = ?",
+                            (trade_id,),
+                        )
+                        exit_row = c.fetchone()
+                        if exit_row and exit_row[0]:
+                            exit_order_id = exit_row[0]
+                            try:
+                                from src.trading.orders import cancel_order
+
+                                cancel_result = cancel_order(exit_order_id)
+                                if cancel_result:
+                                    log(
+                                        f"   🚫 [{symbol}] Exit plan cancelled (position fully hedged)"
+                                    )
+                                    c.execute(
+                                        "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                                        (trade_id,),
+                                    )
+                            except Exception as cancel_error:
+                                log_error(
+                                    f"[{symbol}] Error cancelling exit plan: {cancel_error}"
+                                )
+                    else:
+                        log(
+                            f"   ⚠️  [{symbol}] Exit plan KEPT (hedge only partially filled, still need stop-loss protection)"
+                        )
+
+                    # Merge hedged position immediately to free capital (only if fully hedged)
+                    if is_fully_hedged:
+                        try:
+                            from src.config.settings import ENABLE_CTF_MERGE
+                            from src.trading.ctf_operations import merge_hedged_position
+
+                            if ENABLE_CTF_MERGE:
+                                # Get condition_id from trade
                                 c.execute(
-                                    "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                                    "SELECT condition_id FROM trades WHERE id = ?",
                                     (trade_id,),
                                 )
-                        except Exception as cancel_error:
-                            log_error(
-                                f"[{symbol}] Error cancelling exit plan: {cancel_error}"
-                            )
+                                cond_row = c.fetchone()
 
-                    # NEW: Merge hedged position immediately to free capital
-                    try:
-                        from src.config.settings import ENABLE_CTF_MERGE
-                        from src.trading.ctf_operations import merge_hedged_position
+                                if cond_row and cond_row[0]:
+                                    condition_id = cond_row[0]
 
-                        if ENABLE_CTF_MERGE:
-                            # Get condition_id from trade
-                            c.execute(
-                                "SELECT condition_id FROM trades WHERE id = ?",
-                                (trade_id,),
-                            )
-                            cond_row = c.fetchone()
+                                    # Use actual hedge filled size (minimum of entry and hedge fills)
+                                    merge_size = min(hedge_filled_size, size)
+                                    amount = int(merge_size * 1_000_000)
 
-                            if cond_row and cond_row[0]:
-                                condition_id = cond_row[0]
-
-                                # Convert size to USDC amount (6 decimals)
-                                amount = int(size * 1_000_000)
-
-                                log(
-                                    f"   🔄 [{symbol}] Merging {size:.1f} hedged position to free capital..."
-                                )
-
-                                # Merge the hedged position
-                                tx_hash = merge_hedged_position(
-                                    trade_id, symbol, condition_id, amount
-                                )
-
-                                if tx_hash:
-                                    # Store transaction hash
-                                    c.execute(
-                                        "UPDATE trades SET merge_tx_hash = ? WHERE id = ?",
-                                        (tx_hash, trade_id),
-                                    )
                                     log(
-                                        f"   ✅ [{symbol}] Merge successful! Tx: {tx_hash[:16]}..."
+                                        f"   🔄 [{symbol}] Merging {merge_size:.1f} hedged position to free capital..."
                                     )
-                                    log(
-                                        f"   💰 [{symbol}] Capital freed: ${size:.2f} USDC"
+
+                                    # Merge the hedged position
+                                    tx_hash = merge_hedged_position(
+                                        trade_id, symbol, condition_id, amount
                                     )
+
+                                    if tx_hash:
+                                        # Store transaction hash
+                                        c.execute(
+                                            "UPDATE trades SET merge_tx_hash = ? WHERE id = ?",
+                                            (tx_hash, trade_id),
+                                        )
+                                        log(
+                                            f"   ✅ [{symbol}] Merge successful! Tx: {tx_hash[:16]}..."
+                                        )
+                                        log(
+                                            f"   💰 [{symbol}] Capital freed: ${merge_size:.2f} USDC"
+                                        )
+                                    else:
+                                        log(
+                                            f"   ⚠️  [{symbol}] Merge transaction failed, position will settle normally"
+                                        )
                                 else:
                                     log(
-                                        f"   ⚠️  [{symbol}] Merge transaction failed, position will settle normally"
+                                        f"   ⚠️  [{symbol}] No condition_id found, skipping merge"
                                     )
-                            else:
-                                log(
-                                    f"   ⚠️  [{symbol}] No condition_id found, skipping merge"
-                                )
-                    except Exception as e:
-                        log_error(f"[{symbol}] Error merging hedged position: {e}")
+                        except Exception as e:
+                            log_error(f"[{symbol}] Error merging hedged position: {e}")
 
                     return
 
