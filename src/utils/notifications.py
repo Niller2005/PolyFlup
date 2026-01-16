@@ -212,13 +212,13 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
                         # Get trade details
                         c.execute(
-                            "SELECT symbol, side, entry_price, size, limit_sell_order_id FROM trades WHERE id = ?",
+                            "SELECT symbol, side, entry_price, size FROM trades WHERE id = ?",
                             (trade_id,),
                         )
                         row = c.fetchone()
 
                         if row:
-                            symbol, side, entry_price, size, exit_order_id = row
+                            symbol, side, entry_price, size = row
 
                             # Place hedge order
                             hedge_order_id = place_hedge_order(
@@ -231,26 +231,6 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                                     "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
                                     (hedge_order_id, trade_id),
                                 )
-
-                                # Cancel exit plan order if it exists (hedge replaces exit plan)
-                                if exit_order_id:
-                                    try:
-                                        from src.trading.orders import cancel_order
-
-                                        cancel_result = cancel_order(exit_order_id)
-                                        if cancel_result:
-                                            log(
-                                                f"   🚫 [{symbol}] Exit plan cancelled (replaced by hedge)"
-                                            )
-                                            c.execute(
-                                                "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
-                                                (trade_id,),
-                                            )
-                                    except Exception as cancel_error:
-                                        log_error(
-                                            f"[{symbol}] Error cancelling exit plan: {cancel_error}"
-                                        )
-
                                 conn.commit()
                     except Exception as e:
                         log_error(
@@ -305,11 +285,36 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                         f"🛡️  [{symbol}] HEDGE FILL {order_id_short}: {size:.1f} shares | Position is now HEDGED"
                     )
 
-                    # Mark trade as hedged and stop further action
+                    # Mark trade as hedged
                     c.execute(
                         "UPDATE trades SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
                         (trade_id,),
                     )
+
+                    # Cancel exit plan order if it exists (hedge now provides full protection)
+                    c.execute(
+                        "SELECT limit_sell_order_id FROM trades WHERE id = ?",
+                        (trade_id,),
+                    )
+                    exit_row = c.fetchone()
+                    if exit_row and exit_row[0]:
+                        exit_order_id = exit_row[0]
+                        try:
+                            from src.trading.orders import cancel_order
+
+                            cancel_result = cancel_order(exit_order_id)
+                            if cancel_result:
+                                log(
+                                    f"   🚫 [{symbol}] Exit plan cancelled (position fully hedged)"
+                                )
+                                c.execute(
+                                    "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                                    (trade_id,),
+                                )
+                        except Exception as cancel_error:
+                            log_error(
+                                f"[{symbol}] Error cancelling exit plan: {cancel_error}"
+                            )
 
                     # NEW: Merge hedged position immediately to free capital
                     try:
