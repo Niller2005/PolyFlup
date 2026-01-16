@@ -113,7 +113,8 @@ def _get_relayer_client():
 
     try:
         from py_builder_relayer_client.client import RelayClient
-        from py_builder_signing_sdk import BuilderConfig, BuilderApiKeyCreds
+        from py_builder_signing_sdk.config import BuilderConfig
+        from py_builder_signing_sdk.sdk_types import BuilderApiKeyCreds
 
         # Configure local signing with Builder API credentials
         builder_config = BuilderConfig(
@@ -160,7 +161,8 @@ def _encode_merge_positions(condition_id: str, amount: int) -> str:
         ],
     )
 
-    return encoded.hex()
+    # encode_abi returns hex string with 0x prefix, remove it for Relayer
+    return encoded.replace("0x", "")
 
 
 def _encode_redeem_positions(condition_id: str) -> str:
@@ -188,7 +190,8 @@ def _encode_redeem_positions(condition_id: str) -> str:
         ],
     )
 
-    return encoded.hex()
+    # encode_abi returns hex string with 0x prefix, remove it for Relayer
+    return encoded.replace("0x", "")
 
 
 def merge_hedged_position(
