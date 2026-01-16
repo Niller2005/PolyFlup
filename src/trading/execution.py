@@ -85,12 +85,10 @@ def place_hedge_order(
             hedge_token_id = up_id
 
         # Calculate hedge price based on CTF merge setting
-        if ENABLE_CTF_MERGE:
-            # Target $1.00 combined (merge returns full $1.00)
-            target_combined = 1.00
-        else:
-            # Target $0.99 combined (guarantee profit on settlement)
-            target_combined = 0.99
+        # CRITICAL: Always target $0.99 combined to guarantee profit
+        # Even with CTF merge enabled, $0.99 cost → $1.00 merge = $0.01 profit
+        # Using $1.00 combined would be break-even (loses money on fees)
+        target_combined = 0.99
 
         target_hedge_price = round(target_combined - entry_price, 2)
         target_hedge_price = max(0.01, min(0.99, target_hedge_price))
