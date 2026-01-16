@@ -125,7 +125,7 @@ def _get_relayer_client():
             )
         )
 
-        # Create RelayClient
+        # Create RelayClient (no wallet type specified = defaults to SAFE)
         client = RelayClient(RELAYER_URL, POLYGON_CHAIN_ID, PROXY_PK, builder_config)
 
         return client
@@ -223,21 +223,49 @@ def merge_hedged_position(
 
     if relay_client:
         try:
+            from py_builder_relayer_client.models import SafeTransaction, OperationType
+
             log(f"🌐 [{symbol}] #{trade_id} Using gasless Relayer for CTF merge")
 
             # Encode merge function call
             encoded_data = _encode_merge_positions(condition_id, amount)
 
-            # Create transaction for relayer
-            merge_tx = {"to": CTF_ADDRESS, "data": f"0x{encoded_data}", "value": "0"}
+            # Create SafeTransaction for relayer
+            merge_tx = SafeTransaction(
+                to=CTF_ADDRESS,
+                operation=OperationType.Call,
+                data=f"0x{encoded_data}",
+                value="0",
+            )
 
             # Execute via relayer (gasless!)
             response = relay_client.execute(
                 [merge_tx], f"Merge {amount / 1_000_000:.1f} USDC"
             )
+
+            # Return transaction hash immediately (don't wait for confirmation)
+            # The relayer will handle confirmation in the background
+            if (
+                response
+                and hasattr(response, "transaction_hash")
+                and response.transaction_hash
+            ):
+                log(
+                    f"✅ [{symbol}] #{trade_id} MERGE SUCCESS (GASLESS): {amount / 1_000_000:.1f} USDC freed"
+                )
+                log(f"   Tx: {response.transaction_hash}")
+                return response.transaction_hash
+            else:
+                log_error(
+                    f"[{symbol}] #{trade_id} Relayer merge failed, falling back to Web3"
+                )
             result = response.wait()
 
-            if result and result.transaction_hash:
+            if (
+                result
+                and hasattr(result, "transaction_hash")
+                and result.transaction_hash
+            ):
                 log(
                     f"✅ [{symbol}] #{trade_id} MERGE SUCCESS (GASLESS): {amount / 1_000_000:.1f} USDC freed"
                 )
@@ -360,21 +388,34 @@ def redeem_winning_tokens(
 
     if relay_client:
         try:
+            from py_builder_relayer_client.models import SafeTransaction, OperationType
+
             log(f"🌐 [{symbol}] #{trade_id} Using gasless Relayer for redemption")
 
             # Encode redeem function call
             encoded_data = _encode_redeem_positions(condition_id)
 
-            # Create transaction for relayer
-            redeem_tx = {"to": CTF_ADDRESS, "data": f"0x{encoded_data}", "value": "0"}
+            # Create SafeTransaction for relayer
+            redeem_tx = SafeTransaction(
+                to=CTF_ADDRESS,
+                operation=OperationType.Call,
+                data=f"0x{encoded_data}",
+                value="0",
+            )
 
             # Execute via relayer (gasless!)
             response = relay_client.execute([redeem_tx], "Redeem winning tokens")
-            result = response.wait()
 
-            if result and result.transaction_hash:
+            # Return transaction hash immediately (don't wait for confirmation)
+            # The relayer will handle confirmation in the background
+            if (
+                response
+                and hasattr(response, "transaction_hash")
+                and response.transaction_hash
+            ):
                 log(f"✅ [{symbol}] #{trade_id} REDEEM SUCCESS (GASLESS)")
-                return result.transaction_hash
+                log(f"   Tx: {response.transaction_hash}")
+                return response.transaction_hash
             else:
                 log_error(
                     f"[{symbol}] #{trade_id} Relayer redeem failed, falling back to Web3"
