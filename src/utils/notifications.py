@@ -162,66 +162,90 @@ def process_notifications() -> None:
             # Try to get symbol and additional details from database
             symbol = None
             side = None
-            status = None
+            order_type = "entry"  # entry, hedge, exit
             if order_id:
                 try:
                     with db_connection() as conn:
                         c = conn.cursor()
                         # Check in entry orders
                         c.execute(
-                            "SELECT symbol, side, order_status FROM trades WHERE order_id = ? AND settled = 0 LIMIT 1",
+                            "SELECT symbol, side FROM trades WHERE order_id = ? AND settled = 0 LIMIT 1",
                             (order_id,),
                         )
                         row = c.fetchone()
                         if row:
-                            symbol, side, status = row
+                            symbol, side = row
+                            order_type = "entry"
                         else:
                             # Check in hedge orders
                             c.execute(
-                                "SELECT symbol, side, order_status FROM trades WHERE hedge_order_id = ? AND settled = 0 LIMIT 1",
+                                "SELECT symbol, side FROM trades WHERE hedge_order_id = ? AND settled = 0 LIMIT 1",
                                 (order_id,),
                             )
                             row = c.fetchone()
                             if row:
-                                symbol, side, status = row
-                                symbol = f"{symbol} (hedge)"
+                                symbol, side = row
+                                order_type = "hedge"
                             else:
                                 # Check in exit orders
                                 c.execute(
-                                    "SELECT symbol, side, order_status FROM trades WHERE limit_sell_order_id = ? AND settled = 0 LIMIT 1",
+                                    "SELECT symbol, side FROM trades WHERE limit_sell_order_id = ? AND settled = 0 LIMIT 1",
                                     (order_id,),
                                 )
                                 row = c.fetchone()
                                 if row:
-                                    symbol, side, status = row
-                                    symbol = f"{symbol} (exit)"
+                                    symbol, side = row
+                                    order_type = "exit"
                 except Exception:
                     pass  # Silently fail, we'll just show less info
 
-            # Build detailed log message
-            details_parts = []
-            if symbol:
-                details_parts.append(f"[{symbol}]")
-            if side:
-                details_parts.append(side)
-            if payload_size:
-                try:
-                    details_parts.append(f"📦{float(payload_size):.1f}")
-                except:
-                    pass
-            if payload_price:
-                try:
-                    details_parts.append(f"${float(payload_price):.4f}")
-                except:
-                    pass
-            if status and type_name != "FILLED":  # Don't show old status for fills
-                details_parts.append(f"was:{status}")
+            # Build new cleaner log format: 🔔 [SYMBOL] SIDE SIZE @ $PRICE STATUS | OrderID: 0x...
+            if notif_type == NOTIF_MARKET_RESOLVED:
+                # Market resolved - simpler format
+                log_parts = ["🔔"]
+                if symbol:
+                    log_parts.append(f"[{symbol}]")
+                log_parts.append("MARKET RESOLVED")
+                if order_id_short:
+                    log_parts.append(f"| OrderID: {order_id_short}")
+                log(f"   {' '.join(log_parts)}")
+            else:
+                # FILLED or CANCELLED
+                log_parts = ["🔔"]
 
-            details_str = (
-                " ".join(details_parts) if details_parts else order_id_short or "N/A"
-            )
+                # Symbol with type suffix
+                if symbol:
+                    suffix = (
+                        f" ({order_type})" if order_type in ["hedge", "exit"] else ""
+                    )
+                    log_parts.append(f"[{symbol}{suffix}]")
 
-            log(f"   📨 {type_name}: {details_str} | Notif ID: {notif_id}")
+                # Side, size, price
+                details = []
+                if side:
+                    details.append(side)
+                if payload_size:
+                    try:
+                        details.append(f"{float(payload_size):.1f}")
+                    except:
+                        pass
+                if payload_price:
+                    try:
+                        details.append(f"@ ${float(payload_price):.4f}")
+                    except:
+                        pass
+
+                if details:
+                    log_parts.append(" ".join(details))
+
+                # Status
+                log_parts.append(type_name)
+
+                # Order ID
+                if order_id_short:
+                    log_parts.append(f"| OrderID: {order_id_short}")
+
+                log(f"   {' '.join(log_parts)}")
 
             # Process based on type
             if notif_type == NOTIF_ORDER_FILLED:
