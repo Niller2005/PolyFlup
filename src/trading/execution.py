@@ -13,7 +13,12 @@ from src.data.market_data import get_token_ids
 
 
 def place_hedge_order(
-    trade_id: int, symbol: str, entry_side: str, entry_price: float, entry_size: float
+    trade_id: int,
+    symbol: str,
+    entry_side: str,
+    entry_price: float,
+    entry_size: float,
+    cursor=None,
 ) -> Optional[str]:
     """
     Place a limit order on the opposite side to hedge the position.
@@ -31,6 +36,7 @@ def place_hedge_order(
         entry_side: Side of entry trade (UP or DOWN)
         entry_price: Price of entry trade
         entry_size: Size of entry trade
+        cursor: Optional database cursor (if called within existing transaction)
 
     Returns:
         Order ID if successful, None otherwise
@@ -78,12 +84,20 @@ def place_hedge_order(
         )
 
         # Store hedge price in database
-        with db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
+        if cursor:
+            # Use existing transaction cursor
+            cursor.execute(
                 "UPDATE trades SET hedge_order_price = ? WHERE id = ?",
                 (hedge_price, trade_id),
             )
+        else:
+            # Open new connection
+            with db_connection() as conn:
+                c = conn.cursor()
+                c.execute(
+                    "UPDATE trades SET hedge_order_price = ? WHERE id = ?",
+                    (hedge_price, trade_id),
+                )
 
         return order_id
     except Exception as e:

@@ -361,7 +361,7 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
                             # Place hedge order
                             hedge_order_id = place_hedge_order(
-                                trade_id, symbol, side, entry_price, size
+                                trade_id, symbol, side, entry_price, size, cursor=c
                             )
 
                             # Update trade with hedge order ID
@@ -642,7 +642,7 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                                 f"   🔄 [{symbol}] Attempting to re-place hedge order..."
                             )
                             hedge_order_id = place_hedge_order(
-                                trade_id, symbol, side, entry_price, size
+                                trade_id, symbol, side, entry_price, size, cursor=c
                             )
 
                             if hedge_order_id:
