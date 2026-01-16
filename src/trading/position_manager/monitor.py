@@ -652,6 +652,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                         check_orders=check_orders,
                         is_scoring=scoring_map.get(l_sell) if l_sell else None,
                         last_scale_in_at=last_sc_at,
+                        is_hedged=bool(is_hed),
                     )
                 except Exception as e:
                     log_error(f"[{sym}] #{tid} Position monitoring error: {e}")

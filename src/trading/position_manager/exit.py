@@ -71,8 +71,13 @@ def _check_exit_plan(
     confidence=0.0,
     is_scoring=None,
     last_scale_in_at=None,
+    is_hedged=False,
 ):
     if not ENABLE_EXIT_PLAN or buy_status not in ["FILLED", "MATCHED"] or size == 0:
+        return False
+
+    # Skip exit plans for hedged positions (they are protected by hedge)
+    if is_hedged:
         return False
 
     # Early check: Skip exit plans for positions less than MIN_SIZE
