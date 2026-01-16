@@ -36,8 +36,15 @@ def format_window_range(start_et: datetime, end_et: datetime) -> str:
     return f"{month} {day}, {start_t}-{end_t} ET"
 
 
-def get_token_ids(symbol: str):
-    """Get UP and DOWN token IDs from Gamma API"""
+def get_market_metadata(symbol: str) -> dict:
+    """
+    Get full market metadata from Gamma API including condition_id
+
+    Returns dict with:
+        - clob_token_ids: [up_token_id, down_token_id]
+        - condition_id: bytes32 condition ID for CTF operations
+        - slug: market slug
+    """
     slug = get_current_slug(symbol)
     for attempt in range(1, 13):
         try:
@@ -53,8 +60,15 @@ def get_token_ids(symbol: str):
                             x.strip().strip('"')
                             for x in clob_ids.strip("[]").split(",")
                         ]
+
+                condition_id = m.get("conditionId") or m.get("condition_id") or ""
+
                 if isinstance(clob_ids, list) and len(clob_ids) >= 2:
-                    return clob_ids[0], clob_ids[1]
+                    return {
+                        "clob_token_ids": clob_ids,
+                        "condition_id": condition_id,
+                        "slug": slug,
+                    }
             elif r.status_code == 404 and attempt == 1:
                 from src.utils.logger import log
 
@@ -63,9 +77,18 @@ def get_token_ids(symbol: str):
             if attempt == 1:
                 from src.utils.logger import log
 
-                log(f"[{symbol}] ❌ Error fetching token IDs: {e}")
+                log(f"[{symbol}] ❌ Error fetching market metadata: {e}")
         if attempt < 12:
             time.sleep(4)
+    return {}
+
+
+def get_token_ids(symbol: str):
+    """Get UP and DOWN token IDs from Gamma API"""
+    metadata = get_market_metadata(symbol)
+    if metadata and "clob_token_ids" in metadata:
+        ids = metadata["clob_token_ids"]
+        return ids[0], ids[1]
     return None, None
 
 

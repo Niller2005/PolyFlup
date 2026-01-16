@@ -224,13 +224,23 @@ def _prepare_trade_params(
     """
     Prepare trade parameters without executing the order
     """
-    up_id, down_id = get_token_ids(symbol)
-    if not up_id or not down_id:
+    # Fetch market metadata including condition_id for CTF operations
+    from src.data.market_data import get_market_metadata
+
+    market_metadata = get_market_metadata(symbol)
+    if not market_metadata or "clob_token_ids" not in market_metadata:
         if verbose:
             log(f"[{symbol}] ❌ Market not found")
             if add_spacing:
                 log("")
         return
+
+    clob_ids = market_metadata["clob_token_ids"]
+    up_id, down_id = clob_ids[0], clob_ids[1]
+    condition_id = market_metadata.get("condition_id", "")
+
+    if verbose and condition_id:
+        log(f"[{symbol}] 📍 condition_id: {condition_id[:16]}...")
 
     client = get_clob_client()
     confidence, bias, p_up, best_bid, best_ask, signals, raw_scores = (
@@ -491,6 +501,7 @@ def _prepare_trade_params(
         "window_end": window_end,
         "slug": get_current_slug(symbol),
         "raw_scores": raw_scores,
+        "condition_id": condition_id,  # Store condition_id for CTF merge operations
     }
 
 

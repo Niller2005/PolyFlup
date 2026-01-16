@@ -544,6 +544,7 @@ def execute_trade(
             bayesian_confidence=raw_scores.get("bayesian_confidence"),
             bayesian_bias=raw_scores.get("bayesian_bias"),
             market_prior_p_up=raw_scores.get("market_prior_p_up"),
+            condition_id=trade_params.get("condition_id"),
         )
 
         # Update hedge_order_id and hedge verification status now that we have trade_id

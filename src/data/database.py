@@ -62,8 +62,8 @@ def save_trade(cursor=None, **kwargs):
             imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered, reversal_triggered_at,
             up_total, down_total, momentum_score, momentum_dir, flow_score, flow_dir,
             divergence_score, divergence_dir, vwm_score, vwm_dir, pm_mom_score, pm_mom_dir, adx_score, adx_dir, lead_lag_bonus,
-            additive_confidence, additive_bias, bayesian_confidence, bayesian_bias, market_prior_p_up)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            additive_confidence, additive_bias, bayesian_confidence, bayesian_bias, market_prior_p_up, condition_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 datetime.now(tz=ZoneInfo("UTC")).isoformat(),
@@ -109,6 +109,7 @@ def save_trade(cursor=None, **kwargs):
                 kwargs.get("bayesian_confidence"),
                 kwargs.get("bayesian_bias"),
                 kwargs.get("market_prior_p_up"),
+                kwargs.get("condition_id"),
             ),
         )
         return cursor.lastrowid
@@ -123,8 +124,8 @@ def save_trade(cursor=None, **kwargs):
                 imbalance, funding_bias, order_status, order_id, limit_sell_order_id, is_reversal, target_price, reversal_triggered, reversal_triggered_at,
                 up_total, down_total, momentum_score, momentum_dir, flow_score, flow_dir,
                 divergence_score, divergence_dir, vwm_score, vwm_dir, pm_mom_score, pm_mom_dir, adx_score, adx_dir, lead_lag_bonus,
-                additive_confidence, additive_bias, bayesian_confidence, bayesian_bias, market_prior_p_up)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                additive_confidence, additive_bias, bayesian_confidence, bayesian_bias, market_prior_p_up, condition_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     datetime.now(tz=ZoneInfo("UTC")).isoformat(),
@@ -170,6 +171,7 @@ def save_trade(cursor=None, **kwargs):
                     kwargs.get("bayesian_confidence"),
                     kwargs.get("bayesian_bias"),
                     kwargs.get("market_prior_p_up"),
+                    kwargs.get("condition_id"),
                 ),
             )
             trade_id = c.lastrowid

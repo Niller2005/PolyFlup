@@ -5,6 +5,7 @@ from .polymarket import (
     get_window_times,
     format_window_range,
     get_token_ids,
+    get_market_metadata,
     get_polymarket_momentum,
     get_outcome_prices,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "get_window_times",
     "format_window_range",
     "get_token_ids",
+    "get_market_metadata",
     "get_funding_bias",
     "get_fear_greed",
     "get_polymarket_momentum",
