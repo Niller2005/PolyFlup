@@ -42,6 +42,11 @@ TAKE_PROFIT_PERCENT = float(os.getenv("TAKE_PROFIT_PERCENT", "80.0"))
 ENABLE_REVERSAL = os.getenv("ENABLE_REVERSAL", "YES").upper() == "YES"
 ENABLE_HEDGED_REVERSAL = os.getenv("ENABLE_HEDGED_REVERSAL", "YES").upper() == "YES"
 
+# CTF Merge Strategy
+ENABLE_CTF_MERGE = (
+    os.getenv("ENABLE_CTF_MERGE", "NO").upper() == "YES"
+)  # Merge hedged positions immediately to free capital
+
 # Unfilled Order Management (separate from stop loss)
 CANCEL_UNFILLED_ORDERS = os.getenv("CANCEL_UNFILLED_ORDERS", "NO").upper() == "YES"
 UNFILLED_CANCEL_THRESHOLD = float(

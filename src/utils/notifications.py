@@ -169,6 +169,42 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     # Track recent fill for balance API cooldown
                     track_recent_fill(trade_id, new_price, new_size, timestamp)
 
+                    # NEW: Fetch condition_id from position data for CTF operations
+                    try:
+                        from eth_account import Account
+                        from src.config.settings import PROXY_PK
+                        from src.trading.orders.balance_validation import (
+                            get_position_from_data_api,
+                        )
+
+                        user_address = Account.from_key(PROXY_PK).address
+
+                        # Get token_id from trade
+                        c.execute(
+                            "SELECT token_id FROM trades WHERE id = ?", (trade_id,)
+                        )
+                        token_row = c.fetchone()
+
+                        if token_row:
+                            token_id = token_row[0]
+                            position_data = get_position_from_data_api(
+                                user_address, token_id, symbol
+                            )
+
+                            if position_data and position_data.get("condition_id"):
+                                condition_id = position_data["condition_id"]
+                                c.execute(
+                                    "UPDATE trades SET condition_id = ? WHERE id = ?",
+                                    (condition_id, trade_id),
+                                )
+                                log(
+                                    f"   📍 [{symbol}] Stored condition_id: {condition_id[:16]}..."
+                                )
+                    except Exception as e:
+                        log_error(
+                            f"[{symbol}] Error fetching condition_id after fill: {e}"
+                        )
+
                     # NEW: Place hedge order immediately after entry fill
                     # We place the hedge order here to ensure fast execution after fill
                     try:
@@ -176,13 +212,13 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
                         # Get trade details
                         c.execute(
-                            "SELECT symbol, side, entry_price, size FROM trades WHERE id = ?",
+                            "SELECT symbol, side, entry_price, size, limit_sell_order_id FROM trades WHERE id = ?",
                             (trade_id,),
                         )
                         row = c.fetchone()
 
                         if row:
-                            symbol, side, entry_price, size = row
+                            symbol, side, entry_price, size, exit_order_id = row
 
                             # Place hedge order
                             hedge_order_id = place_hedge_order(
@@ -195,6 +231,26 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                                     "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
                                     (hedge_order_id, trade_id),
                                 )
+
+                                # Cancel exit plan order if it exists (hedge replaces exit plan)
+                                if exit_order_id:
+                                    try:
+                                        from src.trading.orders import cancel_order
+
+                                        cancel_result = cancel_order(exit_order_id)
+                                        if cancel_result:
+                                            log(
+                                                f"   🚫 [{symbol}] Exit plan cancelled (replaced by hedge)"
+                                            )
+                                            c.execute(
+                                                "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                                                (trade_id,),
+                                            )
+                                    except Exception as cancel_error:
+                                        log_error(
+                                            f"[{symbol}] Error cancelling exit plan: {cancel_error}"
+                                        )
+
                                 conn.commit()
                     except Exception as e:
                         log_error(
@@ -254,6 +310,58 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                         "UPDATE trades SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
                         (trade_id,),
                     )
+
+                    # NEW: Merge hedged position immediately to free capital
+                    try:
+                        from src.config.settings import ENABLE_CTF_MERGE
+                        from src.trading.ctf_operations import merge_hedged_position
+
+                        if ENABLE_CTF_MERGE:
+                            # Get condition_id from trade
+                            c.execute(
+                                "SELECT condition_id FROM trades WHERE id = ?",
+                                (trade_id,),
+                            )
+                            cond_row = c.fetchone()
+
+                            if cond_row and cond_row[0]:
+                                condition_id = cond_row[0]
+
+                                # Convert size to USDC amount (6 decimals)
+                                amount = int(size * 1_000_000)
+
+                                log(
+                                    f"   🔄 [{symbol}] Merging {size:.1f} hedged position to free capital..."
+                                )
+
+                                # Merge the hedged position
+                                tx_hash = merge_hedged_position(
+                                    trade_id, symbol, condition_id, amount
+                                )
+
+                                if tx_hash:
+                                    # Store transaction hash
+                                    c.execute(
+                                        "UPDATE trades SET merge_tx_hash = ? WHERE id = ?",
+                                        (tx_hash, trade_id),
+                                    )
+                                    log(
+                                        f"   ✅ [{symbol}] Merge successful! Tx: {tx_hash[:16]}..."
+                                    )
+                                    log(
+                                        f"   💰 [{symbol}] Capital freed: ${size:.2f} USDC"
+                                    )
+                                else:
+                                    log(
+                                        f"   ⚠️  [{symbol}] Merge transaction failed, position will settle normally"
+                                    )
+                            else:
+                                log(
+                                    f"   ⚠️  [{symbol}] No condition_id found, skipping merge"
+                                )
+                    except Exception as e:
+                        log_error(f"[{symbol}] Error merging hedged position: {e}")
+
                     return
 
                 # Check if this is a scale-in order

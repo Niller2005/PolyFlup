@@ -451,7 +451,16 @@ def _prepare_trade_params(
             f"   📈 [{symbol}] Bumping size to {MIN_SIZE} shares (${bet_usd_effective:.2f})"
         )
 
-    HEDGE_COST_MULTIPLIER = 2 * 0.99
+    # Calculate required balance for entry + hedge based on CTF merge setting
+    from src.config.settings import ENABLE_CTF_MERGE
+
+    if ENABLE_CTF_MERGE:
+        # When merging: entry + hedge = $1.00 per share
+        HEDGE_COST_MULTIPLIER = 1.00
+    else:
+        # When not merging: entry + hedge = $0.99 per share (guarantee profit)
+        HEDGE_COST_MULTIPLIER = 0.99
+
     required_balance = size * HEDGE_COST_MULTIPLIER
 
     if balance < required_balance:

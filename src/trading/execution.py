@@ -18,8 +18,12 @@ def place_hedge_order(
     """
     Place a limit order on the opposite side to hedge the position.
 
-    Hedge price is calculated to ensure combined price is under $0.99.
-    Example: Enter UP @ $0.52, hedge DOWN @ $0.47 = $0.99 total
+    Hedge price is calculated based on CTF_MERGE setting:
+    - If CTF_MERGE enabled: Combined price = $1.00 (merge returns full $1.00 per share)
+    - If CTF_MERGE disabled: Combined price = $0.99 (wait for settlement, guarantee profit)
+
+    Example (CTF_MERGE=YES): Enter UP @ $0.52, hedge DOWN @ $0.48 = $1.00 total
+    Example (CTF_MERGE=NO):  Enter UP @ $0.52, hedge DOWN @ $0.47 = $0.99 total
 
     Args:
         trade_id: ID of the entry trade
@@ -32,6 +36,8 @@ def place_hedge_order(
         Order ID if successful, None otherwise
     """
     try:
+        from src.config.settings import ENABLE_CTF_MERGE
+
         up_id, down_id = get_token_ids(symbol)
         if not up_id or not down_id:
             return None
@@ -44,9 +50,15 @@ def place_hedge_order(
             hedge_side = "UP"
             hedge_token_id = up_id
 
-        # Calculate hedge price to ensure combined price < $0.99
-        # hedge_price = $0.99 - entry_price
-        hedge_price = round(0.99 - entry_price, 2)
+        # Calculate hedge price based on CTF merge setting
+        if ENABLE_CTF_MERGE:
+            # Target $1.00 combined (merge returns full $1.00)
+            target_combined = 1.00
+        else:
+            # Target $0.99 combined (guarantee profit on settlement)
+            target_combined = 0.99
+
+        hedge_price = round(target_combined - entry_price, 2)
 
         # Ensure price is within valid range
         hedge_price = max(0.01, min(0.99, hedge_price))
@@ -59,8 +71,9 @@ def place_hedge_order(
             return None
 
         order_id = result["order_id"]
+        merge_status = " [MERGE]" if ENABLE_CTF_MERGE else ""
         log(
-            f"   🛡️  [{symbol}] Hedge order placed: {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f} (ID: {order_id[:10]}) | Combined: ${entry_price:.2f} + ${hedge_price:.2f} = ${(entry_price + hedge_price):.2f}"
+            f"   🛡️  [{symbol}] Hedge order placed{merge_status}: {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f} (ID: {order_id[:10]}) | Combined: ${entry_price:.2f} + ${hedge_price:.2f} = ${(entry_price + hedge_price):.2f}"
         )
 
         return order_id

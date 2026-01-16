@@ -192,6 +192,27 @@ def migration_008_add_hedge_order_columns(conn: Any) -> None:
             log(f"    ✓ {col_name} already exists")
 
 
+def migration_009_add_ctf_merge_columns(conn: Any) -> None:
+    """Add CTF merge tracking columns for immediate capital recovery"""
+    c = conn.cursor()
+
+    c.execute("PRAGMA table_info(trades)")
+    columns = [row[1] for row in c.fetchall()]
+
+    new_columns = [
+        ("condition_id", "TEXT"),  # Store condition_id from position data
+        ("merge_tx_hash", "TEXT"),  # Track CTF merge transaction
+    ]
+
+    for col_name, col_type in new_columns:
+        if col_name not in columns:
+            log(f"  - Adding {col_name} column...")
+            c.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
+            log(f"    ✓ {col_name} added")
+        else:
+            log(f"    ✓ {col_name} already exists")
+
+
 # Migration registry: version -> migration function
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
@@ -221,6 +242,11 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
         8,
         "Add hedge order tracking columns for guaranteed profit strategy",
         migration_008_add_hedge_order_columns,
+    ),
+    (
+        9,
+        "Add CTF merge tracking columns for immediate capital recovery",
+        migration_009_add_ctf_merge_columns,
     ),
 ]
 
