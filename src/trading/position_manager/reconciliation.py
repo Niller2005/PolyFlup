@@ -16,6 +16,7 @@ def track_recent_fill(
     if not order_id:
         return
 
+    # Convert timestamp to int if needed
     if timestamp is None:
         timestamp = int(time.time())
     elif isinstance(timestamp, str):
@@ -25,8 +26,18 @@ def track_recent_fill(
 
             dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
             timestamp = int(dt.timestamp())
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError) as e:
             # If parsing fails, use current time
+            log(
+                f"   ⚠️  Failed to parse timestamp '{timestamp}': {e}, using current time"
+            )
+            timestamp = int(time.time())
+    elif not isinstance(timestamp, int):
+        # Ensure timestamp is always an integer
+        try:
+            timestamp = int(timestamp)
+        except (ValueError, TypeError):
+            log(f"   ⚠️  Invalid timestamp type {type(timestamp)}, using current time")
             timestamp = int(time.time())
 
     _recently_filled_orders[order_id] = {
