@@ -114,22 +114,86 @@ def process_notifications() -> None:
             timestamp = notif.get("timestamp")
             payload = notif.get("payload", {})
 
-            # Extract order_id for logging
+            # Extract order_id and payload details for logging
             order_id = _extract_order_id_from_payload(payload)
             order_id_short = (
                 order_id[:10] if order_id and len(order_id) > 10 else order_id
             )
 
-            # Log individual notification
+            # Extract price and size from payload if available
+            payload_price = payload.get("price")
+            payload_size = payload.get("size")
+
+            # Type name for display
             type_name = {
                 NOTIF_ORDER_CANCELLED: "CANCELLED",
                 NOTIF_ORDER_FILLED: "FILLED",
                 NOTIF_MARKET_RESOLVED: "RESOLVED",
             }.get(notif_type, f"UNKNOWN({notif_type})")
 
-            log(
-                f"   📨 Notification: {type_name} | Order: {order_id_short or 'N/A'} | ID: {notif_id}"
+            # Try to get symbol and additional details from database
+            symbol = None
+            side = None
+            status = None
+            if order_id:
+                try:
+                    with db_connection() as conn:
+                        c = conn.cursor()
+                        # Check in entry orders
+                        c.execute(
+                            "SELECT symbol, side, order_status FROM trades WHERE order_id = ? AND settled = 0 LIMIT 1",
+                            (order_id,),
+                        )
+                        row = c.fetchone()
+                        if row:
+                            symbol, side, status = row
+                        else:
+                            # Check in hedge orders
+                            c.execute(
+                                "SELECT symbol, side, order_status FROM trades WHERE hedge_order_id = ? AND settled = 0 LIMIT 1",
+                                (order_id,),
+                            )
+                            row = c.fetchone()
+                            if row:
+                                symbol, side, status = row
+                                symbol = f"{symbol} (hedge)"
+                            else:
+                                # Check in exit orders
+                                c.execute(
+                                    "SELECT symbol, side, order_status FROM trades WHERE limit_sell_order_id = ? AND settled = 0 LIMIT 1",
+                                    (order_id,),
+                                )
+                                row = c.fetchone()
+                                if row:
+                                    symbol, side, status = row
+                                    symbol = f"{symbol} (exit)"
+                except Exception:
+                    pass  # Silently fail, we'll just show less info
+
+            # Build detailed log message
+            details_parts = []
+            if symbol:
+                details_parts.append(f"[{symbol}]")
+            if side:
+                details_parts.append(side)
+            if payload_size:
+                try:
+                    details_parts.append(f"📦{float(payload_size):.1f}")
+                except:
+                    pass
+            if payload_price:
+                try:
+                    details_parts.append(f"${float(payload_price):.4f}")
+                except:
+                    pass
+            if status and type_name != "FILLED":  # Don't show old status for fills
+                details_parts.append(f"was:{status}")
+
+            details_str = (
+                " ".join(details_parts) if details_parts else order_id_short or "N/A"
             )
+
+            log(f"   📨 {type_name}: {details_str} | Notif ID: {notif_id}")
 
             # Process based on type
             if notif_type == NOTIF_ORDER_FILLED:
