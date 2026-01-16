@@ -3,7 +3,14 @@
 from typing import Optional, Dict
 from eth_account import Account
 from web3 import Web3
-from src.config.settings import PROXY_PK, FUNDER_PROXY
+from src.config.settings import (
+    PROXY_PK,
+    FUNDER_PROXY,
+    POLY_BUILDER_API_KEY,
+    POLY_BUILDER_SECRET,
+    POLY_BUILDER_PASSPHRASE,
+    ENABLE_RELAYER_CLIENT,
+)
 from src.utils.logger import log, log_error
 
 # CTF Contract Address on Polygon
@@ -11,6 +18,10 @@ CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 
 # USDCe Address on Polygon
 USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+
+# Relayer Configuration
+RELAYER_URL = "https://relayer-v2.polymarket.com"
+POLYGON_CHAIN_ID = 137
 
 # CTF Contract ABI (only the functions we need)
 CTF_ABI = [
@@ -87,6 +98,99 @@ def get_wallet_address() -> str:
     return account.address
 
 
+def _get_relayer_client():
+    """
+    Get RelayClient for gasless CTF operations.
+
+    Returns RelayClient if credentials are configured, None otherwise.
+    """
+    if not ENABLE_RELAYER_CLIENT:
+        return None
+
+    if not all([POLY_BUILDER_API_KEY, POLY_BUILDER_SECRET, POLY_BUILDER_PASSPHRASE]):
+        log("   ⚠️  Relayer credentials not configured, using manual Web3")
+        return None
+
+    try:
+        from py_builder_relayer_client.client import RelayClient
+        from py_builder_signing_sdk import BuilderConfig, BuilderApiKeyCreds
+
+        # Configure local signing with Builder API credentials
+        builder_config = BuilderConfig(
+            local_builder_creds=BuilderApiKeyCreds(
+                key=POLY_BUILDER_API_KEY,
+                secret=POLY_BUILDER_SECRET,
+                passphrase=POLY_BUILDER_PASSPHRASE,
+            )
+        )
+
+        # Create RelayClient
+        client = RelayClient(RELAYER_URL, POLYGON_CHAIN_ID, PROXY_PK, builder_config)
+
+        return client
+    except Exception as e:
+        log_error(f"Failed to initialize RelayClient: {e}")
+        return None
+
+
+def _encode_merge_positions(condition_id: str, amount: int) -> str:
+    """
+    Encode mergePositions function call for CTF contract.
+
+    Args:
+        condition_id: Condition ID (bytes32)
+        amount: Amount to merge in wei (6 decimals for USDC)
+
+    Returns:
+        Encoded function data as hex string
+    """
+    web3 = Web3()
+    ctf_contract = web3.eth.contract(
+        address=Web3.to_checksum_address(CTF_ADDRESS), abi=CTF_ABI
+    )
+
+    encoded = ctf_contract.encode_abi(
+        abi_element_identifier="mergePositions",
+        args=[
+            Web3.to_checksum_address(USDC_ADDRESS),  # collateralToken
+            b"\x00" * 32,  # parentCollectionId (null)
+            bytes.fromhex(condition_id.replace("0x", "")),  # conditionId
+            [1, 2],  # partition (YES | NO)
+            amount,  # amount
+        ],
+    )
+
+    return encoded.hex()
+
+
+def _encode_redeem_positions(condition_id: str) -> str:
+    """
+    Encode redeemPositions function call for CTF contract.
+
+    Args:
+        condition_id: Condition ID (bytes32)
+
+    Returns:
+        Encoded function data as hex string
+    """
+    web3 = Web3()
+    ctf_contract = web3.eth.contract(
+        address=Web3.to_checksum_address(CTF_ADDRESS), abi=CTF_ABI
+    )
+
+    encoded = ctf_contract.encode_abi(
+        abi_element_identifier="redeemPositions",
+        args=[
+            Web3.to_checksum_address(USDC_ADDRESS),  # collateralToken
+            b"\x00" * 32,  # parentCollectionId (null)
+            bytes.fromhex(condition_id.replace("0x", "")),  # conditionId
+            [1, 2],  # indexSets (redeem both YES and NO)
+        ],
+    )
+
+    return encoded.hex()
+
+
 def merge_hedged_position(
     trade_id: int,
     symbol: str,
@@ -111,6 +215,40 @@ def merge_hedged_position(
         merge_hedged_position(123, "BTC", "0xabc...", 10_000_000)
         # Merges 10 full sets (10 UP + 10 DOWN) → 10 USDC
     """
+    # Try gasless RelayClient first
+    relay_client = _get_relayer_client()
+
+    if relay_client:
+        try:
+            log(f"🌐 [{symbol}] #{trade_id} Using gasless Relayer for CTF merge")
+
+            # Encode merge function call
+            encoded_data = _encode_merge_positions(condition_id, amount)
+
+            # Create transaction for relayer
+            merge_tx = {"to": CTF_ADDRESS, "data": f"0x{encoded_data}", "value": "0"}
+
+            # Execute via relayer (gasless!)
+            response = relay_client.execute(
+                [merge_tx], f"Merge {amount / 1_000_000:.1f} USDC"
+            )
+            result = response.wait()
+
+            if result and result.transaction_hash:
+                log(
+                    f"✅ [{symbol}] #{trade_id} MERGE SUCCESS (GASLESS): {amount / 1_000_000:.1f} USDC freed"
+                )
+                return result.transaction_hash
+            else:
+                log_error(
+                    f"[{symbol}] #{trade_id} Relayer merge failed, falling back to Web3"
+                )
+        except Exception as e:
+            log_error(
+                f"[{symbol}] #{trade_id} Relayer error: {e}, falling back to Web3"
+            )
+
+    # Fallback to manual Web3 transaction (requires ETH for gas)
     try:
         web3 = get_web3_client()
         wallet_address = get_wallet_address()
@@ -214,6 +352,36 @@ def redeem_winning_tokens(
     Returns:
         Transaction hash if successful, None otherwise
     """
+    # Try gasless RelayClient first
+    relay_client = _get_relayer_client()
+
+    if relay_client:
+        try:
+            log(f"🌐 [{symbol}] #{trade_id} Using gasless Relayer for redemption")
+
+            # Encode redeem function call
+            encoded_data = _encode_redeem_positions(condition_id)
+
+            # Create transaction for relayer
+            redeem_tx = {"to": CTF_ADDRESS, "data": f"0x{encoded_data}", "value": "0"}
+
+            # Execute via relayer (gasless!)
+            response = relay_client.execute([redeem_tx], "Redeem winning tokens")
+            result = response.wait()
+
+            if result and result.transaction_hash:
+                log(f"✅ [{symbol}] #{trade_id} REDEEM SUCCESS (GASLESS)")
+                return result.transaction_hash
+            else:
+                log_error(
+                    f"[{symbol}] #{trade_id} Relayer redeem failed, falling back to Web3"
+                )
+        except Exception as e:
+            log_error(
+                f"[{symbol}] #{trade_id} Relayer error: {e}, falling back to Web3"
+            )
+
+    # Fallback to manual Web3 transaction (requires ETH for gas)
     try:
         web3 = get_web3_client()
         wallet_address = get_wallet_address()

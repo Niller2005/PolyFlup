@@ -140,6 +140,12 @@ FUNDER_PROXY = os.getenv("FUNDER_PROXY", "")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 BFXD_URL = os.getenv("BFXD_URL", "").strip()
 
+# Polymarket Builder API (for gasless CTF operations via Relayer)
+POLY_BUILDER_API_KEY = os.getenv("POLY_BUILDER_API_KEY", "")
+POLY_BUILDER_SECRET = os.getenv("POLY_BUILDER_SECRET", "")
+POLY_BUILDER_PASSPHRASE = os.getenv("POLY_BUILDER_PASSPHRASE", "")
+ENABLE_RELAYER_CLIENT = os.getenv("ENABLE_RELAYER_CLIENT", "YES").upper() == "YES"
+
 if not PROXY_PK or not PROXY_PK.startswith("0x"):
     print(
         f"[{datetime.now(tz=ZoneInfo('UTC')).strftime('%Y-%m-%d %H:%M:%S UTC')}] ❌ FATAL: Missing PROXY_PK in .env!",
