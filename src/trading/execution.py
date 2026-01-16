@@ -19,6 +19,7 @@ def place_hedge_order(
     entry_side: str,
     entry_price: float,
     entry_size: float,
+    entry_order_id: str = None,
     cursor=None,
 ) -> Optional[str]:
     """
@@ -36,7 +37,8 @@ def place_hedge_order(
         symbol: Trading symbol
         entry_side: Side of entry trade (UP or DOWN)
         entry_price: Price of entry trade
-        entry_size: Size of entry trade
+        entry_size: Size of entry trade (will be verified against actual fill)
+        entry_order_id: Order ID of entry trade (for fill verification)
         cursor: Optional database cursor (if called within existing transaction)
 
     Returns:
@@ -45,6 +47,30 @@ def place_hedge_order(
     try:
         from src.config.settings import ENABLE_CTF_MERGE
         from src.data.db_connection import db_connection
+
+        # CRITICAL: Verify actual entry fill size before placing hedge
+        # This prevents hedge size mismatch when entry order partially fills
+        actual_entry_size = entry_size
+        if entry_order_id:
+            try:
+                entry_order = get_order(entry_order_id)
+                if entry_order:
+                    filled_size = float(entry_order.get("size_matched", 0))
+                    original_size = float(entry_order.get("original_size", entry_size))
+
+                    if filled_size > 0:
+                        actual_entry_size = filled_size
+
+                        # Log if there's a significant difference (>0.1%)
+                        size_diff_pct = abs(filled_size - entry_size) / entry_size * 100
+                        if size_diff_pct > 0.1:
+                            log(
+                                f"   📊 [{symbol}] Entry partially filled: {filled_size:.4f}/{entry_size:.1f} ({size_diff_pct:.1f}% diff) - adjusting hedge size"
+                            )
+            except Exception as verify_err:
+                log(
+                    f"   ⚠️  [{symbol}] Could not verify entry fill size, using requested size: {verify_err}"
+                )
 
         up_id, down_id = get_token_ids(symbol)
         if not up_id or not down_id:
@@ -109,8 +135,8 @@ def place_hedge_order(
         # Ensure final price is within valid range
         hedge_price = max(0.01, min(0.99, hedge_price))
 
-        # Place hedge order
-        result = place_order(hedge_token_id, hedge_price, entry_size)
+        # Place hedge order with actual filled entry size
+        result = place_order(hedge_token_id, hedge_price, actual_entry_size)
 
         if not result["success"]:
             log(f"   ❌ [{symbol}] Hedge order failed: {result.get('error')}")
@@ -119,7 +145,7 @@ def place_hedge_order(
         order_id = result["order_id"]
         merge_status = " [MERGE]" if ENABLE_CTF_MERGE else ""
         log(
-            f"   🛡️  [{symbol}] Hedge order placed{merge_status}: {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f} (ID: {order_id[:10]}) | Combined: ${entry_price:.2f} + ${hedge_price:.2f} = ${(entry_price + hedge_price):.2f}"
+            f"   🛡️  [{symbol}] Hedge order placed{merge_status}: {hedge_side} {actual_entry_size:.1f} @ ${hedge_price:.2f} (ID: {order_id[:10]}) | Combined: ${entry_price:.2f} + ${hedge_price:.2f} = ${(entry_price + hedge_price):.2f}"
         )
 
         # Check remaining capital after hedge - warn if insufficient for scale-ins
@@ -130,7 +156,7 @@ def place_hedge_order(
             remaining_usdc = float(bal_info.get("balance", 0)) if bal_info else 0.0
 
             # Scale-in typically needs ~$6-8 (size * price for similar position)
-            scale_in_reserve = entry_size * entry_price
+            scale_in_reserve = actual_entry_size * entry_price
 
             if remaining_usdc < scale_in_reserve:
                 log(
@@ -166,9 +192,9 @@ def place_hedge_order(
             hedge_status = get_order(order_id)
             if hedge_status:
                 hedge_filled_size = float(hedge_status.get("size_matched", 0))
-                if hedge_filled_size >= entry_size - 0.0001:
+                if hedge_filled_size >= actual_entry_size - 0.0001:
                     log(
-                        f"   ✅ [{symbol}] Hedge immediately verified: {hedge_filled_size:.2f}/{entry_size:.2f} shares filled"
+                        f"   ✅ [{symbol}] Hedge immediately verified: {hedge_filled_size:.2f}/{actual_entry_size:.2f} shares filled"
                     )
 
                     # Mark as hedged in database (only if trade_id exists)
@@ -230,7 +256,7 @@ def place_hedge_order(
                             )
                 else:
                     log(
-                        f"   ⏳ [{symbol}] Hedge partially filled: {hedge_filled_size:.2f}/{entry_size:.2f} shares (will continue monitoring)"
+                        f"   ⏳ [{symbol}] Hedge partially filled: {hedge_filled_size:.2f}/{actual_entry_size:.2f} shares (will continue monitoring)"
                     )
         except Exception as verify_err:
             log(
@@ -325,6 +351,7 @@ def execute_trade(
                 entry_side=side,
                 entry_price=actual_price,
                 entry_size=actual_size,
+                entry_order_id=order_id,  # Pass order ID for fill verification
                 cursor=cursor,
             )
         except Exception as hedge_err:

@@ -435,22 +435,28 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                         try:
                             from src.trading.execution import place_hedge_order
 
-                            # Get trade details
+                            # Get trade details including order_id for fill verification
                             c.execute(
-                                "SELECT symbol, side, entry_price, size FROM trades WHERE id = ?",
+                                "SELECT symbol, side, entry_price, size, order_id FROM trades WHERE id = ?",
                                 (trade_id,),
                             )
                             row = c.fetchone()
 
                             if row:
-                                symbol, side, entry_price, size = row
+                                symbol, side, entry_price, size, order_id = row
                                 log(
                                     f"   ⚠️  [{symbol}] #{trade_id} Placing fallback hedge (not placed during entry)"
                                 )
 
                                 # Place hedge order
                                 hedge_order_id = place_hedge_order(
-                                    trade_id, symbol, side, entry_price, size, cursor=c
+                                    trade_id,
+                                    symbol,
+                                    side,
+                                    entry_price,
+                                    size,
+                                    entry_order_id=order_id,
+                                    cursor=c,
                                 )
 
                                 # Update trade with hedge order ID
@@ -740,15 +746,21 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
 
                 # Check if this is a hedge order cancellation
                 c.execute(
-                    "SELECT id, symbol, side, entry_price, size, order_status FROM trades WHERE hedge_order_id = ? AND settled = 0",
+                    "SELECT id, symbol, side, entry_price, size, order_status, order_id FROM trades WHERE hedge_order_id = ? AND settled = 0",
                     (order_id,),
                 )
                 hedge_row = c.fetchone()
 
                 if hedge_row:
-                    trade_id, symbol, side, entry_price, size, current_status = (
-                        hedge_row
-                    )
+                    (
+                        trade_id,
+                        symbol,
+                        side,
+                        entry_price,
+                        size,
+                        current_status,
+                        entry_order_id,
+                    ) = hedge_row
                     order_id_short = order_id[:10] if len(order_id) > 10 else order_id
                     log(
                         f"⚠️  [{symbol}] HEDGE CANCEL {order_id_short} | Position is now UNHEDGED!"
@@ -774,7 +786,13 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                                 f"   🔄 [{symbol}] Attempting to re-place hedge order..."
                             )
                             hedge_order_id = place_hedge_order(
-                                trade_id, symbol, side, entry_price, size, cursor=c
+                                trade_id,
+                                symbol,
+                                side,
+                                entry_price,
+                                size,
+                                entry_order_id=entry_order_id,
+                                cursor=c,
                             )
 
                             if hedge_order_id:

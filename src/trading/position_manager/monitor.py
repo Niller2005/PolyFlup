@@ -334,7 +334,13 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                     from src.trading.execution import place_hedge_order
 
                                     hedge_order_id = place_hedge_order(
-                                        tid, sym, side, entry, size, cursor=c
+                                        tid,
+                                        sym,
+                                        side,
+                                        entry,
+                                        size,
+                                        entry_order_id=b_id,
+                                        cursor=c,
                                     )
 
                                     if hedge_order_id:
