@@ -657,6 +657,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                         curr_b_status,
                         confidence=edge,
                         target_price=target,
+                        is_hedged=is_hed,
                         verbose=verbose,
                     )
 

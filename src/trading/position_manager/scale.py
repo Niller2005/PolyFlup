@@ -39,9 +39,16 @@ def _check_scale_in(
     buy_order_status,
     confidence=0.0,
     target_price=None,
+    is_hedged=False,
     verbose=False,
 ):
     if not ENABLE_SCALE_IN:
+        return
+
+    # Skip scale-in for hedged positions (already locked in for guaranteed profit)
+    if is_hedged:
+        if verbose:
+            log(f"   ⏭️  [{symbol}] #{trade_id} Scale-in skipped: Position is hedged")
         return
 
     # Scale-in gating: Skip if USDC balance is too low (< $5.00 minimum)
