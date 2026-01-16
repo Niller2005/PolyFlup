@@ -332,7 +332,46 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                     # Check if there's a gap between position size and hedge size
                                     unhedged_amount = size - hedge_filled_size
 
-                                    if (
+                                    # Check if hedge is fully filled (within 0.0001 tolerance)
+                                    if abs(unhedged_amount) < 0.0001:
+                                        # Hedge is fully filled! Mark as hedged if not already
+                                        if is_hed == 0:
+                                            log(
+                                                f"   🛡️  [{sym}] #{tid} Hedge fully filled ({hedge_filled_size:.2f}/{size:.2f}) - marking as HEDGED"
+                                            )
+                                            c.execute(
+                                                "UPDATE trades SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
+                                                (tid,),
+                                            )
+
+                                            # Cancel exit plan if present (position is now hedged)
+                                            c.execute(
+                                                "SELECT limit_sell_order_id FROM trades WHERE id = ?",
+                                                (tid,),
+                                            )
+                                            exit_row = c.fetchone()
+                                            if exit_row and exit_row[0]:
+                                                try:
+                                                    from src.trading.orders import (
+                                                        cancel_order,
+                                                    )
+
+                                                    cancel_result = cancel_order(
+                                                        exit_row[0]
+                                                    )
+                                                    if cancel_result:
+                                                        log(
+                                                            f"   🚫 [{sym}] #{tid} Exit plan cancelled (position fully hedged)"
+                                                        )
+                                                        c.execute(
+                                                            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                                                            (tid,),
+                                                        )
+                                                except Exception as cancel_err:
+                                                    log_error(
+                                                        f"[{sym}] #{tid} Error cancelling exit plan after hedge fill: {cancel_err}"
+                                                    )
+                                    elif (
                                         unhedged_amount > 0.1
                                     ):  # More than 0.1 shares unhedged
                                         log(
@@ -370,11 +409,17 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                                 )
 
                                                 token_ids = get_token_ids(slug)
-                                                if token_ids:
+                                                if (
+                                                    token_ids
+                                                    and token_ids[0]
+                                                    and token_ids[1]
+                                                ):
+                                                    # get_token_ids returns (token_id_1, token_id_2) tuple
+                                                    # token_id_1 is YES/UP, token_id_2 is NO/DOWN
                                                     hedge_token_id = (
-                                                        token_ids.get("DOWN")
+                                                        token_ids[1]  # DOWN
                                                         if side == "UP"
-                                                        else token_ids.get("UP")
+                                                        else token_ids[0]  # UP
                                                     )
                                                     hedge_price = round(0.99 - entry, 2)
                                                     hedge_price = max(

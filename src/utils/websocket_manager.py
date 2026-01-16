@@ -241,11 +241,16 @@ class WebSocketManager:
 
             elif data.get("type") == "order":
                 ev, order = data.get("event"), data.get("order", {})
+                # Log order events for debugging
+                order_id = (
+                    order.get("id", "Unknown")[:10] if order.get("id") else "Unknown"
+                )
+                log(f"📡 WebSocket ORDER event: {ev} | Order ID: {order_id}")
                 for cb in self.callbacks["order"]:
                     try:
                         cb(ev, order)
-                    except:
-                        pass
+                    except Exception as cb_error:
+                        log_error(f"Error in order callback for {ev}: {cb_error}")
             elif data.get("type") == "error":
                 log_error(
                     f"WebSocket API Error: {data.get('message')}",
