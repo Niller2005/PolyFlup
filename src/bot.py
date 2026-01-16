@@ -490,6 +490,11 @@ def main():
     log("🔍 Performing initial position check...")
     check_open_positions(user_address=addr, verbose=True, check_orders=True)
 
+    # Launch background task to redeem old trades
+    from src.trading.background_redemption import start_background_redemption
+
+    start_background_redemption()
+
     last_position_check = time.time()
     last_order_check = time.time()
     last_verbose_log = time.time()
