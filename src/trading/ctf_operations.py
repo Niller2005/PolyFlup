@@ -320,8 +320,8 @@ def merge_hedged_position(
         built_tx = tx.build_transaction(tx_params)
         signed_tx = account.sign_transaction(built_tx)
 
-        # Send transaction
-        tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+        # Send transaction (use raw_transaction for web3.py >= 6.0)
+        tx_hash = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
 
         log(f"🔄 [{symbol}] #{trade_id} MERGE TX submitted: {tx_hash.hex()}")
 
@@ -466,8 +466,8 @@ def redeem_winning_tokens(
         built_tx = tx.build_transaction(tx_params)
         signed_tx = account.sign_transaction(built_tx)
 
-        # Send transaction
-        tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+        # Send transaction (use raw_transaction for web3.py >= 6.0)
+        tx_hash = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
 
         log(f"💰 [{symbol}] #{trade_id} REDEEM TX submitted: {tx_hash.hex()}")
 
