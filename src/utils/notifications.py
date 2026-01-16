@@ -370,7 +370,6 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                                     "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
                                     (hedge_order_id, trade_id),
                                 )
-                                conn.commit()
                     except Exception as e:
                         log_error(
                             f"[{symbol}] Error placing hedge order after fill: {e}"
