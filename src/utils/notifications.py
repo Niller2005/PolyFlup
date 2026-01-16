@@ -266,9 +266,31 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                             f"🔍 [{symbol}] Fill already detected by monitor, placing hedge..."
                         )
 
-                    # Update price/size if provided in notification
+                    # CRITICAL: Get actual filled size from exchange if not in notification
+                    # Notifications often don't include the actual filled size (partial fills, fees, etc.)
                     new_price = float(fill_price) if fill_price else db_price
                     new_size = float(fill_size) if fill_size else db_size
+
+                    # If notification didn't include size, query exchange for actual filled amount
+                    if not fill_size:
+                        try:
+                            from src.trading.orders import get_order
+
+                            order_data = get_order(order_id)
+                            if order_data:
+                                actual_matched = float(
+                                    order_data.get("size_matched", 0)
+                                )
+                                if actual_matched > 0:
+                                    new_size = actual_matched
+                                    log(
+                                        f"   📊 [{symbol}] Queried exchange: actual filled size = {new_size:.4f}"
+                                    )
+                        except Exception as e:
+                            log(
+                                f"   ⚠️  [{symbol}] Could not verify fill size from exchange: {e}"
+                            )
+
                     new_bet_usd = new_price * new_size
 
                     # Log fill with trade details
@@ -563,7 +585,7 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
             with db_connection() as conn:
                 c = conn.cursor()
 
-                # Check if this is a tracked order
+                # Check if this is a tracked entry order
                 c.execute(
                     "SELECT id, symbol, side, order_status FROM trades WHERE order_id = ? AND settled = 0",
                     (order_id,),
@@ -582,10 +604,78 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                         "UPDATE trades SET order_id = NULL, order_status = 'CANCELLED' WHERE id = ?",
                         (trade_id,),
                     )
-                else:
-                    # Order not found in database - might be a hedge or exit order
+                    return
+
+                # Check if this is a hedge order cancellation
+                c.execute(
+                    "SELECT id, symbol, side, entry_price, size, order_status FROM trades WHERE hedge_order_id = ? AND settled = 0",
+                    (order_id,),
+                )
+                hedge_row = c.fetchone()
+
+                if hedge_row:
+                    trade_id, symbol, side, entry_price, size, current_status = (
+                        hedge_row
+                    )
                     order_id_short = order_id[:10] if len(order_id) > 10 else order_id
-                    log(f"🔍 CANCEL {order_id_short} (not tracked as entry order)")
+                    log(
+                        f"⚠️  [{symbol}] HEDGE CANCEL {order_id_short} | Position is now UNHEDGED!"
+                    )
+
+                    # Clear hedge_order_id
+                    c.execute(
+                        "UPDATE trades SET hedge_order_id = NULL WHERE id = ?",
+                        (trade_id,),
+                    )
+
+                    # Alert - this is critical
+                    send_discord(
+                        f"🚨 **[{symbol}] #{trade_id} Hedge order cancelled!** Position is UNHEDGED and at risk. Manual intervention may be required."
+                    )
+
+                    # Attempt to re-place hedge order if position is still FILLED
+                    if current_status == "FILLED":
+                        try:
+                            from src.trading.execution import place_hedge_order
+
+                            log(
+                                f"   🔄 [{symbol}] Attempting to re-place hedge order..."
+                            )
+                            hedge_order_id = place_hedge_order(
+                                trade_id, symbol, side, entry_price, size
+                            )
+
+                            if hedge_order_id:
+                                c.execute(
+                                    "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
+                                    (hedge_order_id, trade_id),
+                                )
+                                log(
+                                    f"   ✅ [{symbol}] Hedge order re-placed successfully"
+                                )
+                            else:
+                                log(f"   ❌ [{symbol}] Failed to re-place hedge order")
+                        except Exception as e:
+                            log_error(f"[{symbol}] Error re-placing hedge order: {e}")
+                    return
+
+                # Check if this is an exit order cancellation
+                c.execute(
+                    "SELECT id, symbol FROM trades WHERE limit_sell_order_id = ? AND settled = 0",
+                    (order_id,),
+                )
+                exit_row = c.fetchone()
+
+                if exit_row:
+                    trade_id, symbol = exit_row
+                    order_id_short = order_id[:10] if len(order_id) > 10 else order_id
+                    log(f"🔍 [{symbol}] EXIT CANCEL {order_id_short}")
+                    # Exit cancellations are handled by position manager
+                    return
+
+                # Order not tracked in any capacity
+                order_id_short = order_id[:10] if len(order_id) > 10 else order_id
+                log(f"🔍 CANCEL {order_id_short} (not tracked)")
 
     except Exception as e:
         log_error(f"Error handling order cancellation notification: {e}")

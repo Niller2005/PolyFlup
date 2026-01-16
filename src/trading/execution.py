@@ -37,6 +37,7 @@ def place_hedge_order(
     """
     try:
         from src.config.settings import ENABLE_CTF_MERGE
+        from src.data.db_connection import db_connection
 
         up_id, down_id = get_token_ids(symbol)
         if not up_id or not down_id:
@@ -75,6 +76,14 @@ def place_hedge_order(
         log(
             f"   🛡️  [{symbol}] Hedge order placed{merge_status}: {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f} (ID: {order_id[:10]}) | Combined: ${entry_price:.2f} + ${hedge_price:.2f} = ${(entry_price + hedge_price):.2f}"
         )
+
+        # Store hedge price in database
+        with db_connection() as conn:
+            c = conn.cursor()
+            c.execute(
+                "UPDATE trades SET hedge_order_price = ? WHERE id = ?",
+                (hedge_price, trade_id),
+            )
 
         return order_id
     except Exception as e:
