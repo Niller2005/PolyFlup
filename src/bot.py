@@ -355,7 +355,7 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
                     )
                     if trade_id:
                         log(
-                            f"   🚀 [{p['symbol']}] {p['side']} ${p['bet_usd']:.2f} @ {actual_price:.4f} | Edge: {p['confidence']:.1%}"
+                            f"   🚀 [{p['symbol']}] {p['side']} {actual_size:.1f} @ ${actual_price:.4f} | Edge: {p['confidence']:.1%}"
                         )
                     else:
                         log(f"   ❌ [{p['symbol']}] Failed to save trade to database")
