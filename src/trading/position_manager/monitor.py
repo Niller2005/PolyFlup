@@ -27,6 +27,7 @@ from .scale import _check_scale_in
 from .exit import _check_exit_plan
 
 _failed_pnl_checks = {}
+_recent_hedge_placements = {}  # Track recent hedge order placements to avoid race condition
 
 
 def check_open_positions(verbose=True, check_orders=False, user_address=None):
@@ -301,13 +302,22 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                             "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
                                             (hedge_order_id, tid),
                                         )
+                                        # Track hedge placement to avoid immediate mismatch check
+                                        _recent_hedge_placements[tid] = now.timestamp()
                                 except Exception as hedge_err:
                                     log_error(
                                         f"[{sym}] Error placing hedge order in monitor: {hedge_err}"
                                     )
 
                     # Check for hedge size mismatch (position grew after hedge was placed)
-                    if curr_b_status == "HEDGE_SIZE_MISMATCH" or (
+                    # Skip if hedge was just placed (within last 15 seconds) to avoid race condition
+                    hedge_placement_time = _recent_hedge_placements.get(tid, 0)
+                    time_since_hedge_placed = now.timestamp() - hedge_placement_time
+
+                    if time_since_hedge_placed < 15:
+                        # Hedge was just placed, skip mismatch check
+                        pass
+                    elif curr_b_status == "HEDGE_SIZE_MISMATCH" or (
                         curr_b_status == "FILLED" and is_hed == 0
                     ):
                         # Position is filled but not hedged, or size mismatch detected
