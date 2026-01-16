@@ -915,7 +915,7 @@ def _handle_market_resolved(payload: dict, timestamp: int) -> None:
                     FROM trades
                     WHERE settled = 0
                         AND condition_id IS NULL
-                        AND datetime(created_at) > datetime('now', '-1 hour')
+                        AND datetime(timestamp) > datetime('now', '-1 hour')
                     ORDER BY id DESC
                     LIMIT 10
                     """
