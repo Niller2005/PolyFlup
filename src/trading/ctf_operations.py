@@ -199,7 +199,7 @@ def redeem_winning_tokens(
     trade_id: int,
     symbol: str,
     condition_id: str,
-) -> Optional[Dict]:
+) -> Optional[str]:
     """
     Redeem winning tokens after market resolution.
 
@@ -212,7 +212,7 @@ def redeem_winning_tokens(
         condition_id: Condition ID from market data (bytes32)
 
     Returns:
-        Dict with transaction details if successful, None otherwise
+        Transaction hash if successful, None otherwise
     """
     try:
         web3 = get_web3_client()
@@ -238,17 +238,23 @@ def redeem_winning_tokens(
         account = Account.from_key(PROXY_PK)
         nonce = web3.eth.get_transaction_count(wallet_address)
 
+        # Get current gas price with 10% premium
+        gas_price = int(web3.eth.gas_price * 1.1)
+
         tx_params = {
             "from": wallet_address,
             "nonce": nonce,
             "gas": 200000,
-            "gasPrice": web3.eth.gas_price,
+            "gasPrice": gas_price,
         }
 
         # Estimate gas
         try:
             gas_estimate = tx.estimate_gas(tx_params)
             tx_params["gas"] = int(gas_estimate * 1.2)
+            log(
+                f"   ⛽ [{symbol}] Gas estimate: {tx_params['gas']} (${(tx_params['gas'] * gas_price / 1e18):.4f})"
+            )
         except Exception as e:
             log_error(f"[{symbol}] Gas estimation failed: {e}")
             tx_params["gas"] = 300000
@@ -263,18 +269,24 @@ def redeem_winning_tokens(
         log(f"💰 [{symbol}] #{trade_id} REDEEM TX submitted: {tx_hash.hex()}")
 
         # Wait for confirmation
-        tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+        try:
+            tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
 
-        if tx_receipt["status"] == 1:
-            log(f"✅ [{symbol}] #{trade_id} REDEEM SUCCESS")
-            return {
-                "success": True,
-                "tx_hash": tx_hash.hex(),
-                "gas_used": tx_receipt["gasUsed"],
-            }
-        else:
-            log_error(f"[{symbol}] #{trade_id} REDEEM FAILED: Transaction reverted")
-            return None
+            if tx_receipt["status"] == 1:
+                gas_used = tx_receipt["gasUsed"]
+                gas_cost = gas_used * gas_price / 1e18
+                log(f"✅ [{symbol}] #{trade_id} REDEEM SUCCESS (Gas: ${gas_cost:.4f})")
+                return tx_hash.hex()
+            else:
+                log_error(f"[{symbol}] #{trade_id} REDEEM FAILED: Transaction reverted")
+                return None
+        except Exception as e:
+            log_error(
+                f"[{symbol}] #{trade_id} Redeem confirmation timeout or error: {e}"
+            )
+            # Transaction might still succeed, return hash for tracking
+            log(f"   ⚠️  [{symbol}] Transaction may still be pending: {tx_hash.hex()}")
+            return tx_hash.hex()
 
     except Exception as e:
         log_error(f"[{symbol}] #{trade_id} Redeem error: {e}")

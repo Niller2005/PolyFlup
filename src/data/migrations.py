@@ -213,6 +213,21 @@ def migration_009_add_ctf_merge_columns(conn: Any) -> None:
             log(f"    ✓ {col_name} already exists")
 
 
+def migration_010_add_redeem_tx_hash_column(conn: Any) -> None:
+    """Add redeem transaction hash column for post-resolution redemption tracking"""
+    c = conn.cursor()
+
+    c.execute("PRAGMA table_info(trades)")
+    columns = [row[1] for row in c.fetchall()]
+
+    if "redeem_tx_hash" not in columns:
+        log("  - Adding redeem_tx_hash column...")
+        c.execute("ALTER TABLE trades ADD COLUMN redeem_tx_hash TEXT")
+        log("    ✓ redeem_tx_hash added")
+    else:
+        log("    ✓ redeem_tx_hash column already exists")
+
+
 # Migration registry: version -> migration function
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
@@ -247,6 +262,11 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
         9,
         "Add CTF merge tracking columns for immediate capital recovery",
         migration_009_add_ctf_merge_columns,
+    ),
+    (
+        10,
+        "Add redeem transaction hash column for post-resolution redemption",
+        migration_010_add_redeem_tx_hash_column,
     ),
 ]
 
