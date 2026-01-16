@@ -555,10 +555,10 @@ def main():
 
                 if eligible_markets:
                     current_balance = get_balance(addr)
-                    if current_balance < 1.0:
+                    if current_balance < 5.0:
                         if is_verbose_cycle:
                             log(
-                                f"💰 Balance too low ({current_balance:.2f} USDC). Skipping trade evaluation."
+                                f"💰 Balance too low ({current_balance:.2f} USDC). Minimum $5.00 required. Skipping trade evaluation."
                             )
                     else:
                         if len(eligible_markets) > 1:
