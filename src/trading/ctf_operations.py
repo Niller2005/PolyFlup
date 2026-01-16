@@ -259,21 +259,6 @@ def merge_hedged_position(
                 log_error(
                     f"[{symbol}] #{trade_id} Relayer merge failed, falling back to Web3"
                 )
-            result = response.wait()
-
-            if (
-                result
-                and hasattr(result, "transaction_hash")
-                and result.transaction_hash
-            ):
-                log(
-                    f"✅ [{symbol}] #{trade_id} MERGE SUCCESS (GASLESS): {amount / 1_000_000:.1f} USDC freed"
-                )
-                return result.transaction_hash
-            else:
-                log_error(
-                    f"[{symbol}] #{trade_id} Relayer merge failed, falling back to Web3"
-                )
         except Exception as e:
             log_error(
                 f"[{symbol}] #{trade_id} Relayer error: {e}, falling back to Web3"
