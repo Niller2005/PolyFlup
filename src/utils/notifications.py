@@ -201,14 +201,8 @@ def process_notifications() -> None:
 
             # Build new cleaner log format: 🔔 [SYMBOL] SIDE SIZE @ $PRICE STATUS | OrderID: 0x...
             if notif_type == NOTIF_MARKET_RESOLVED:
-                # Market resolved - simpler format
-                log_parts = ["🔔"]
-                if symbol:
-                    log_parts.append(f"[{symbol}]")
-                log_parts.append("MARKET RESOLVED")
-                if order_id_short:
-                    log_parts.append(f"| OrderID: {order_id_short}")
-                log(f"   {' '.join(log_parts)}")
+                # Market resolved - let _handle_market_resolved do detailed logging
+                pass
             else:
                 # FILLED or CANCELLED
                 log_parts = ["🔔"]
@@ -834,13 +828,122 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
 
 
 def _handle_market_resolved(payload: dict, timestamp: int) -> None:
-    """Handle market resolution notification"""
-    try:
-        market_id = payload.get("market_id") or payload.get("condition_id")
-        outcome = payload.get("outcome")
+    """
+    Handle market resolution notification with automatic gasless redemption.
 
-        # Don't log - settlement will handle this automatically
-        pass
+    Shows detailed trade info and triggers redemption if conditions are met.
+    """
+    try:
+        from src.data.database import db_connection
+        from src.trading.ctf_operations import redeem_winning_tokens
+
+        market_id = payload.get("market_id") or payload.get("condition_id")
+        outcome = payload.get("outcome")  # "YES" or "NO"
+
+        if not market_id:
+            return
+
+        # Find trade(s) associated with this market
+        with db_connection() as conn:
+            c = conn.cursor()
+
+            # Try to find trade by condition_id first
+            c.execute(
+                """
+                SELECT id, symbol, side, size, entry_price, bet_usd, 
+                       exited_early, merge_tx_hash, redeem_tx_hash, condition_id
+                FROM trades 
+                WHERE condition_id = ? AND settled = 0
+                ORDER BY id DESC
+                LIMIT 5
+            """,
+                (market_id,),
+            )
+
+            trades = c.fetchall()
+
+            if not trades:
+                # If not found by condition_id, this might be an old trade
+                # Just log the resolution without details
+                log("   🔔 MARKET RESOLVED")
+                return
+
+            for trade_data in trades:
+                (
+                    trade_id,
+                    symbol,
+                    side,
+                    size,
+                    entry_price,
+                    bet_usd,
+                    exited_early,
+                    merge_tx_hash,
+                    redeem_tx_hash,
+                    condition_id,
+                ) = trade_data
+
+                # Determine if this side won
+                won = (outcome == "YES" and side == "UP") or (
+                    outcome == "NO" and side == "DOWN"
+                )
+
+                # Calculate estimated PnL
+                final_price = 1.0 if won else 0.0
+                est_pnl = (final_price * size) - bet_usd
+                roi_pct = (est_pnl / bet_usd * 100) if bet_usd > 0 else 0
+
+                # Build detailed notification
+                outcome_emoji = "💰" if won else "💀"
+                status_text = f"{'WON' if won else 'LOST'} ({outcome})"
+
+                log("")
+                log(
+                    f"   🔔 {outcome_emoji} [{symbol}] #{trade_id} MARKET RESOLVED → {status_text}"
+                )
+                log(f"      Position: {side} {size:.1f} shares @ ${entry_price:.4f}")
+                log(f"      Est PnL: ${est_pnl:+.2f} ({roi_pct:+.1f}%)")
+
+                # Check if we should redeem
+                should_redeem = (
+                    not exited_early  # Didn't exit early
+                    and not merge_tx_hash  # Wasn't merged (hedged)
+                    and not redeem_tx_hash  # Not already redeemed
+                    and condition_id  # Have condition_id
+                    and won  # Only redeem winners (losers have $0 value)
+                )
+
+                if should_redeem:
+                    log(f"      💎 Redeeming winning tokens gaslessly...")
+                    try:
+                        tx_hash = redeem_winning_tokens(trade_id, symbol, condition_id)
+
+                        if tx_hash:
+                            # Update database
+                            c.execute(
+                                "UPDATE trades SET redeem_tx_hash = ? WHERE id = ?",
+                                (tx_hash, trade_id),
+                            )
+                            log(f"      ✅ Redeemed! Tx: {tx_hash[:16]}...")
+                        else:
+                            log(
+                                f"      ⚠️  Redemption failed (will retry in settlement)"
+                            )
+                    except Exception as e:
+                        log_error(f"      ❌ Redemption error: {e}")
+                elif not won:
+                    log(
+                        f"      ⚠️  Losing position - tokens worthless, no redemption needed"
+                    )
+                elif merge_tx_hash:
+                    log(f"      ✅ Already merged (hedged position)")
+                elif redeem_tx_hash:
+                    log(f"      ✅ Already redeemed: {redeem_tx_hash[:16]}...")
+                elif exited_early:
+                    log(f"      ✅ Exited early - no tokens to redeem")
+                else:
+                    log(f"      ⚠️  Missing condition_id - cannot redeem (old trade)")
+
+                log("")
 
     except Exception as e:
         log_error(f"Error handling market resolution notification: {e}")
