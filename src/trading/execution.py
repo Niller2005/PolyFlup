@@ -83,11 +83,21 @@ def place_hedge_order(
 
                     if best_ask > target_hedge_price:
                         # Market is more expensive than our target
-                        # Use best ask to ensure immediate fill
-                        hedge_price = best_ask
-                        log(
-                            f"   📊 [{symbol}] Hedge adjusted: target ${target_hedge_price:.2f} → ${hedge_price:.2f} (market best ask)"
-                        )
+                        # Check if using best ask would still guarantee profit
+                        combined_price = entry_price + best_ask
+
+                        if combined_price < 1.00:
+                            # Still profitable at market price, use it
+                            hedge_price = best_ask
+                            log(
+                                f"   📊 [{symbol}] Hedge adjusted: target ${target_hedge_price:.2f} → ${hedge_price:.2f} (market best ask) | Combined: ${combined_price:.2f}"
+                            )
+                        else:
+                            # Market price would create guaranteed loss
+                            log(
+                                f"   ⚠️  [{symbol}] Hedge skipped: market ${best_ask:.2f} + entry ${entry_price:.2f} = ${combined_price:.2f} > $1.00 (guaranteed loss)"
+                            )
+                            return None
                     else:
                         log(
                             f"   💰 [{symbol}] Hedge pricing favorable: target ${target_hedge_price:.2f}, market ${best_ask:.2f}"
