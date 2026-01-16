@@ -135,6 +135,31 @@ def place_hedge_order(
         # Ensure final price is within valid range
         hedge_price = max(0.01, min(0.99, hedge_price))
 
+        # Pre-flight balance check to ensure we can afford the hedge
+        from src.trading.orders import get_balance_allowance
+        from src.trading.logic import MIN_SIZE
+
+        try:
+            bal_check = get_balance_allowance()
+            current_balance = float(bal_check.get("balance", 0)) if bal_check else 0.0
+            hedge_cost = actual_entry_size * hedge_price
+
+            if current_balance < hedge_cost:
+                log(
+                    f"   ❌ [{symbol}] Cannot place hedge: Insufficient balance (${current_balance:.2f} < ${hedge_cost:.2f} needed)"
+                )
+                return None
+
+            # Also warn if balance would drop below $5 minimum after hedge
+            remaining_after_hedge = current_balance - hedge_cost
+            if remaining_after_hedge < (MIN_SIZE * 1.0):
+                log(
+                    f"   ⚠️  [{symbol}] Placing hedge will leave ${remaining_after_hedge:.2f} (below ${MIN_SIZE * 1.0:.2f} minimum for future trades)"
+                )
+        except Exception as bal_err:
+            log(f"   ⚠️  [{symbol}] Could not verify balance before hedge: {bal_err}")
+            # Continue anyway - better to attempt hedge than leave position unhedged
+
         # Place hedge order with actual filled entry size
         result = place_order(hedge_token_id, hedge_price, actual_entry_size)
 
