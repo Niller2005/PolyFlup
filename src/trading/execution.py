@@ -142,21 +142,22 @@ def place_hedge_order(
         except Exception as cap_check_err:
             pass  # Don't fail hedge placement if balance check errors
 
-        # Store hedge price in database
-        if cursor:
-            # Use existing transaction cursor
-            cursor.execute(
-                "UPDATE trades SET hedge_order_price = ? WHERE id = ?",
-                (hedge_price, trade_id),
-            )
-        else:
-            # Open new connection
-            with db_connection() as conn:
-                c = conn.cursor()
-                c.execute(
+        # Store hedge price in database (only if trade_id exists)
+        if trade_id > 0:
+            if cursor:
+                # Use existing transaction cursor
+                cursor.execute(
                     "UPDATE trades SET hedge_order_price = ? WHERE id = ?",
                     (hedge_price, trade_id),
                 )
+            else:
+                # Open new connection
+                with db_connection() as conn:
+                    c = conn.cursor()
+                    c.execute(
+                        "UPDATE trades SET hedge_order_price = ? WHERE id = ?",
+                        (hedge_price, trade_id),
+                    )
 
         # IMMEDIATE VERIFICATION: Check if hedge filled within 2 seconds
         # This provides a fallback when WebSocket notifications fail
@@ -170,61 +171,63 @@ def place_hedge_order(
                         f"   ✅ [{symbol}] Hedge immediately verified: {hedge_filled_size:.2f}/{entry_size:.2f} shares filled"
                     )
 
-                    # Mark as hedged in database
-                    if cursor:
-                        cursor.execute(
-                            "UPDATE trades SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
-                            (trade_id,),
-                        )
-                    else:
-                        with db_connection() as conn:
-                            c = conn.cursor()
-                            c.execute(
+                    # Mark as hedged in database (only if trade_id exists)
+                    # When called from execute_trade with trade_id=0, this will be updated later
+                    if trade_id > 0:
+                        if cursor:
+                            cursor.execute(
                                 "UPDATE trades SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
                                 (trade_id,),
                             )
-
-                    # Cancel exit plan if present (hedge is already filled)
-                    try:
-                        if cursor:
-                            cursor.execute(
-                                "SELECT limit_sell_order_id FROM trades WHERE id = ?",
-                                (trade_id,),
-                            )
-                            exit_row = cursor.fetchone()
                         else:
                             with db_connection() as conn:
                                 c = conn.cursor()
                                 c.execute(
+                                    "UPDATE trades SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
+                                    (trade_id,),
+                                )
+
+                        # Cancel exit plan if present (hedge is already filled)
+                        try:
+                            if cursor:
+                                cursor.execute(
                                     "SELECT limit_sell_order_id FROM trades WHERE id = ?",
                                     (trade_id,),
                                 )
-                                exit_row = c.fetchone()
-
-                        if exit_row and exit_row[0]:
-                            from src.trading.orders import cancel_order
-
-                            cancel_result = cancel_order(exit_row[0])
-                            if cancel_result:
-                                log(
-                                    f"   🚫 [{symbol}] Exit plan cancelled (hedge verified filled)"
-                                )
-                                if cursor:
-                                    cursor.execute(
-                                        "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                                exit_row = cursor.fetchone()
+                            else:
+                                with db_connection() as conn:
+                                    c = conn.cursor()
+                                    c.execute(
+                                        "SELECT limit_sell_order_id FROM trades WHERE id = ?",
                                         (trade_id,),
                                     )
-                                else:
-                                    with db_connection() as conn:
-                                        c = conn.cursor()
-                                        c.execute(
+                                    exit_row = c.fetchone()
+
+                            if exit_row and exit_row[0]:
+                                from src.trading.orders import cancel_order
+
+                                cancel_result = cancel_order(exit_row[0])
+                                if cancel_result:
+                                    log(
+                                        f"   🚫 [{symbol}] Exit plan cancelled (hedge verified filled)"
+                                    )
+                                    if cursor:
+                                        cursor.execute(
                                             "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
                                             (trade_id,),
                                         )
-                    except Exception as cancel_err:
-                        log_error(
-                            f"[{symbol}] Error cancelling exit plan after hedge verification: {cancel_err}"
-                        )
+                                    else:
+                                        with db_connection() as conn:
+                                            c = conn.cursor()
+                                            c.execute(
+                                                "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                                                (trade_id,),
+                                            )
+                        except Exception as cancel_err:
+                            log_error(
+                                f"[{symbol}] Error cancelling exit plan after hedge verification: {cancel_err}"
+                            )
                 else:
                     log(
                         f"   ⏳ [{symbol}] Hedge partially filled: {hedge_filled_size:.2f}/{entry_size:.2f} shares (will continue monitoring)"
@@ -294,6 +297,25 @@ def execute_trade(
         except Exception as e:
             log_error(f"[{symbol}] Could not sync execution details immediately: {e}")
 
+    # CRITICAL: Place hedge order IMMEDIATELY after entry order (before notification handler)
+    # This ensures atomic capital reservation - we checked balance for entry+hedge,
+    # now we place both orders while capital is still reserved
+    hedge_order_id = None
+    if not is_reversal:  # Only hedge initial entries, not reversals
+        try:
+            hedge_order_id = place_hedge_order(
+                trade_id=0,  # Will be updated after save_trade
+                symbol=symbol,
+                entry_side=side,
+                entry_price=actual_price,
+                entry_size=actual_size,
+                cursor=cursor,
+            )
+        except Exception as hedge_err:
+            log_error(
+                f"[{symbol}] Error placing hedge immediately after entry: {hedge_err}"
+            )
+
     # Discord notification
     reversal_prefix = "🔄 REVERSAL " if is_reversal else ""
     send_discord(
@@ -349,6 +371,67 @@ def execute_trade(
             bayesian_bias=raw_scores.get("bayesian_bias"),
             market_prior_p_up=raw_scores.get("market_prior_p_up"),
         )
+
+        # Update hedge_order_id and hedge verification status now that we have trade_id
+        if hedge_order_id:
+            # Check if hedge was already verified during placement (immediate verification ran)
+            # Note: place_hedge_order runs 2-second verification but couldn't update DB with trade_id=0
+            # Now we need to check again and update the DB properly
+            try:
+                hedge_status = get_order(hedge_order_id)
+                if hedge_status:
+                    hedge_filled_size = float(hedge_status.get("size_matched", 0))
+                    is_hedge_filled = hedge_filled_size >= actual_size - 0.0001
+
+                    if cursor:
+                        if is_hedge_filled:
+                            cursor.execute(
+                                "UPDATE trades SET hedge_order_id = ?, is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
+                                (hedge_order_id, trade_id),
+                            )
+                            log(
+                                f"   ✅ [{symbol}] #{trade_id} Hedge verified filled - position fully hedged"
+                            )
+                        else:
+                            cursor.execute(
+                                "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
+                                (hedge_order_id, trade_id),
+                            )
+                    else:
+                        from src.data.db_connection import db_connection
+
+                        with db_connection() as conn:
+                            c = conn.cursor()
+                            if is_hedge_filled:
+                                c.execute(
+                                    "UPDATE trades SET hedge_order_id = ?, is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
+                                    (hedge_order_id, trade_id),
+                                )
+                                log(
+                                    f"   ✅ [{symbol}] #{trade_id} Hedge verified filled - position fully hedged"
+                                )
+                            else:
+                                c.execute(
+                                    "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
+                                    (hedge_order_id, trade_id),
+                                )
+            except Exception as verify_err:
+                log_error(f"[{symbol}] Error verifying hedge after save: {verify_err}")
+                # Still save hedge_order_id even if verification failed
+                if cursor:
+                    cursor.execute(
+                        "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
+                        (hedge_order_id, trade_id),
+                    )
+                else:
+                    from src.data.db_connection import db_connection
+
+                    with db_connection() as conn:
+                        c = conn.cursor()
+                        c.execute(
+                            "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
+                            (hedge_order_id, trade_id),
+                        )
 
         emoji = trade_params.get("emoji", "🚀")
         entry_type = trade_params.get("entry_type", "Trade")
