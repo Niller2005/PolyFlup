@@ -267,7 +267,11 @@ def merge_hedged_position(
     # Fallback to manual Web3 transaction (requires ETH for gas)
     try:
         web3 = get_web3_client()
-        wallet_address = get_wallet_address()
+
+        # IMPORTANT: For Web3 fallback, must use EOA address (from PROXY_PK)
+        # not the Safe wallet address (FUNDER_PROXY)
+        account = Account.from_key(PROXY_PK)
+        wallet_address = account.address
 
         # Load CTF contract
         ctf_contract = web3.eth.contract(
@@ -288,7 +292,6 @@ def merge_hedged_position(
         )
 
         # Build transaction
-        account = Account.from_key(PROXY_PK)
         nonce = web3.eth.get_transaction_count(wallet_address)
 
         # Get current gas price with 10% premium for faster confirmation
@@ -413,7 +416,11 @@ def redeem_winning_tokens(
     # Fallback to manual Web3 transaction (requires ETH for gas)
     try:
         web3 = get_web3_client()
-        wallet_address = get_wallet_address()
+
+        # IMPORTANT: For Web3 fallback, must use EOA address (from PROXY_PK)
+        # not the Safe wallet address (FUNDER_PROXY)
+        account = Account.from_key(PROXY_PK)
+        wallet_address = account.address
 
         # Load CTF contract
         ctf_contract = web3.eth.contract(
@@ -432,7 +439,6 @@ def redeem_winning_tokens(
         )
 
         # Build transaction
-        account = Account.from_key(PROXY_PK)
         nonce = web3.eth.get_transaction_count(wallet_address)
 
         # Get current gas price with 10% premium
