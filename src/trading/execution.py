@@ -683,45 +683,85 @@ def execute_trade(
             # Check if hedge was already verified during placement (immediate verification ran)
             # Note: place_hedge_order runs 2-second verification but couldn't update DB with trade_id=0
             # Now we need to check again and update the DB properly
+            # CRITICAL: Also verify entry order is still valid before marking as HEDGED
             try:
+                # Check BOTH entry and hedge orders
+                entry_status = get_order(order_id) if order_id else None
                 hedge_status = get_order(hedge_order_id)
+
+                entry_filled = False
+                hedge_filled = False
+                entry_cancelled = False
+
+                if entry_status:
+                    entry_filled_size = float(entry_status.get("size_matched", 0))
+                    entry_order_status = entry_status.get("status", "").upper()
+                    # Entry is valid if filled or partially filled
+                    entry_filled = entry_filled_size >= actual_size - 0.01
+                    entry_cancelled = entry_order_status in ["CANCELLED", "CANCELED"]
+
+                    if entry_cancelled:
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} Entry order was cancelled - position is NOT hedged"
+                        )
+
                 if hedge_status:
                     hedge_filled_size = float(hedge_status.get("size_matched", 0))
                     # Use 0.01 tolerance (99%+ filled = fully hedged)
-                    is_hedge_filled = hedge_filled_size >= actual_size - 0.01
+                    hedge_filled = hedge_filled_size >= actual_size - 0.01
 
+                # ONLY mark as hedged if BOTH entry AND hedge are filled
+                if entry_filled and hedge_filled and not entry_cancelled:
                     if cursor:
-                        if is_hedge_filled:
-                            cursor.execute(
+                        cursor.execute(
+                            "UPDATE trades SET hedge_order_id = ?, is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
+                            (hedge_order_id, trade_id),
+                        )
+                        log(
+                            f"   ✅ [{symbol}] #{trade_id} Hedge verified filled - position fully hedged"
+                        )
+                    else:
+                        from src.data.db_connection import db_connection
+
+                        with db_connection() as conn:
+                            c = conn.cursor()
+                            c.execute(
                                 "UPDATE trades SET hedge_order_id = ?, is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
                                 (hedge_order_id, trade_id),
                             )
                             log(
                                 f"   ✅ [{symbol}] #{trade_id} Hedge verified filled - position fully hedged"
                             )
-                        else:
-                            cursor.execute(
-                                "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
-                                (hedge_order_id, trade_id),
-                            )
+                else:
+                    # At least one order is not filled/cancelled - save hedge_order_id but don't mark as hedged
+                    if cursor:
+                        cursor.execute(
+                            "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
+                            (hedge_order_id, trade_id),
+                        )
                     else:
                         from src.data.db_connection import db_connection
 
                         with db_connection() as conn:
                             c = conn.cursor()
-                            if is_hedge_filled:
-                                c.execute(
-                                    "UPDATE trades SET hedge_order_id = ?, is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
-                                    (hedge_order_id, trade_id),
-                                )
-                                log(
-                                    f"   ✅ [{symbol}] #{trade_id} Hedge verified filled - position fully hedged"
-                                )
-                            else:
-                                c.execute(
-                                    "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
-                                    (hedge_order_id, trade_id),
-                                )
+                            c.execute(
+                                "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
+                                (hedge_order_id, trade_id),
+                            )
+
+                    # Log specific reason why not hedged
+                    if entry_cancelled:
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} Entry order cancelled - NOT marking as hedged"
+                        )
+                    elif not entry_filled:
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} Entry not yet filled - NOT marking as hedged"
+                        )
+                    elif not hedge_filled:
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} Hedge not yet filled - NOT marking as hedged"
+                        )
             except Exception as verify_err:
                 log_error(f"[{symbol}] Error verifying hedge after save: {verify_err}")
                 # Still save hedge_order_id even if verification failed
