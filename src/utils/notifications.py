@@ -306,7 +306,7 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     )
 
                     # Track recent fill for balance API cooldown
-                    track_recent_fill(trade_id, new_price, new_size, timestamp)
+                    track_recent_fill(order_id, new_price, new_size, timestamp)
 
                     # NEW: Fetch condition_id from position data for CTF operations
                     try:
