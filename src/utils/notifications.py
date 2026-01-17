@@ -499,14 +499,60 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
 
                 # Check if this is a hedge order fill
                 c.execute(
-                    "SELECT id, symbol, side, entry_price, size FROM trades WHERE hedge_order_id = ? AND settled = 0",
+                    "SELECT id, symbol, side, entry_price, size, order_id, order_status, token_id FROM trades WHERE hedge_order_id = ? AND settled = 0",
                     (order_id,),
                 )
                 row = c.fetchone()
 
                 if row:
-                    trade_id, symbol, trade_side, entry_price, size = row
+                    (
+                        trade_id,
+                        symbol,
+                        trade_side,
+                        entry_price,
+                        size,
+                        entry_order_id,
+                        entry_status,
+                        token_id,
+                    ) = row
                     order_id_short = order_id[:10] if len(order_id) > 10 else order_id
+
+                    # CRITICAL: Check if entry order has filled
+                    # If hedge filled but entry not filled (or cancelled), we have unhedged exposure
+                    if entry_status not in ["FILLED", "HEDGED"] or not entry_order_id:
+                        log(
+                            f"🚨 [{symbol}] Hedge filled but entry NOT filled (status: {entry_status}) - Emergency selling hedge!"
+                        )
+
+                        # Emergency sell the hedge position immediately
+                        from src.trading.execution import (
+                            emergency_sell_position,
+                            get_token_ids,
+                        )
+
+                        # Determine hedge token_id (opposite of entry)
+                        up_id, down_id = get_token_ids(symbol)
+                        if up_id and down_id:
+                            hedge_token_id = down_id if trade_side == "UP" else up_id
+
+                            emergency_sell_position(
+                                symbol,
+                                hedge_token_id,
+                                size,
+                                reason="hedge filled but entry not filled",
+                            )
+
+                            # Send Discord alert
+                            send_discord(
+                                f"🚨 **[{symbol}] #{trade_id} Hedge filled but entry failed!** Emergency sold hedge position."
+                            )
+
+                            # Mark trade as cancelled
+                            c.execute(
+                                "UPDATE trades SET order_status = 'CANCELLED', hedge_order_id = NULL WHERE id = ?",
+                                (trade_id,),
+                            )
+                            return
 
                     # CRITICAL: Verify actual hedge fill size from exchange
                     # Hedge orders can partially fill, which would leave position unhedged
@@ -859,7 +905,7 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
 
                 # Check if this is a hedge order cancellation
                 c.execute(
-                    "SELECT id, symbol, side, entry_price, size, order_status, order_id FROM trades WHERE hedge_order_id = ? AND settled = 0",
+                    "SELECT id, symbol, side, entry_price, size, order_status, order_id, token_id FROM trades WHERE hedge_order_id = ? AND settled = 0",
                     (order_id,),
                 )
                 hedge_row = c.fetchone()
@@ -873,11 +919,58 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                         size,
                         current_status,
                         entry_order_id,
+                        token_id,
                     ) = hedge_row
                     order_id_short = order_id[:10] if len(order_id) > 10 else order_id
                     log(
-                        f"⚠️  [{symbol}] HEDGE CANCEL {order_id_short} | Position is now UNHEDGED!"
+                        f"⚠️  [{symbol}] HEDGE CANCEL {order_id_short} | Entry status: {current_status}"
                     )
+
+                    # CRITICAL: Check if entry order has filled
+                    # If entry filled but hedge cancelled, we have unhedged exposure
+                    if current_status == "FILLED" and entry_order_id:
+                        # Verify entry is actually still filled (not cancelled after)
+                        try:
+                            from src.trading.orders import get_order
+
+                            entry_order = get_order(entry_order_id)
+                            if entry_order:
+                                entry_status = entry_order.get("status", "").upper()
+
+                                if entry_status == "MATCHED":
+                                    # Entry filled but hedge cancelled - UNHEDGED EXPOSURE!
+                                    log(
+                                        f"🚨 [{symbol}] Entry filled but hedge CANCELLED - Emergency selling entry position!"
+                                    )
+
+                                    # Emergency sell the entry position
+                                    from src.trading.execution import (
+                                        emergency_sell_position,
+                                    )
+
+                                    emergency_sell_position(
+                                        symbol,
+                                        token_id,
+                                        size,
+                                        reason="hedge cancelled after entry filled",
+                                    )
+
+                                    # Send Discord alert
+                                    send_discord(
+                                        f"🚨 **[{symbol}] #{trade_id} Hedge cancelled after entry filled!** Emergency sold entry position."
+                                    )
+
+                                    # Clear hedge_order_id and mark as cancelled
+                                    c.execute(
+                                        "UPDATE trades SET hedge_order_id = NULL, order_status = 'CANCELLED' WHERE id = ?",
+                                        (trade_id,),
+                                    )
+                                    return
+
+                        except Exception as e:
+                            log_error(
+                                f"[{symbol}] Error checking entry status after hedge cancel: {e}"
+                            )
 
                     # Clear hedge_order_id
                     c.execute(
@@ -885,41 +978,11 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                         (trade_id,),
                     )
 
-                    # Alert - this is critical
-                    send_discord(
-                        f"🚨 **[{symbol}] #{trade_id} Hedge order cancelled!** Position is UNHEDGED and at risk. Manual intervention may be required."
-                    )
-
-                    # Attempt to re-place hedge order if position is still FILLED
-                    if current_status == "FILLED":
-                        try:
-                            from src.trading.execution import place_hedge_order
-
-                            log(
-                                f"   🔄 [{symbol}] Attempting to re-place hedge order..."
-                            )
-                            hedge_order_id = place_hedge_order(
-                                trade_id,
-                                symbol,
-                                side,
-                                entry_price,
-                                size,
-                                entry_order_id=entry_order_id,
-                                cursor=c,
-                            )
-
-                            if hedge_order_id:
-                                c.execute(
-                                    "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
-                                    (hedge_order_id, trade_id),
-                                )
-                                log(
-                                    f"   ✅ [{symbol}] Hedge order re-placed successfully"
-                                )
-                            else:
-                                log(f"   ❌ [{symbol}] Failed to re-place hedge order")
-                        except Exception as e:
-                            log_error(f"[{symbol}] Error re-placing hedge order: {e}")
+                    # Attempt to re-place hedge order if position is still FILLED and not emergency sold
+                    if current_status == "FILLED" and entry_order_id:
+                        log(
+                            f"   ⚠️  [{symbol}] Entry not yet filled - hedge cancel OK, waiting for entry"
+                        )
                     return
 
                 # Check if this is an exit order cancellation
