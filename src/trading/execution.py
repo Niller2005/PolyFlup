@@ -44,6 +44,28 @@ def emergency_sell_position(
         log(f"   ⏳ [{symbol}] Waiting 3s for balance API to sync after fill...")
         time.sleep(3)
 
+        # Query actual position size from exchange before selling
+        # Order fill may be partial or have rounding, so we need exact balance
+        from src.trading.orders.positions import get_balance_allowance
+
+        balance_info = get_balance_allowance(token_id)
+        if balance_info:
+            actual_size = balance_info.get("balance", 0)
+            if actual_size > 0 and abs(actual_size - size) > 0.01:
+                log(
+                    f"   ⚠️  [{symbol}] Adjusting sell size: requested {size:.2f}, actual balance {actual_size:.2f}"
+                )
+                size = actual_size
+            elif actual_size <= 0:
+                log(
+                    f"   ⚠️  [{symbol}] No balance to sell (balance: {actual_size:.2f}), position may already be closed"
+                )
+                return False
+        else:
+            log(
+                f"   ⚠️  [{symbol}] Could not verify balance, using requested size {size:.2f}"
+            )
+
         # CRITICAL: Cancel any existing exit order first to free up shares
         # Look up trade by entry_order_id since trade might be saved to DB between
         # atomic pair placement and emergency sell (WebSocket can trigger exit plan)
