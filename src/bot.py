@@ -269,6 +269,9 @@ def main():
     last_verbose_log = time.time()
     last_entry_check = 0
     last_settle_check = time.time()
+    last_position_sync = (
+        time.time()
+    )  # Track last time we synced positions with exchange
 
     log("🏁 Bot initialized. Entering continuous monitoring loop...")
 
@@ -354,6 +357,11 @@ def main():
             if now_ts - last_settle_check >= 60:
                 check_and_settle_trades()
                 last_settle_check = now_ts
+
+            # Periodic position sync to detect external merges/closes
+            if now_ts - last_position_sync >= 60:
+                sync_positions_with_exchange(addr)
+                last_position_sync = now_ts
 
             if is_verbose_cycle:
                 last_verbose_log = now_ts

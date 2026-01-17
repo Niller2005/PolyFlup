@@ -248,6 +248,11 @@ def process_notifications() -> None:
                 _handle_order_cancelled(payload, timestamp or 0)
             elif notif_type == NOTIF_MARKET_RESOLVED:
                 _handle_market_resolved(payload, timestamp or 0)
+            else:
+                # Log unknown notification types to investigate
+                log(
+                    f"   ⚠️  UNKNOWN notification type: {notif_type} | Payload: {payload}"
+                )
 
             if notif_id:
                 processed_ids.append(str(notif_id))

@@ -190,11 +190,11 @@ def has_side_for_window(symbol: str, window_start: str, side: str) -> bool:
 
 
 def has_trade_for_window(symbol: str, window_start: str) -> bool:
-    """Check if a trade already exists for the given symbol and window"""
+    """Check if an active (non-settled) trade already exists for the given symbol and window"""
     with db_connection() as conn:
         c = conn.cursor()
         c.execute(
-            "SELECT id FROM trades WHERE symbol = ? AND window_start = ?",
+            "SELECT id FROM trades WHERE symbol = ? AND window_start = ? AND settled = 0",
             (symbol, window_start),
         )
         return c.fetchone() is not None
