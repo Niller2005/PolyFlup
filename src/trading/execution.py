@@ -378,31 +378,91 @@ def place_entry_and_hedge_atomic(
                 )
             return None, None
 
-        # Case 2: Hedge failed (original logic)
+        # Case 2: Entry succeeded, hedge failed - RETRY HEDGE
         if entry_success and not hedge_success:
             entry_order_id = entry_result.get("order_id")
             log(f"   ❌ [{symbol}] Hedge order failed: {hedge_result.get('error')}")
-            log(
-                f"   ⚠️  [{symbol}] Entry placed but hedge failed - cancelling entry {entry_order_id[:10]}"
-            )
-            try:
-                cancel_order(entry_order_id)
-                log(f"   ✅ [{symbol}] Entry order cancelled successfully")
-            except Exception as cancel_err:
-                log_error(
-                    f"[{symbol}] Failed to cancel entry order {entry_order_id[:10]}: {cancel_err}"
+            log(f"   🔄 [{symbol}] Entry succeeded - retrying hedge with fresh pricing")
+
+            # Retry hedge up to 3 times with fresh orderbook pricing
+            MAX_HEDGE_RETRIES = 3
+            hedge_placed = False
+
+            for retry in range(1, MAX_HEDGE_RETRIES + 1):
+                log(f"   🔄 [{symbol}] Hedge retry {retry}/{MAX_HEDGE_RETRIES}")
+
+                # Get fresh orderbook for hedge pricing
+                from src.trading.orders import get_spread
+
+                try:
+                    spread_data = get_spread(hedge_token_id)
+                    if spread_data and "bid" in spread_data and "ask" in spread_data:
+                        hedge_bid = float(spread_data["bid"])
+                        hedge_ask = float(spread_data["ask"])
+
+                        # Use bid + 2¢ for maker pricing (consistent with entry)
+                        retry_hedge_price = round(hedge_bid + 0.02, 2)
+                        retry_hedge_price = max(0.01, min(0.99, retry_hedge_price))
+
+                        log(
+                            f"   💹 [{symbol}] Hedge retry price: ${retry_hedge_price:.2f} (bid ${hedge_bid:.2f} + 2¢)"
+                        )
+
+                        # Place single hedge order
+                        hedge_order = [
+                            {
+                                "token_id": hedge_token_id,
+                                "price": retry_hedge_price,
+                                "size": entry_size,
+                                "side": BUY,
+                                "post_only": True,
+                            }
+                        ]
+
+                        retry_results = place_batch_orders(hedge_order)
+                        if retry_results and retry_results[0].get("success"):
+                            hedge_result = retry_results[0]
+                            log(
+                                f"   ✅ [{symbol}] Hedge retry succeeded: {hedge_side} {entry_size:.1f} @ ${retry_hedge_price:.2f}"
+                            )
+                            hedge_placed = True
+                            break
+                        else:
+                            error = (
+                                retry_results[0].get("error")
+                                if retry_results
+                                else "unknown"
+                            )
+                            log(f"   ⚠️  [{symbol}] Hedge retry {retry} failed: {error}")
+                            time.sleep(1)  # Brief pause before next retry
+                    else:
+                        log(f"   ⚠️  [{symbol}] Could not fetch spread for hedge retry")
+                        time.sleep(1)
+                except Exception as e:
+                    log_error(f"[{symbol}] Error during hedge retry {retry}: {e}")
+                    time.sleep(1)
+
+            # If all retries failed, cancel entry and emergency sell if needed
+            if not hedge_placed:
+                log(
+                    f"   ❌ [{symbol}] All hedge retries failed - cancelling entry {entry_order_id[:10]}"
                 )
-                # Try to sell the entry if it filled quickly
-                log(f"   💥 [{symbol}] Attempting emergency sell of entry")
-                time.sleep(2)  # Wait for potential fill
-                emergency_sell_position(
-                    symbol=symbol,
-                    token_id=entry_token_id,
-                    size=entry_size,
-                    reason="entry without hedge",
-                    entry_order_id=entry_order_id,
-                )
-            return None, None
+                try:
+                    cancel_order(entry_order_id)
+                    log(f"   ✅ [{symbol}] Entry order cancelled successfully")
+                except Exception as cancel_err:
+                    log_error(f"[{symbol}] Failed to cancel entry: {cancel_err}")
+                    # Try to sell the entry if it filled quickly
+                    log(f"   💥 [{symbol}] Attempting emergency sell of entry")
+                    time.sleep(2)
+                    emergency_sell_position(
+                        symbol=symbol,
+                        token_id=entry_token_id,
+                        size=entry_size,
+                        reason="entry without hedge after retries",
+                        entry_order_id=entry_order_id,
+                    )
+                return None, None
 
         # Case 3: Both failed
         if not entry_success and not hedge_success:
