@@ -270,8 +270,6 @@ def place_entry_and_hedge_atomic(
                 f"   ⚠️  [{symbol}] Hedge order failed, cancelling entry order {entry_order_id[:10]} to prevent unhedged position"
             )
             try:
-                from src.trading.orders import cancel_order
-
                 cancel_order(entry_order_id)
                 log(f"   ✅ [{symbol}] Entry order cancelled successfully")
                 return None, None
@@ -362,27 +360,86 @@ def place_entry_and_hedge_atomic(
                     f"   ❌ [{symbol}] TIMEOUT: Both orders not filled after {HEDGE_FILL_TIMEOUT_SECONDS}s - cancelling both"
                 )
 
-                # Cancel entry
+                # Check final fill status before cancelling
                 try:
-                    if cancel_order(entry_order_id):
-                        log(f"   ✅ [{symbol}] Entry order cancelled")
-                    else:
-                        log(
-                            f"   ⚠️  [{symbol}] Entry order cancel failed (may be filled)"
-                        )
-                except Exception as e:
-                    log_error(f"[{symbol}] Error cancelling entry: {e}")
+                    final_entry_status = get_order(entry_order_id)
+                    final_hedge_status = get_order(hedge_order_id)
 
-                # Cancel hedge
-                try:
-                    if cancel_order(hedge_order_id):
-                        log(f"   ✅ [{symbol}] Hedge order cancelled")
-                    else:
-                        log(
-                            f"   ⚠️  [{symbol}] Hedge order cancel failed (may be filled)"
+                    final_entry_filled_size = 0.0
+                    final_hedge_filled_size = 0.0
+
+                    if final_entry_status:
+                        final_entry_filled_size = float(
+                            final_entry_status.get("size_matched", 0)
                         )
-                except Exception as e:
-                    log_error(f"[{symbol}] Error cancelling hedge: {e}")
+
+                    if final_hedge_status:
+                        final_hedge_filled_size = float(
+                            final_hedge_status.get("size_matched", 0)
+                        )
+
+                    final_entry_filled = final_entry_filled_size >= (entry_size - 0.01)
+                    final_hedge_filled = final_hedge_filled_size >= (entry_size - 0.01)
+
+                    # CRITICAL: Handle partial fills with emergency sell
+                    if final_entry_filled and not final_hedge_filled:
+                        # Entry filled but hedge didn't - emergency sell the entry position
+                        log(
+                            f"   🚨 [{symbol}] CRITICAL: Entry filled ({final_entry_filled_size:.2f}) but hedge timed out - emergency selling entry"
+                        )
+                        emergency_sell_position(
+                            symbol=symbol,
+                            token_id=entry_token_id,
+                            size=final_entry_filled_size,
+                            reason="hedge timeout after entry fill",
+                            entry_order_id=entry_order_id,
+                        )
+                        # Cancel unfilled hedge
+                        try:
+                            cancel_order(hedge_order_id)
+                            log(f"   ✅ [{symbol}] Hedge order cancelled")
+                        except Exception as e:
+                            log_error(f"[{symbol}] Error cancelling hedge: {e}")
+
+                    elif final_hedge_filled and not final_entry_filled:
+                        # Hedge filled but entry didn't - emergency sell the hedge position
+                        log(
+                            f"   🚨 [{symbol}] CRITICAL: Hedge filled ({final_hedge_filled_size:.2f}) but entry timed out - emergency selling hedge"
+                        )
+                        emergency_sell_position(
+                            symbol=symbol,
+                            token_id=hedge_token_id,
+                            size=final_hedge_filled_size,
+                            reason="entry timeout after hedge fill",
+                            entry_order_id=hedge_order_id,
+                        )
+                        # Cancel unfilled entry
+                        try:
+                            cancel_order(entry_order_id)
+                            log(f"   ✅ [{symbol}] Entry order cancelled")
+                        except Exception as e:
+                            log_error(f"[{symbol}] Error cancelling entry: {e}")
+
+                    else:
+                        # Neither filled or both partially filled - just cancel both
+                        # Cancel entry
+                        try:
+                            cancel_order(entry_order_id)
+                            log(f"   ✅ [{symbol}] Entry order cancelled")
+                        except Exception as e:
+                            log_error(f"[{symbol}] Error cancelling entry: {e}")
+
+                        # Cancel hedge
+                        try:
+                            cancel_order(hedge_order_id)
+                            log(f"   ✅ [{symbol}] Hedge order cancelled")
+                        except Exception as e:
+                            log_error(f"[{symbol}] Error cancelling hedge: {e}")
+
+                except Exception as timeout_err:
+                    log_error(
+                        f"[{symbol}] Error handling timeout with partial fills: {timeout_err}"
+                    )
 
                 log(f"   🚫 [{symbol}] Trade skipped - atomic pair failed")
                 return None, None
