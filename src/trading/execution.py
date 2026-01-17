@@ -202,22 +202,36 @@ def place_entry_and_hedge_atomic(
                         # Market wants more, check if still profitable
                         combined_price = entry_price + best_ask
 
-                        if combined_price < 1.00:
+                        # CRITICAL: Combined must be <= $0.99 to guarantee profit
+                        # Allow tiny tolerance (0.001) for rounding: $0.991 is acceptable
+                        if combined_price <= 0.991:
                             # Still profitable, use market price
                             hedge_price = best_ask
                             log(
-                                f"   📊 [{symbol}] Hedge adjusted for immediate fill: ${target_hedge_price:.2f} → ${hedge_price:.2f} (market best ask)"
+                                f"   📊 [{symbol}] Hedge adjusted for immediate fill: ${target_hedge_price:.2f} → ${hedge_price:.2f} (combined ${combined_price:.2f})"
                             )
                         else:
-                            # Would create loss, skip hedge
+                            # Would create break-even or loss, REJECT
                             log(
-                                f"   ⚠️  [{symbol}] Cannot hedge atomically: market ${best_ask:.2f} + entry ${entry_price:.2f} = ${combined_price:.2f} > $1.00"
+                                f"   ❌ [{symbol}] REJECTED: Combined ${combined_price:.2f} >= $0.99 (entry ${entry_price:.2f} + hedge ${best_ask:.2f})"
+                            )
+                            log(
+                                f"   💡 [{symbol}] Need hedge <= ${0.99 - entry_price:.2f} for profit, market wants ${best_ask:.2f}"
                             )
                             return None, None
         except Exception as book_err:
             log(
                 f"   ⚠️  [{symbol}] Could not check orderbook, using target hedge price: {book_err}"
             )
+
+        # FINAL SAFETY CHECK: Verify combined price guarantees profit
+        final_combined = entry_price + hedge_price
+        if final_combined > 0.991:  # Allow 0.001 rounding tolerance
+            log(
+                f"   ❌ [{symbol}] REJECTED: Final combined ${final_combined:.2f} >= $0.99 (entry ${entry_price:.2f} + hedge ${hedge_price:.2f})"
+            )
+            log(f"   💡 [{symbol}] Cannot guarantee profit with current market prices")
+            return None, None
 
         # Create batch order
         orders = [
@@ -236,7 +250,7 @@ def place_entry_and_hedge_atomic(
         ]
 
         log(
-            f"   🔄 [{symbol}] Placing ATOMIC entry+hedge: {entry_side} {entry_size:.1f} @ ${entry_price:.2f} + {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f}"
+            f"   🔄 [{symbol}] Placing ATOMIC entry+hedge: {entry_side} {entry_size:.1f} @ ${entry_price:.2f} + {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f} (combined ${final_combined:.2f})"
         )
 
         # Submit both orders simultaneously
