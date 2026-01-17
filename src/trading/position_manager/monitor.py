@@ -449,6 +449,48 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                                 f"   🛡️  [{sym}] #{tid} Placing corrective hedge for {unhedged_amount:.2f} unhedged shares..."
                                             )
 
+                                            # CRITICAL: Cancel any existing exit order first to free up shares
+                                            # The exit order locks the shares, preventing hedge placement
+                                            exit_order_cancelled = False
+                                            original_exit_order_id = None
+
+                                            try:
+                                                c.execute(
+                                                    "SELECT limit_sell_order_id FROM trades WHERE id = ?",
+                                                    (tid,),
+                                                )
+                                                exit_row = c.fetchone()
+
+                                                if exit_row and exit_row[0]:
+                                                    original_exit_order_id = exit_row[0]
+                                                    log(
+                                                        f"   🚫 [{sym}] #{tid} Cancelling exit order {original_exit_order_id[:10]} to free shares for corrective hedge"
+                                                    )
+
+                                                    from src.trading.orders import (
+                                                        cancel_order,
+                                                    )
+
+                                                    if cancel_order(
+                                                        original_exit_order_id
+                                                    ):
+                                                        log(
+                                                            f"   ✅ [{sym}] #{tid} Exit order cancelled successfully"
+                                                        )
+                                                        c.execute(
+                                                            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
+                                                            (tid,),
+                                                        )
+                                                        exit_order_cancelled = True
+                                                    else:
+                                                        log(
+                                                            f"   ⚠️  [{sym}] #{tid} Failed to cancel exit order (may already be filled)"
+                                                        )
+                                            except Exception as cancel_exit_err:
+                                                log_error(
+                                                    f"[{sym}] #{tid} Error cancelling exit order before corrective hedge: {cancel_exit_err}"
+                                                )
+
                                             # Place additional hedge order
                                             try:
                                                 from src.trading.execution import (
@@ -464,7 +506,9 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                                     get_token_ids,
                                                 )
 
-                                                token_ids = get_token_ids(slug)
+                                                token_ids = get_token_ids(
+                                                    sym
+                                                )  # Use symbol, not slug
                                                 if (
                                                     token_ids
                                                     and token_ids[0]
@@ -496,10 +540,23 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                                             "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
                                                             (tid,),
                                                         )
+                                                        # Don't restore exit order - corrective hedge is the protection now
                                                     else:
                                                         log(
                                                             f"   ❌ [{sym}] #{tid} Corrective hedge failed: {result.get('error')}"
                                                         )
+                                                        # Restore exit order if we cancelled it
+                                                        if (
+                                                            exit_order_cancelled
+                                                            and original_exit_order_id
+                                                        ):
+                                                            log(
+                                                                f"   🔄 [{sym}] #{tid} Restoring exit order protection since corrective hedge failed"
+                                                            )
+                                                            from src.trading.position_manager.exit import (
+                                                                place_exit_plan,
+                                                            )
+                                                            # Exit plan will be placed on next monitoring cycle
                                             except Exception as corr_err:
                                                 log_error(
                                                     f"[{sym}] #{tid} Error placing corrective hedge: {corr_err}"
