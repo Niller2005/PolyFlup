@@ -22,19 +22,7 @@ from src.config.settings import (
     ADX_INTERVAL,
     BET_PERCENT,
     CONFIDENCE_SCALING_FACTOR,
-    ENABLE_STOP_LOSS,
-    STOP_LOSS_PERCENT,
-    ENABLE_TAKE_PROFIT,
-    TAKE_PROFIT_PERCENT,
-    ENABLE_REVERSAL,
     ENABLE_HEDGED_REVERSAL,
-    LOSING_SIDE_MIN_CONFIDENCE,
-    STOP_LOSS_PRICE,
-    ENABLE_SCALE_IN,
-    SCALE_IN_MIN_PRICE,
-    SCALE_IN_MAX_PRICE,
-    SCALE_IN_TIME_LEFT,
-    SCALE_IN_MULTIPLIER,
     ENABLE_MOMENTUM_FILTER,
     ENABLE_ORDER_FLOW,
     ENABLE_DIVERGENCE,
@@ -87,7 +75,6 @@ from src.trading.orders import (
 from src.trading.position_manager import (
     check_open_positions,
     check_monitor_health,
-    get_exit_plan_stats,
     recover_open_positions,
     sync_positions_with_exchange,
     sync_with_exchange,
@@ -230,7 +217,6 @@ def main():
     )
     log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: {BET_PERCENT}%")
     log(f"⚙️  HEDGED REVERSAL: {'ENABLED' if ENABLE_HEDGED_REVERSAL else 'DISABLED'}")
-    log(f"⚙️  STOP LOSS: Midpoint <= ${STOP_LOSS_PRICE:.2f}")
     log("=" * 90)
 
     recover_open_positions()
@@ -247,7 +233,6 @@ def main():
     last_position_check = time.time()
     last_order_check = time.time()
     last_verbose_log = time.time()
-    last_exit_stats_log = time.time()
     last_entry_check = 0
     last_settle_check = time.time()
 
@@ -338,9 +323,6 @@ def main():
 
             if is_verbose_cycle:
                 last_verbose_log = now_ts
-                if now_ts - last_exit_stats_log >= 900:
-                    exit_stats = get_exit_plan_stats()
-                    last_exit_stats_log = now_ts
                 if int(now_ts) % 14400 < 60:
                     generate_statistics()
 

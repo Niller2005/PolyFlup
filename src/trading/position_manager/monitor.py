@@ -1,37 +1,19 @@
-"""Core position monitoring loop with comprehensive audit trail"""
+"""Simplified position monitoring - display only, no actions"""
 
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from src.data.db_connection import db_connection
 from src.utils.logger import log, log_error
-from src.config.settings import EXIT_PRICE_TARGET
-from src.trading.orders import (
-    get_order_status,
-    cancel_order,
-    get_order,
-    get_multiple_market_prices,
-    check_orders_scoring,
-    get_balance_allowance,
-)
+from src.trading.orders import get_multiple_market_prices
 from src.utils.websocket_manager import ws_manager
 from src.trading.settlement import force_settle_trade
-from src.trading.logic import MIN_SIZE
 from .shared import _position_check_lock
-from .shared import _scale_in_order_lock
-from .shared import _recent_fills
-from .reconciliation import safe_cancel_order, is_recently_filled, track_recent_fill
 from .pnl import _get_position_pnl
-from .stop_loss import _check_stop_loss
-from .scale import _check_scale_in
-from .exit import _check_exit_plan
 
 _failed_pnl_checks = {}
-_recent_hedge_placements = {}  # Track recent hedge order placements to avoid race condition
-_last_corrective_hedge_attempt = {}  # Track last corrective hedge attempt per trade to prevent spam
 _last_no_positions_log = 0.0  # Rate-limit "No open positions" message
 _NO_POSITIONS_LOG_COOLDOWN = 30  # Log once per 30 seconds
-_CORRECTIVE_HEDGE_COOLDOWN = 60  # Seconds between corrective hedge attempts per trade
 
 # Monitor health tracking
 _last_monitor_check = time.time()
@@ -62,21 +44,39 @@ def check_monitor_health():
 
 
 def check_open_positions(verbose=True, check_orders=False, user_address=None):
+    """
+    Monitor and display open positions (DISPLAY ONLY - NO ACTIONS)
+
+    Simplified to only:
+    - Fetch open positions
+    - Display PnL
+    - Force settle if price unavailable for 3 cycles
+    """
     global _last_monitor_check
     _last_monitor_check = time.time()  # Update health tracking
 
     if not _position_check_lock.acquire(blocking=False):
         return
+
     global _failed_pnl_checks
     try:
         with db_connection() as conn:
             c = conn.cursor()
             now = datetime.now(tz=ZoneInfo("UTC"))
+
+            # Fetch open positions
             c.execute(
-                "SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, scaled_in, is_reversal, target_price, limit_sell_order_id, order_id, order_status, timestamp, scale_in_order_id, reversal_triggered, reversal_triggered_at, edge, last_scale_in_at, is_hedged FROM trades WHERE settled = 0 AND exited_early = 0 AND merge_tx_hash IS NULL AND datetime(window_end) > datetime(?)",
+                """SELECT id, symbol, slug, token_id, side, entry_price, size, bet_usd, window_end, 
+                   is_hedged, order_status, timestamp 
+                   FROM trades 
+                   WHERE settled = 0 
+                     AND exited_early = 0 
+                     AND merge_tx_hash IS NULL 
+                     AND datetime(window_end) > datetime(?)""",
                 (now.isoformat(),),
             )
             open_positions = c.fetchall()
+
             if not open_positions:
                 if verbose:
                     # Rate-limit this log message (once per 30 seconds)
@@ -90,7 +90,7 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                         _last_no_positions_log = current_time
                 return
 
-            # PRIORITY 1: Batch price fetching
+            # Batch price fetching
             token_ids = list(set([str(p[3]) for p in open_positions if p[3]]))
 
             # Try to get prices from WS cache first
@@ -98,710 +98,84 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
             missing_tokens = []
             for tid in token_ids:
                 price = ws_manager.get_price(tid)
-                if price:
+                if price is not None:
                     cached_prices[tid] = price
                 else:
                     missing_tokens.append(tid)
 
-            # Fetch missing prices in batch
+            # Fetch missing prices from API
             if missing_tokens:
-                batch_prices = get_multiple_market_prices(missing_tokens)
-                cached_prices.update(batch_prices)
-
-            # PRIORITY 2: Batch reward scoring check
-            sell_order_ids = [p[12] for p in open_positions if p[12]]
-            scoring_map = {}
-            if sell_order_ids and (verbose or check_orders):
                 try:
-                    scoring_map = check_orders_scoring(sell_order_ids)
+                    fetched_prices = get_multiple_market_prices(missing_tokens)
+                    for tid, price in fetched_prices.items():
+                        cached_prices[tid] = price
                 except Exception as e:
-                    log(f"⚠️  Error in batch scoring check: {e}")
+                    log_error(f"Error fetching batch prices: {e}")
 
-            if verbose:
-                bal_info = get_balance_allowance()
-                usdc_balance = bal_info.get("balance", 0) if bal_info else 0
-                log(
-                    f"👀 Monitoring {len(open_positions)} positions... | 💰 USDC: ${usdc_balance:.2f}"
-                )
-                if usdc_balance < 10.0:
-                    log("   ⚠️  WARNING: USDC balance below $10. Scale-ins may fail!")
+            # Display positions
+            for pos in open_positions:
+                (
+                    tid,
+                    sym,
+                    slug,
+                    tok,
+                    side,
+                    entry,
+                    size,
+                    bet,
+                    w_end,
+                    is_hed,
+                    b_status,
+                    ts,
+                ) = pos
 
-                # Detailed position report every minute - each position on its own line with full details
-                if len(open_positions) > 0:
-                    # Group positions by symbol and side for clean display
-                    positions_by_symbol = {}
-                    for pos in open_positions:
-                        (
-                            tid,
-                            sym,
-                            slug,
-                            tok,
-                            side,
-                            entry,
-                            size,
-                            bet,
-                            w_end,
-                            sc_in,
-                            rev,
-                            target,
-                            l_sell,
-                            b_id,
-                            b_status,
-                            ts,
-                            sc_id,
-                            rev_trig,
-                            rev_trig_at,
-                            edge,
-                            last_sc_at,
-                            is_hedged,
-                        ) = pos
+                # Skip if not filled
+                if b_status not in ["FILLED", "MATCHED", "HEDGED"]:
+                    continue
 
-                        if sym not in positions_by_symbol:
-                            positions_by_symbol[sym] = {
-                                "UP": {"filled": [], "waiting": []},
-                                "DOWN": {"filled": [], "waiting": []},
-                            }
+                # Get PnL info
+                pnl_i = _get_position_pnl(tok, entry, size, cached_prices)
+                if not pnl_i:
+                    # Increment failure counter
+                    _failed_pnl_checks[tid] = _failed_pnl_checks.get(tid, 0) + 1
+                    if _failed_pnl_checks[tid] >= 3:
+                        log(
+                            f"🧟 [{sym}] #{tid} price unavailable for 3 cycles - attempting force settlement..."
+                        )
+                        force_settle_trade(tid)
+                        _failed_pnl_checks[tid] = 0  # Reset
+                    continue
 
-                        if b_status in ["FILLED", "MATCHED"]:
-                            # Filled/Matched positions with PnL
-                            pnl_pct = _get_position_pnl(tok, entry, size)
+                # Reset failure counter on success
+                _failed_pnl_checks[tid] = 0
 
-                            # Build aligned position details with trade ID, scaled-in and exit plan status
-                            # Use fixed width formatting for consistent alignment
-                            pnl_result = _get_position_pnl(tok, entry, size)
-                            if (
-                                pnl_result
-                                and isinstance(pnl_result, dict)
-                                and "pnl_pct" in pnl_result
-                            ):
-                                pnl_pct_val = pnl_result["pnl_pct"]
-                                position_details = f"#{str(tid):<6} 📦{size:>5.1f} 🧮{pnl_pct_val:+6.1f}%"
-                            else:
-                                # Fallback if PnL calculation fails
-                                position_details = (
-                                    f"#{str(tid):<6} 📦{size:>5.1f} 🧮  +0.0%"
-                                )
+                cur_p = pnl_i["current_price"]
+                p_pct_val = pnl_i["pnl_pct"]
+                p_usd_val = pnl_i["pnl_usd"]
+                p_chg_val = pnl_i["price_change_pct"]
 
-                        elif b_status in ["LIVE", "OPEN", "PENDING"] and b_id:
-                            # Waiting for fill positions with trade ID - aligned format
-                            waiting_details = (
-                                f"#{str(tid):<6} 📦{size:>5.1f} | ⏳ Waiting for fill"
-                            )
-                            positions_by_symbol[sym][side]["waiting"].append(
-                                waiting_details
-                            )
-
-                # Clean position report with status indicators - matches desired format
-                if len(open_positions) > 0:
-                    for pos in open_positions[:10]:  # Show max 10 positions
-                        (
-                            tid,
-                            sym,
-                            slug,
-                            tok,
-                            side,
-                            entry,
-                            size,
-                            bet,
-                            w_end,
-                            sc_in,
-                            rev,
-                            target,
-                            l_sell,
-                            b_id,
-                            b_status,
-                            ts,
-                            sc_id,
-                            rev_trig,
-                            rev_trig_at,
-                            edge,
-                            last_sc_at,
-                            is_hedged,
-                        ) = pos
-
-                        if b_status in ["FILLED", "MATCHED"]:
-                            # Get PnL data
-                            pnl_result = _get_position_pnl(tok, entry, size)
-                            if (
-                                pnl_result
-                                and isinstance(pnl_result, dict)
-                                and "pnl_pct" in pnl_result
-                            ):
-                                pnl_pct_val = pnl_result["pnl_pct"]
-                                # Build status indicators
-                                status_parts = []
-                                if is_hedged:
-                                    status_parts.append("🛡️ Hedged")
-                                if sc_in:
-                                    status_parts.append("📊 Scaled in")
-                                if l_sell:
-                                    status_parts.append("⏰ Exit active")
-                                else:
-                                    # Check if position is below MIN_SIZE threshold
-                                    if size < MIN_SIZE:
-                                        status_parts.append("⏭️ Exit skipped")
-                                    elif not is_hedged:
-                                        # Only show "Exit pending" if not hedged (hedged positions don't need exit plan)
-                                        status_parts.append("⏳ Exit pending")
-
-                                status_str = (
-                                    " | ".join(status_parts) if status_parts else ""
-                                )
-                                # Add directional emoji based on side and PnL
-                                direction_emoji = (
-                                    "📈"
-                                    if (side == "UP" and pnl_pct_val >= 0)
-                                    or (side == "DOWN" and pnl_pct_val <= 0)
-                                    else "📉"
-                                )
-                                position_line = f"  {direction_emoji} [{sym}] {side:<4} #{str(tid):<6}  📦{size:>5.1f}  🧮{pnl_pct_val:+6.1f}%"
-                                if status_str:
-                                    position_line += f" | {status_str}"
-                                log(position_line)
-                            else:
-                                # Fallback if PnL calculation fails - use directional emoji
-                                direction_emoji = "📈" if side == "UP" else "📉"
-                                log(
-                                    f"  {direction_emoji} [{sym}] {side:<4} #{str(tid):<6}  📦{size:>5.1f}  🧮  +0.0%"
-                                )
-
-                        elif b_status.upper() in ["LIVE", "OPEN", "PENDING"] and b_id:
-                            # Waiting for fill positions - clean format with just ⏳ emoji
-                            log(
-                                f"  ⏳ [{sym}] {side:<4} #{str(tid):<6}  📦{size:>5.1f}"
-                            )
-            for (
-                tid,
-                sym,
-                slug,
-                tok,
-                side,
-                entry,
-                size,
-                bet,
-                w_end,
-                sc_in,
-                rev,
-                target,
-                l_sell,
-                b_id,
-                b_status,
-                ts,
-                sc_id,
-                rev_trig,
-                rev_trig_at,
-                edge,
-                last_sc_at,
-                is_hed,
-            ) in open_positions:
-                bet = bet or 0.0
-                edge = edge or 0.0
+                # Calculate time remaining
                 try:
-                    c.execute("SELECT settled FROM trades WHERE id = ?", (tid,))
-                    chk_res = c.fetchone()
-                    if chk_res and chk_res[0] == 1:
-                        continue
-                    curr_b_status = b_status
-                    if b_id and (b_status != "FILLED" or entry == 0):
-                        curr_b_status = get_order_status(b_id)
-                        if curr_b_status in ["FILLED", "MATCHED"]:
-                            o_data = get_order(b_id)
-                            if o_data:
-                                sz = float(o_data.get("size_matched", size))
-                                pr = float(o_data.get("price", entry))
-                                if (abs(sz - size) > 0.001 and sz > 0) or abs(
-                                    pr - entry
-                                ) > 0.0001:
-                                    size, entry, bet = sz, pr, sz * pr
-                                    c.execute(
-                                        "UPDATE trades SET size = ?, entry_price = ?, bet_usd = ? WHERE id = ?",
-                                        (size, entry, bet, tid),
-                                    )
-                            c.execute(
-                                "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
-                                (tid,),
-                            )
-                            curr_b_status = "FILLED"
-                            # Track recent fill for balance API cooldown
-                            _recent_fills[tid] = now.timestamp()
-
-                            # Place hedge order if not already placed (prevents race condition with notifications)
-                            c.execute(
-                                "SELECT hedge_order_id, condition_id FROM trades WHERE id = ?",
-                                (tid,),
-                            )
-                            hedge_row = c.fetchone()
-                            if hedge_row and not hedge_row[0]:  # No hedge order yet
-                                try:
-                                    from src.trading.execution import place_hedge_order
-
-                                    hedge_order_id = place_hedge_order(
-                                        tid,
-                                        sym,
-                                        side,
-                                        entry,
-                                        size,
-                                        entry_order_id=b_id,
-                                        cursor=c,
-                                    )
-
-                                    if hedge_order_id:
-                                        c.execute(
-                                            "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
-                                            (hedge_order_id, tid),
-                                        )
-                                        # Track hedge placement to avoid immediate mismatch check
-                                        _recent_hedge_placements[tid] = now.timestamp()
-                                except Exception as hedge_err:
-                                    log_error(
-                                        f"[{sym}] Error placing hedge order in monitor: {hedge_err}"
-                                    )
-
-                    # Check for hedge size mismatch (position grew after hedge was placed)
-                    # Skip if hedge was just placed (within last 15 seconds) to avoid race condition
-                    hedge_placement_time = _recent_hedge_placements.get(tid, 0)
-                    time_since_hedge_placed = now.timestamp() - hedge_placement_time
-
-                    if time_since_hedge_placed < 15:
-                        # Hedge was just placed, skip mismatch check
-                        pass
-                    elif curr_b_status == "HEDGE_SIZE_MISMATCH" or (
-                        curr_b_status == "FILLED" and is_hed == 0
-                    ):
-                        # Position is filled but not hedged, or size mismatch detected
-                        c.execute(
-                            "SELECT hedge_order_id FROM trades WHERE id = ?",
-                            (tid,),
-                        )
-                        hedge_check = c.fetchone()
-
-                        if hedge_check and hedge_check[0]:
-                            # We have a hedge order, check its filled size
-                            try:
-                                hedge_order = get_order(hedge_check[0])
-                                if hedge_order:
-                                    hedge_filled_size = float(
-                                        hedge_order.get("size_matched", 0)
-                                    )
-                                    hedge_original_size = float(
-                                        hedge_order.get("original_size", 0)
-                                    )
-
-                                    # Check if there's a gap between position size and hedge size
-                                    unhedged_amount = size - hedge_filled_size
-
-                                    # Check if hedge is fully filled (within 0.0001 tolerance)
-                                    if abs(unhedged_amount) < 0.0001:
-                                        # Hedge is fully filled! Mark as hedged if not already
-                                        if is_hed == 0:
-                                            log(
-                                                f"   🛡️  [{sym}] #{tid} Hedge fully filled ({hedge_filled_size:.2f}/{size:.2f}) - marking as HEDGED"
-                                            )
-                                            c.execute(
-                                                "UPDATE trades SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
-                                                (tid,),
-                                            )
-
-                                            # Cancel exit plan if present (position is now hedged)
-                                            c.execute(
-                                                "SELECT limit_sell_order_id FROM trades WHERE id = ?",
-                                                (tid,),
-                                            )
-                                            exit_row = c.fetchone()
-                                            if exit_row and exit_row[0]:
-                                                try:
-                                                    from src.trading.orders import (
-                                                        cancel_order,
-                                                    )
-
-                                                    cancel_result = cancel_order(
-                                                        exit_row[0]
-                                                    )
-                                                    if cancel_result:
-                                                        log(
-                                                            f"   🚫 [{sym}] #{tid} Exit plan cancelled (position fully hedged)"
-                                                        )
-                                                        c.execute(
-                                                            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
-                                                            (tid,),
-                                                        )
-                                                except Exception as cancel_err:
-                                                    log_error(
-                                                        f"[{sym}] #{tid} Error cancelling exit plan after hedge fill: {cancel_err}"
-                                                    )
-                                    elif (
-                                        unhedged_amount > 0.1
-                                    ):  # More than 0.1 shares unhedged
-                                        log(
-                                            f"   ⚠️  [{sym}] #{tid} HEDGE MISMATCH: Position={size:.2f}, Hedge filled={hedge_filled_size:.2f}, Unhedged={unhedged_amount:.2f}"
-                                        )
-
-                                        # Check if we have enough capital to place corrective hedge
-                                        bal_data = get_balance_allowance()
-                                        usdc_balance = float(bal_data.get("balance", 0))
-
-                                        # Calculate hedge cost (opposite side price)
-                                        hedge_side = "DOWN" if side == "UP" else "UP"
-                                        hedge_cost = unhedged_amount * (
-                                            1.0 - entry
-                                        )  # Approximate
-
-                                        # COOLDOWN: Check if we recently attempted corrective hedge for this trade
-                                        last_attempt_time = (
-                                            _last_corrective_hedge_attempt.get(tid, 0)
-                                        )
-                                        time_since_last_attempt = (
-                                            now.timestamp() - last_attempt_time
-                                        )
-
-                                        if (
-                                            time_since_last_attempt
-                                            < _CORRECTIVE_HEDGE_COOLDOWN
-                                        ):
-                                            # Still in cooldown period, skip
-                                            remaining = (
-                                                _CORRECTIVE_HEDGE_COOLDOWN
-                                                - time_since_last_attempt
-                                            )
-                                            if (
-                                                int(remaining) % 30 == 0
-                                            ):  # Log every 30s during cooldown
-                                                log(
-                                                    f"   ⏳ [{sym}] #{tid} Corrective hedge cooldown: {remaining:.0f}s remaining"
-                                                )
-                                            continue
-
-                                        if usdc_balance >= hedge_cost:
-                                            log(
-                                                f"   🛡️  [{sym}] #{tid} Placing corrective hedge for {unhedged_amount:.2f} unhedged shares..."
-                                            )
-
-                                            # CRITICAL: Cancel any existing exit order first to free up shares
-                                            # The exit order locks the shares, preventing hedge placement
-                                            exit_order_cancelled = False
-                                            original_exit_order_id = None
-
-                                            try:
-                                                c.execute(
-                                                    "SELECT limit_sell_order_id FROM trades WHERE id = ?",
-                                                    (tid,),
-                                                )
-                                                exit_row = c.fetchone()
-
-                                                if exit_row and exit_row[0]:
-                                                    original_exit_order_id = exit_row[0]
-                                                    log(
-                                                        f"   🚫 [{sym}] #{tid} Cancelling exit order {original_exit_order_id[:10]} to free shares for corrective hedge"
-                                                    )
-
-                                                    from src.trading.orders import (
-                                                        cancel_order,
-                                                    )
-
-                                                    if cancel_order(
-                                                        original_exit_order_id
-                                                    ):
-                                                        log(
-                                                            f"   ✅ [{sym}] #{tid} Exit order cancelled successfully"
-                                                        )
-                                                        c.execute(
-                                                            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
-                                                            (tid,),
-                                                        )
-                                                        exit_order_cancelled = True
-                                                    else:
-                                                        log(
-                                                            f"   ⚠️  [{sym}] #{tid} Failed to cancel exit order (may already be filled)"
-                                                        )
-                                            except Exception as cancel_exit_err:
-                                                log_error(
-                                                    f"[{sym}] #{tid} Error cancelling exit order before corrective hedge: {cancel_exit_err}"
-                                                )
-
-                                            # Place additional hedge order
-                                            try:
-                                                from src.trading.execution import (
-                                                    place_hedge_order,
-                                                )
-
-                                                # We can't use place_hedge_order directly as it expects full position
-                                                # Instead, place a manual order for the unhedged amount
-                                                from src.trading.orders import (
-                                                    place_order,
-                                                )
-                                                from src.data.market_data import (
-                                                    get_token_ids,
-                                                )
-
-                                                token_ids = get_token_ids(
-                                                    sym
-                                                )  # Use symbol, not slug
-                                                if (
-                                                    token_ids
-                                                    and token_ids[0]
-                                                    and token_ids[1]
-                                                ):
-                                                    # get_token_ids returns (token_id_1, token_id_2) tuple
-                                                    # token_id_1 is YES/UP, token_id_2 is NO/DOWN
-                                                    hedge_token_id = (
-                                                        token_ids[1]  # DOWN
-                                                        if side == "UP"
-                                                        else token_ids[0]  # UP
-                                                    )
-                                                    hedge_price = round(0.99 - entry, 2)
-                                                    hedge_price = max(
-                                                        0.01, min(0.99, hedge_price)
-                                                    )
-
-                                                    result = place_order(
-                                                        hedge_token_id,
-                                                        hedge_price,
-                                                        unhedged_amount,
-                                                    )
-
-                                                    # Record attempt timestamp (success or failure)
-                                                    _last_corrective_hedge_attempt[
-                                                        tid
-                                                    ] = now.timestamp()
-
-                                                    if result.get("success"):
-                                                        log(
-                                                            f"   ✅ [{sym}] #{tid} Corrective hedge placed: {unhedged_amount:.2f} @ ${hedge_price}"
-                                                        )
-                                                        # Update status to indicate we've addressed it
-                                                        c.execute(
-                                                            "UPDATE trades SET order_status = 'FILLED' WHERE id = ?",
-                                                            (tid,),
-                                                        )
-                                                        # Don't restore exit order - corrective hedge is the protection now
-                                                    else:
-                                                        log(
-                                                            f"   ❌ [{sym}] #{tid} Corrective hedge failed: {result.get('error')}"
-                                                        )
-                                                        # Restore exit order if we cancelled it
-                                                        if (
-                                                            exit_order_cancelled
-                                                            and original_exit_order_id
-                                                        ):
-                                                            log(
-                                                                f"   🔄 [{sym}] #{tid} Restoring exit order protection since corrective hedge failed"
-                                                            )
-                                                            from src.trading.position_manager.exit import (
-                                                                place_exit_plan,
-                                                            )
-                                                            # Exit plan will be placed on next monitoring cycle
-                                            except Exception as corr_err:
-                                                log_error(
-                                                    f"[{sym}] #{tid} Error placing corrective hedge: {corr_err}"
-                                                )
-                                        else:
-                                            log(
-                                                f"   💸 [{sym}] #{tid} Cannot place corrective hedge: Need ${hedge_cost:.2f}, Have ${usdc_balance:.2f}"
-                                            )
-                                            log(
-                                                f"   ⚠️  [{sym}] #{tid} Position has {unhedged_amount:.2f} shares UNHEDGED - relying on exit plan for protection"
-                                            )
-                            except Exception as hedge_check_err:
-                                log_error(
-                                    f"[{sym}] #{tid} Error checking hedge size: {hedge_check_err}"
-                                )
-
-                    if curr_b_status not in ["FILLED", "MATCHED"]:
-                        continue
-
-                    if (
-                        check_orders or b_status == "EXIT_PLAN_PENDING_SETTLEMENT"
-                    ) and l_sell:
-                        o_data = get_order(l_sell)
-                        if o_data:
-                            o_status = o_data.get("status", "").upper()
-                            if (
-                                o_status in ["FILLED", "MATCHED"]
-                                or b_status == "EXIT_PLAN_PENDING_SETTLEMENT"
-                            ):
-                                ex_p = float(o_data.get("price", EXIT_PRICE_TARGET))
-                                sz_m = float(o_data.get("size_matched", size))
-                                if sz_m == 0:
-                                    sz_m = size  # Fallback if size_matched is missing
-                                pnl_val_f = (ex_p * sz_m) - bet
-                                roi_val_f = (pnl_val_f / bet) * 100 if bet > 0 else 0
-                                log(
-                                    f"💰 [{sym}] #{tid} {side} EXIT SUCCESS: MATCHED at {ex_p}! (size: {sz_m:.2f}) | {pnl_val_f:+.2f}$ ({roi_val_f:+.1f}%)"
-                                )
-                                # CANCEL ANY PENDING SCALE-IN ORDER - WITH COMPREHENSIVE AUDIT TRAIL
-                                if sc_id:
-                                    # AUDIT: Starting scale-in cancellation process
-                                    log(
-                                        f"   🧹 [{sym}] #{tid} EXIT AUDIT: Starting scale-in order cancellation process for order {sc_id[:10]}"
-                                    )
-
-                                    # CRITICAL FIX: Check if scale-in order is actually unfilled before cancelling
-                                    sc_status = get_order_status(sc_id)
-
-                                    # AUDIT: Scale-in order status check
-                                    log(
-                                        f"   🔍 [{sym}] #{tid} EXIT AUDIT: Scale-in order {sc_id[:10]} status: {sc_status}"
-                                    )
-
-                                    if sc_status not in ["FILLED", "MATCHED"]:
-                                        # Check for race condition - track this as a recent fill attempt
-                                        if is_recently_filled(sc_id):
-                                            # AUDIT: Race condition detected - order was recently filled
-                                            fill_data = get_order(sc_id)
-                                            fill_size = (
-                                                fill_data.get("size_matched", 0)
-                                                if fill_data
-                                                else "unknown"
-                                            )
-                                            log(
-                                                f"   ⚠️  [{sym}] #{tid} EXIT AUDIT: RACE CONDITION DETECTED! Order {sc_id[:10]} was recently filled (size: {fill_size}), skipping cancellation"
-                                            )
-                                        else:
-                                            # AUDIT: Safe to cancel - order confirmed unfilled
-                                            log(
-                                                f"   🧹 [{sym}] #{tid} EXIT AUDIT: Confirmed scale-in order {sc_id[:10]} unfilled (Status: {sc_status}), proceeding with cancellation"
-                                            )
-                                            cancel_result = cancel_order(sc_id)
-                                            if cancel_result:
-                                                # AUDIT: Scale-in cancellation successful
-                                                log(
-                                                    f"   ✅ [{sym}] #{tid} EXIT AUDIT: Successfully cancelled scale-in order {sc_id[:10]}"
-                                                )
-                                            else:
-                                                # AUDIT: Scale-in cancellation failed
-                                                log(
-                                                    f"   ❌ [{sym}] #{tid} EXIT AUDIT: Failed to cancel scale-in order {sc_id[:10]}"
-                                                )
-                                    else:
-                                        # AUDIT: Scale-in order already filled, update database
-                                        log(
-                                            f"   ✅ [{sym}] #{tid} EXIT AUDIT: Scale-in order {sc_id[:10]} already filled (Status: {sc_status}), updating database and skipping cancellation"
-                                        )
-                                        # Track this fill to prevent future race conditions
-                                        track_recent_fill(sc_id)
-
-                                c.execute(
-                                    "UPDATE trades SET order_status = 'EXIT_PLAN_FILLED', settled=1, exited_early=1, exit_price=?, pnl_usd=?, roi_pct=?, settled_at=?, scale_in_order_id=NULL WHERE id=?",
-                                    (ex_p, pnl_val_f, roi_val_f, now.isoformat(), tid),
-                                )
-                                continue
-                        else:
-                            pass
-
-                    pnl_i = _get_position_pnl(tok, entry, size, cached_prices)
-                    if not pnl_i:
-                        # Increment failure counter
-                        _failed_pnl_checks[tid] = _failed_pnl_checks.get(tid, 0) + 1
-                        if _failed_pnl_checks[tid] >= 3:
-                            log(
-                                f"🧟 [{sym}] #{tid} price unavailable for 3 cycles - attempting force settlement..."
-                            )
-                            force_settle_trade(tid)
-                            _failed_pnl_checks[tid] = 0  # Reset
-                        continue
-
-                    # Reset failure counter on success
-                    _failed_pnl_checks[tid] = 0
-                    cur_p, p_pct_val, p_usd_val, p_chg_val = (
-                        pnl_i["current_price"],
-                        pnl_i["pnl_pct"],
-                        pnl_i["pnl_usd"],
-                        pnl_i["price_change_pct"],
+                    w_dt = (
+                        datetime.fromisoformat(w_end)
+                        if isinstance(w_end, str)
+                        else w_end
                     )
-                    if _check_stop_loss(
-                        user_address,
-                        sym,
-                        tid,
-                        tok,
-                        side,
-                        entry,
-                        size,
-                        p_pct_val,
-                        p_usd_val,
-                        cur_p,
-                        target,
-                        l_sell,
-                        rev,
-                        c,
-                        conn,
-                        now,
-                        curr_b_status,
-                        sc_id,
-                        rev_trig,
-                        rev_trig_at,
-                        w_end,
-                        is_hedged=is_hed,
-                    ):
-                        continue
+                    t_left = (w_dt - now).total_seconds()
+                    t_left_str = f"{int(t_left // 60)}m{int(t_left % 60)}s"
+                except:
+                    t_left = 0
+                    t_left_str = "0s"
 
-                    try:
-                        w_dt = (
-                            datetime.fromisoformat(w_end)
-                            if isinstance(w_end, str)
-                            else w_end
-                        )
-                        t_left = (w_dt - now).total_seconds()
-                    except:
-                        t_left = 0
-
-                    _check_scale_in(
-                        sym,
-                        tid,
-                        tok,
-                        entry,
-                        size,
-                        bet,
-                        sc_in,
-                        sc_id,
-                        t_left,
-                        cur_p,
-                        check_orders,
-                        c,
-                        conn,
-                        side,
-                        p_chg_val,
-                        curr_b_status,
-                        confidence=edge,
-                        target_price=target,
-                        is_hedged=is_hed,
-                        verbose=verbose,
+                # Display position (only log if verbose or significant change)
+                if verbose:
+                    hedge_status = "🛡️ HEDGED" if is_hed else "⚠️  UNHEDGED"
+                    log(
+                        f"📊 [{sym}] #{tid} {side} {size:.1f} @ ${entry:.2f} → ${cur_p:.2f} ({p_chg_val:+.1f}%) | "
+                        f"PnL: {p_usd_val:+.2f}$ ({p_pct_val:+.1f}%) | {hedge_status} | {t_left_str} left"
                     )
 
-                    # Refresh data after scale-in check
-                    c.execute(
-                        "SELECT size, entry_price, bet_usd, scaled_in, limit_sell_order_id, scale_in_order_id, last_scale_in_at FROM trades WHERE id = ?",
-                        (tid,),
-                    )
-                    row_data_f = c.fetchone()
-                    if row_data_f:
-                        size, entry, bet, sc_in, l_sell, sc_id, last_sc_at = row_data_f
-
-                    _check_exit_plan(
-                        user_address,
-                        sym,
-                        tid,
-                        tok,
-                        size,
-                        curr_b_status,
-                        l_sell,
-                        ts,
-                        c,
-                        conn,
-                        now,
-                        verbose,
-                        side,
-                        p_pct_val,
-                        p_chg_val,
-                        sc_in,
-                        sc_id,
-                        entry,
-                        cur_p,
-                        check_orders=check_orders,
-                        is_scoring=scoring_map.get(l_sell) if l_sell else None,
-                        last_scale_in_at=last_sc_at,
-                        is_hedged=bool(is_hed),
-                    )
-                except Exception as e:
-                    log_error(f"[{sym}] #{tid} Position monitoring error: {e}")
+    except Exception as e:
+        log_error(f"Error in check_open_positions: {e}")
     finally:
         _position_check_lock.release()

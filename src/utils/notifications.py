@@ -414,56 +414,8 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                             f"[{symbol}] Error fetching condition_id after fill: {e}"
                         )
 
-                    # REMOVED: Hedge placement moved to execute_trade() for atomic capital reservation
-                    # Hedge is now placed immediately after entry order (before this notification arrives)
-                    # Check if hedge_order_id already exists to skip duplicate placement
-                    c.execute(
-                        "SELECT hedge_order_id FROM trades WHERE id = ?",
-                        (trade_id,),
-                    )
-                    hedge_row = c.fetchone()
-
-                    if not hedge_row or not hedge_row[0]:
-                        # Hedge wasn't placed during execute_trade (shouldn't happen normally)
-                        # Place it now as a fallback
-                        try:
-                            from src.trading.execution import place_hedge_order
-
-                            # Get trade details including order_id for fill verification
-                            c.execute(
-                                "SELECT symbol, side, entry_price, size, order_id FROM trades WHERE id = ?",
-                                (trade_id,),
-                            )
-                            row = c.fetchone()
-
-                            if row:
-                                symbol, side, entry_price, size, order_id = row
-                                log(
-                                    f"   ⚠️  [{symbol}] #{trade_id} Placing fallback hedge (not placed during entry)"
-                                )
-
-                                # Place hedge order
-                                hedge_order_id = place_hedge_order(
-                                    trade_id,
-                                    symbol,
-                                    side,
-                                    entry_price,
-                                    size,
-                                    entry_order_id=order_id,
-                                    cursor=c,
-                                )
-
-                                # Update trade with hedge order ID
-                                if hedge_order_id:
-                                    c.execute(
-                                        "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
-                                        (hedge_order_id, trade_id),
-                                    )
-                        except Exception as e:
-                            log_error(
-                                f"[{symbol}] Error placing fallback hedge order: {e}"
-                            )
-
+                    # Hedge is placed atomically during execute_trade()
+                    # No fallback hedge placement - if atomic pair fails, both orders are cancelled
                     return  # Found and processed, done
 
                 # Check if this is a limit sell order (exit plan)

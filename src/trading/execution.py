@@ -18,286 +18,6 @@ from src.trading.orders import (
 from src.data.market_data import get_token_ids
 
 
-def place_hedge_order(
-    trade_id: int,
-    symbol: str,
-    entry_side: str,
-    entry_price: float,
-    entry_size: float,
-    entry_order_id: str = None,
-    cursor=None,
-) -> Optional[str]:
-    """
-    Place a limit order on the opposite side to hedge the position.
-
-    Hedge price is calculated based on CTF_MERGE setting:
-    - If CTF_MERGE enabled: Combined price = $1.00 (merge returns full $1.00 per share)
-    - If CTF_MERGE disabled: Combined price = $0.99 (wait for settlement, guarantee profit)
-
-    Example (CTF_MERGE=YES): Enter UP @ $0.52, hedge DOWN @ $0.48 = $1.00 total
-    Example (CTF_MERGE=NO):  Enter UP @ $0.52, hedge DOWN @ $0.47 = $0.99 total
-
-    Args:
-        trade_id: ID of the entry trade
-        symbol: Trading symbol
-        entry_side: Side of entry trade (UP or DOWN)
-        entry_price: Price of entry trade
-        entry_size: Size of entry trade (will be verified against actual fill)
-        entry_order_id: Order ID of entry trade (for fill verification)
-        cursor: Optional database cursor (if called within existing transaction)
-
-    Returns:
-        Order ID if successful, None otherwise
-    """
-    try:
-        from src.config.settings import ENABLE_CTF_MERGE
-        from src.data.db_connection import db_connection
-
-        # CRITICAL: Verify actual entry fill size before placing hedge
-        # This prevents hedge size mismatch when entry order partially fills
-        actual_entry_size = entry_size
-        if entry_order_id:
-            try:
-                entry_order = get_order(entry_order_id)
-                if entry_order:
-                    filled_size = float(entry_order.get("size_matched", 0))
-                    original_size = float(entry_order.get("original_size", entry_size))
-
-                    if filled_size > 0:
-                        actual_entry_size = filled_size
-
-                        # Log if there's a significant difference (>0.1%)
-                        size_diff_pct = abs(filled_size - entry_size) / entry_size * 100
-                        if size_diff_pct > 0.1:
-                            log(
-                                f"   📊 [{symbol}] Entry partially filled: {filled_size:.4f}/{entry_size:.1f} ({size_diff_pct:.1f}% diff) - adjusting hedge size"
-                            )
-            except Exception as verify_err:
-                log(
-                    f"   ⚠️  [{symbol}] Could not verify entry fill size, using requested size: {verify_err}"
-                )
-
-        up_id, down_id = get_token_ids(symbol)
-        if not up_id or not down_id:
-            return None
-
-        # Calculate opposite side and token
-        if entry_side == "UP":
-            hedge_side = "DOWN"
-            hedge_token_id = down_id
-        else:
-            hedge_side = "UP"
-            hedge_token_id = up_id
-
-        # Calculate hedge price based on CTF merge setting
-        # CRITICAL: Always target $0.99 combined to guarantee profit
-        # Even with CTF merge enabled, $0.99 cost → $1.00 merge = $0.01 profit
-        # Using $1.00 combined would be break-even (loses money on fees)
-        target_combined = 0.99
-
-        target_hedge_price = round(target_combined - entry_price, 2)
-        target_hedge_price = max(0.01, min(0.99, target_hedge_price))
-
-        # CRITICAL: Check orderbook to ensure hedge will fill
-        # If best ask is higher than our target, we need to pay more to fill immediately
-        hedge_price = target_hedge_price
-        try:
-            clob_client = get_clob_client()
-            orderbook = clob_client.get_order_book(hedge_token_id)
-
-            if orderbook and isinstance(orderbook, dict):
-                asks = orderbook.get("asks", [])
-                if asks and len(asks) > 0:
-                    # Get best ask (lowest sell price)
-                    best_ask = float(asks[0].get("price", 0))
-
-                    if best_ask > target_hedge_price:
-                        # Market is more expensive than our target
-                        # Check if using best ask would still guarantee profit
-                        combined_price = entry_price + best_ask
-
-                        if combined_price < 1.00:
-                            # Still profitable at market price, use it
-                            hedge_price = best_ask
-                            log(
-                                f"   📊 [{symbol}] Hedge adjusted: target ${target_hedge_price:.2f} → ${hedge_price:.2f} (market best ask) | Combined: ${combined_price:.2f}"
-                            )
-                        else:
-                            # Market price would create guaranteed loss
-                            log(
-                                f"   ⚠️  [{symbol}] Hedge skipped: market ${best_ask:.2f} + entry ${entry_price:.2f} = ${combined_price:.2f} > $1.00 (guaranteed loss)"
-                            )
-                            return None
-                    else:
-                        log(
-                            f"   💰 [{symbol}] Hedge pricing favorable: target ${target_hedge_price:.2f}, market ${best_ask:.2f}"
-                        )
-        except Exception as e:
-            log(f"   ⚠️  [{symbol}] Could not check orderbook, using target price: {e}")
-
-        # Ensure final price is within valid range
-        hedge_price = max(0.01, min(0.99, hedge_price))
-
-        # Pre-flight balance check to ensure we can afford the hedge
-        from src.trading.orders import get_balance_allowance
-        from src.trading.logic import MIN_SIZE
-
-        try:
-            bal_check = get_balance_allowance()
-            current_balance = float(bal_check.get("balance", 0)) if bal_check else 0.0
-            hedge_cost = actual_entry_size * hedge_price
-
-            if current_balance < hedge_cost:
-                log(
-                    f"   ❌ [{symbol}] Cannot place hedge: Insufficient balance (${current_balance:.2f} < ${hedge_cost:.2f} needed)"
-                )
-                return None
-
-            # Also warn if balance would drop below $5 minimum after hedge
-            remaining_after_hedge = current_balance - hedge_cost
-            if remaining_after_hedge < (MIN_SIZE * 1.0):
-                log(
-                    f"   ⚠️  [{symbol}] Placing hedge will leave ${remaining_after_hedge:.2f} (below ${MIN_SIZE * 1.0:.2f} minimum for future trades)"
-                )
-        except Exception as bal_err:
-            log(f"   ⚠️  [{symbol}] Could not verify balance before hedge: {bal_err}")
-            # Continue anyway - better to attempt hedge than leave position unhedged
-
-        # Place hedge order with actual filled entry size
-        result = place_order(hedge_token_id, hedge_price, actual_entry_size)
-
-        if not result["success"]:
-            log(f"   ❌ [{symbol}] Hedge order failed: {result.get('error')}")
-            return None
-
-        order_id = result["order_id"]
-        merge_status = " [MERGE]" if ENABLE_CTF_MERGE else ""
-        log(
-            f"   🛡️  [{symbol}] Hedge order placed{merge_status}: {hedge_side} {actual_entry_size:.1f} @ ${hedge_price:.2f} (ID: {order_id[:10]}) | Combined: ${entry_price:.2f} + ${hedge_price:.2f} = ${(entry_price + hedge_price):.2f}"
-        )
-
-        # Check remaining capital after hedge - warn if insufficient for scale-ins
-        try:
-            from src.trading.orders import get_balance_allowance
-
-            bal_info = get_balance_allowance()
-            remaining_usdc = float(bal_info.get("balance", 0)) if bal_info else 0.0
-
-            # Scale-in typically needs ~$6-8 (size * price for similar position)
-            scale_in_reserve = actual_entry_size * entry_price
-
-            if remaining_usdc < scale_in_reserve:
-                log(
-                    f"   ⚠️  [{symbol}] Low capital after hedge: ${remaining_usdc:.2f} remaining (scale-in needs ~${scale_in_reserve:.2f})"
-                )
-                log(
-                    f"   💡 [{symbol}] Consider disabling scale-ins or reducing BET_SIZE to preserve capital for hedges"
-                )
-        except Exception as cap_check_err:
-            pass  # Don't fail hedge placement if balance check errors
-
-        # Store hedge price in database (only if trade_id exists)
-        if trade_id > 0:
-            if cursor:
-                # Use existing transaction cursor
-                cursor.execute(
-                    "UPDATE trades SET hedge_order_price = ? WHERE id = ?",
-                    (hedge_price, trade_id),
-                )
-            else:
-                # Open new connection
-                with db_connection() as conn:
-                    c = conn.cursor()
-                    c.execute(
-                        "UPDATE trades SET hedge_order_price = ? WHERE id = ?",
-                        (hedge_price, trade_id),
-                    )
-
-        # IMMEDIATE VERIFICATION: Check if hedge filled within 2 seconds
-        # This provides a fallback when WebSocket notifications fail
-        time.sleep(2)
-        try:
-            hedge_status = get_order(order_id)
-            if hedge_status:
-                hedge_filled_size = float(hedge_status.get("size_matched", 0))
-                # Use 0.01 tolerance (99%+ filled = fully hedged)
-                if hedge_filled_size >= actual_entry_size - 0.01:
-                    log(
-                        f"   ✅ [{symbol}] Hedge immediately verified: {hedge_filled_size:.2f}/{actual_entry_size:.2f} shares filled"
-                    )
-
-                    # Mark as hedged in database (only if trade_id exists)
-                    # When called from execute_trade with trade_id=0, this will be updated later
-                    if trade_id > 0:
-                        if cursor:
-                            cursor.execute(
-                                "UPDATE trades SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
-                                (trade_id,),
-                            )
-                        else:
-                            with db_connection() as conn:
-                                c = conn.cursor()
-                                c.execute(
-                                    "UPDATE trades SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
-                                    (trade_id,),
-                                )
-
-                        # Cancel exit plan if present (hedge is already filled)
-                        try:
-                            if cursor:
-                                cursor.execute(
-                                    "SELECT limit_sell_order_id FROM trades WHERE id = ?",
-                                    (trade_id,),
-                                )
-                                exit_row = cursor.fetchone()
-                            else:
-                                with db_connection() as conn:
-                                    c = conn.cursor()
-                                    c.execute(
-                                        "SELECT limit_sell_order_id FROM trades WHERE id = ?",
-                                        (trade_id,),
-                                    )
-                                    exit_row = c.fetchone()
-
-                            if exit_row and exit_row[0]:
-                                from src.trading.orders import cancel_order
-
-                                cancel_result = cancel_order(exit_row[0])
-                                if cancel_result:
-                                    log(
-                                        f"   🚫 [{symbol}] Exit plan cancelled (hedge verified filled)"
-                                    )
-                                    if cursor:
-                                        cursor.execute(
-                                            "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
-                                            (trade_id,),
-                                        )
-                                    else:
-                                        with db_connection() as conn:
-                                            c = conn.cursor()
-                                            c.execute(
-                                                "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
-                                                (trade_id,),
-                                            )
-                        except Exception as cancel_err:
-                            log_error(
-                                f"[{symbol}] Error cancelling exit plan after hedge verification: {cancel_err}"
-                            )
-                else:
-                    log(
-                        f"   ⏳ [{symbol}] Hedge partially filled: {hedge_filled_size:.2f}/{actual_entry_size:.2f} shares (will continue monitoring)"
-                    )
-        except Exception as verify_err:
-            log(
-                f"   ⚠️  [{symbol}] Could not verify hedge fill immediately: {verify_err}"
-            )
-
-        return order_id
-    except Exception as e:
-        log_error(f"[{symbol}] Error placing hedge order: {e}")
-        return None
-
-
 def emergency_sell_position(
     symbol: str,
     token_id: str,
@@ -562,8 +282,8 @@ def place_entry_and_hedge_atomic(
         else:
             log(f"   ❌ [{symbol}] Hedge order failed: {hedge_result.get('error')}")
 
-        # MONITOR: Poll hedge fill status with early exit
-        # If hedge doesn't fill within timeout, cancel entry to prevent unhedged position
+        # MONITOR: Poll both orders for fill status
+        # If BOTH fill within timeout, save trade. Otherwise cancel BOTH.
         if entry_result.get("success") and hedge_result.get("success"):
             from src.config.settings import (
                 HEDGE_FILL_TIMEOUT_SECONDS,
@@ -574,190 +294,84 @@ def place_entry_and_hedge_atomic(
             hedge_order_id = hedge_result.get("order_id")
 
             if not entry_order_id or not hedge_order_id:
-                log(f"   ⚠️  [{symbol}] Missing order IDs, skipping hedge monitoring")
-            else:
+                log(f"   ⚠️  [{symbol}] Missing order IDs, skipping monitoring")
+                return None, None
+
+            log(
+                f"   ⏱️  [{symbol}] Monitoring fills for {HEDGE_FILL_TIMEOUT_SECONDS}s (polling every {HEDGE_POLL_INTERVAL_SECONDS}s)..."
+            )
+
+            elapsed = 0
+            both_filled = False
+
+            while elapsed < HEDGE_FILL_TIMEOUT_SECONDS:
+                time.sleep(HEDGE_POLL_INTERVAL_SECONDS)
+                elapsed += HEDGE_POLL_INTERVAL_SECONDS
+
+                try:
+                    # Check both orders
+                    entry_status = get_order(entry_order_id)
+                    hedge_status = get_order(hedge_order_id)
+
+                    entry_filled_size = 0.0
+                    hedge_filled_size = 0.0
+
+                    if entry_status:
+                        entry_filled_size = float(entry_status.get("size_matched", 0))
+
+                    if hedge_status:
+                        hedge_filled_size = float(hedge_status.get("size_matched", 0))
+
+                    entry_filled = entry_filled_size >= (entry_size - 0.01)
+                    hedge_filled = hedge_filled_size >= (entry_size - 0.01)
+
+                    # SUCCESS: Both filled!
+                    if entry_filled and hedge_filled:
+                        log(
+                            f"   ✅ [{symbol}] Both orders filled after {elapsed}s - trade complete!"
+                        )
+                        both_filled = True
+                        break
+
+                    # Log partial fills
+                    if entry_filled_size > 0 or hedge_filled_size > 0:
+                        log(
+                            f"   ⏳ [{symbol}] Partial fills ({elapsed}s): Entry {entry_filled_size:.2f}/{entry_size:.1f}, Hedge {hedge_filled_size:.2f}/{entry_size:.1f}"
+                        )
+
+                except Exception as poll_err:
+                    log(f"   ⚠️  [{symbol}] Error polling order status: {poll_err}")
+
+            # TIMEOUT: Cancel BOTH orders if not both filled
+            if not both_filled:
                 log(
-                    f"   ⏱️  [{symbol}] Monitoring hedge fill for {HEDGE_FILL_TIMEOUT_SECONDS}s (polling every {HEDGE_POLL_INTERVAL_SECONDS}s)..."
+                    f"   ❌ [{symbol}] TIMEOUT: Both orders not filled after {HEDGE_FILL_TIMEOUT_SECONDS}s - cancelling both"
                 )
 
-                elapsed = 0
-                hedge_filled = False
-                entry_filled = False
-
-                while elapsed < HEDGE_FILL_TIMEOUT_SECONDS:
-                    time.sleep(HEDGE_POLL_INTERVAL_SECONDS)
-                    elapsed += HEDGE_POLL_INTERVAL_SECONDS
-
-                    try:
-                        # Check hedge status
-                        hedge_status = get_order(hedge_order_id)
-                        if hedge_status:
-                            hedge_filled_size = float(
-                                hedge_status.get("size_matched", 0)
-                            )
-                            hedge_filled = hedge_filled_size >= (entry_size - 0.01)
-
-                            if hedge_filled:
-                                log(
-                                    f"   ✅ [{symbol}] Hedge filled after {elapsed}s: {hedge_filled_size:.2f}/{entry_size:.1f} shares"
-                                )
-                                break
-                            elif hedge_filled_size > 0:
-                                log(
-                                    f"   ⏳ [{symbol}] Hedge partially filled ({elapsed}s): {hedge_filled_size:.2f}/{entry_size:.1f} shares"
-                                )
-
-                        # Check entry status
-                        entry_status = get_order(entry_order_id)
-                        if entry_status:
-                            entry_filled_size = float(
-                                entry_status.get("size_matched", 0)
-                            )
-                            entry_filled = entry_filled_size >= (entry_size - 0.01)
-
-                            if entry_filled and not hedge_filled:
-                                log(
-                                    f"   ⚠️  [{symbol}] Entry filled but hedge not filled after {elapsed}s"
-                                )
-
-                                # EARLY EXIT: If entry filled after 10+ seconds and hedge still unfilled,
-                                # immediately exit the position to minimize loss
-                                if elapsed >= 10:
-                                    log(
-                                        f"   🚨 [{symbol}] EARLY EXIT TRIGGER: Entry filled but hedge unfilled after {elapsed}s - exiting now"
-                                    )
-
-                                # STEP 1: Cancel the unfilled hedge order FIRST to prevent it filling later
-                                try:
-                                    from src.trading.orders import (
-                                        cancel_order as cancel_order_func,
-                                    )
-
-                                    cancel_result = cancel_order_func(hedge_order_id)
-                                    if cancel_result:
-                                        log(
-                                            f"   ✅ [{symbol}] Hedge order cancelled successfully"
-                                        )
-                                    else:
-                                        log(
-                                            f"   ⚠️  [{symbol}] Failed to cancel hedge order (may already be filling)"
-                                        )
-                                except Exception as e:
-                                    log_error(
-                                        f"[{symbol}] Error cancelling hedge order: {e}"
-                                    )
-
-                                # STEP 2: Emergency sell the filled entry position
-                                sell_success = emergency_sell_position(
-                                    symbol=symbol,
-                                    token_id=entry_token_id,
-                                    size=entry_filled_size,
-                                    reason=f"hedge unfilled after {elapsed}s",
-                                    entry_order_id=entry_order_id,
-                                )
-
-                                if sell_success:
-                                    log(
-                                        f"   ✅ [{symbol}] Early exit successful - position closed"
-                                    )
-                                    return None, None
-                                else:
-                                    log_error(
-                                        f"[{symbol}] Early exit FAILED - will retry at timeout"
-                                    )
-
-                    except Exception as poll_err:
-                        log(f"   ⚠️  [{symbol}] Error polling order status: {poll_err}")
-
-                # TIMEOUT: If hedge didn't fill and entry did, cancel entry to prevent unhedged position
-                if not hedge_filled:
-                    try:
-                        # Check final status
-                        entry_status = get_order(entry_order_id)
-                        if entry_status:
-                            entry_filled_size = float(
-                                entry_status.get("size_matched", 0)
-                            )
-                            entry_filled = entry_filled_size >= (entry_size - 0.01)
-
-                            if entry_filled:
-                                log(
-                                    f"   ❌ [{symbol}] HEDGE TIMEOUT: Entry filled ({entry_filled_size:.2f}) but hedge unfilled after {HEDGE_FILL_TIMEOUT_SECONDS}s"
-                                )
-                                log(
-                                    f"   ⚠️  [{symbol}] CRITICAL: Position is UNHEDGED - initiating emergency exit"
-                                )
-
-                                # STEP 1: Cancel the unfilled hedge order FIRST
-                                try:
-                                    from src.trading.orders import (
-                                        cancel_order as cancel_order_func,
-                                    )
-
-                                    cancel_result = cancel_order_func(hedge_order_id)
-                                    if cancel_result:
-                                        log(
-                                            f"   ✅ [{symbol}] Hedge order cancelled (no longer needed)"
-                                        )
-                                    else:
-                                        log(
-                                            f"   ⚠️  [{symbol}] Failed to cancel hedge order (may already be filling)"
-                                        )
-                                except Exception as cancel_err:
-                                    log_error(
-                                        f"[{symbol}] Error cancelling hedge order: {cancel_err}"
-                                    )
-
-                                # STEP 2: EMERGENCY EXIT - Market sell the filled entry position immediately
-                                # This prevents holding an unhedged position which could result in 50%+ losses
-                                sell_success = emergency_sell_position(
-                                    symbol=symbol,
-                                    token_id=entry_token_id,
-                                    size=entry_filled_size,
-                                    reason="hedge timeout",
-                                    entry_order_id=entry_order_id,
-                                )
-
-                                if sell_success:
-                                    log(
-                                        f"   ✅ [{symbol}] Emergency exit successful - position closed"
-                                    )
-                                    # Return None to prevent trade from being saved to database
-                                    return None, None
-                                else:
-                                    log_error(
-                                        f"[{symbol}] Emergency exit FAILED - position remains unhedged!"
-                                    )
-                                    # Continue with original flow - position will be tracked as unhedged
-                                    # The position manager will attempt corrective hedges
-                            else:
-                                # Entry not filled yet, cancel it
-                                log(
-                                    f"   ⏱️  [{symbol}] HEDGE TIMEOUT: Hedge unfilled after {HEDGE_FILL_TIMEOUT_SECONDS}s, cancelling entry order"
-                                )
-                                from src.trading.orders import cancel_order
-
-                                cancel_result = cancel_order(entry_order_id)
-                                if cancel_result:
-                                    log(
-                                        f"   ✅ [{symbol}] Entry order cancelled to prevent unhedged position"
-                                    )
-                                    log(
-                                        f"   📌 [{symbol}] Hedge order left live (may still fill later)"
-                                    )
-                                    return None, None
-                                else:
-                                    log(
-                                        f"   ⚠️  [{symbol}] Failed to cancel entry order - check position manually"
-                                    )
-
-                        # NOTE: Do NOT cancel the hedge order - leave it live so it can still fill later
-                        # The hedge provides protection even if entry was cancelled
-
-                    except Exception as timeout_err:
-                        log_error(
-                            f"[{symbol}] Error handling hedge timeout: {timeout_err}"
+                # Cancel entry
+                try:
+                    if cancel_order(entry_order_id):
+                        log(f"   ✅ [{symbol}] Entry order cancelled")
+                    else:
+                        log(
+                            f"   ⚠️  [{symbol}] Entry order cancel failed (may be filled)"
                         )
+                except Exception as e:
+                    log_error(f"[{symbol}] Error cancelling entry: {e}")
+
+                # Cancel hedge
+                try:
+                    if cancel_order(hedge_order_id):
+                        log(f"   ✅ [{symbol}] Hedge order cancelled")
+                    else:
+                        log(
+                            f"   ⚠️  [{symbol}] Hedge order cancel failed (may be filled)"
+                        )
+                except Exception as e:
+                    log_error(f"[{symbol}] Error cancelling hedge: {e}")
+
+                log(f"   🚫 [{symbol}] Trade skipped - atomic pair failed")
+                return None, None
 
         return entry_result, hedge_result
 
