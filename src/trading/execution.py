@@ -94,41 +94,51 @@ def emergency_sell_position(
             if bids and len(bids) > 0:
                 best_bid = float(bids[0].get("price", 0))
 
-        # If we have a valid best bid, use it
+        # PROGRESSIVE PRICING: Try multiple prices before falling back to low price
+        # This maximizes recovery value while ensuring quick fill
         if best_bid and best_bid > 0.01:
-            log(
-                f"   🚨 [{symbol}] EMERGENCY SELL: Exiting {size:.2f} shares at ${best_bid:.2f} (best bid) due to {reason}"
-            )
+            # Strategy: Try best bid, then progressively lower prices with FOK
+            # FOK ensures immediate fill or rejection, preventing stuck orders
+            attempts = [
+                ("best bid", best_bid),
+                ("best bid - $0.01", max(0.01, best_bid - 0.01)),
+                ("best bid - $0.02", max(0.01, best_bid - 0.02)),
+                ("best bid - $0.03", max(0.01, best_bid - 0.03)),
+            ]
 
-            # Place SELL limit order at best bid (should fill immediately as taker)
-            result = place_limit_order(
-                token_id=token_id,
-                price=best_bid,
-                size=size,
-                side=SELL,
-                order_type="FOK",  # Fill-or-Kill: fill immediately or cancel
-            )
-
-            if result.get("success"):
-                order_id = result.get("order_id", "unknown")
+            for attempt_name, attempt_price in attempts:
                 log(
-                    f"   ✅ [{symbol}] Emergency sell order placed: {size:.2f} @ ${best_bid:.2f} (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
+                    f"   🚨 [{symbol}] EMERGENCY SELL: Trying {size:.2f} shares at ${attempt_price:.2f} ({attempt_name}) due to {reason}"
                 )
-                return True
-            else:
-                log_error(
-                    f"[{symbol}] Emergency sell at best bid failed: {result.get('error', 'unknown error')}"
+
+                result = place_limit_order(
+                    token_id=token_id,
+                    price=attempt_price,
+                    size=size,
+                    side=SELL,
+                    order_type="FOK",  # Fill-or-Kill: fill immediately or cancel
                 )
+
+                if result.get("success"):
+                    order_id = result.get("order_id", "unknown")
+                    log(
+                        f"   ✅ [{symbol}] Emergency sell filled: {size:.2f} @ ${attempt_price:.2f} ({attempt_name}) (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
+                    )
+                    return True
+                else:
+                    log(
+                        f"   ⚠️  [{symbol}] Attempt at ${attempt_price:.2f} failed: {result.get('error', 'no fill')}"
+                    )
         else:
             log(
                 f"   ⚠️  [{symbol}] Orderbook unavailable or no bids - using fallback price"
             )
 
-        # FALLBACK: If orderbook unavailable or FOK failed, place simple limit order at low price
-        # Use $0.05 to ensure quick fill while recovering some value
-        fallback_price = 0.05
+        # FINAL FALLBACK: If all FOK attempts failed, place GTC order at conservative price
+        # Use $0.10 instead of $0.05 - better recovery value, still fills quickly
+        fallback_price = 0.10
         log(
-            f"   🚨 [{symbol}] EMERGENCY SELL (FALLBACK): Exiting {size:.2f} shares at ${fallback_price:.2f} due to {reason}"
+            f"   🚨 [{symbol}] EMERGENCY SELL (FINAL FALLBACK): Placing GTC at ${fallback_price:.2f} due to {reason}"
         )
 
         result = place_limit_order(
@@ -142,12 +152,12 @@ def emergency_sell_position(
         if result.get("success"):
             order_id = result.get("order_id", "unknown")
             log(
-                f"   ✅ [{symbol}] Emergency sell order placed (fallback): {size:.2f} @ ${fallback_price:.2f} (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
+                f"   ✅ [{symbol}] Emergency sell order placed (GTC fallback): {size:.2f} @ ${fallback_price:.2f} (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
             )
             return True
         else:
             log_error(
-                f"[{symbol}] Emergency sell failed (both attempts): {result.get('error', 'unknown error')}"
+                f"[{symbol}] Emergency sell failed (all attempts): {result.get('error', 'unknown error')}"
             )
             return False
 

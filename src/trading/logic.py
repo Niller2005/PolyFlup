@@ -331,43 +331,59 @@ def _prepare_trade_params(
                 log("")
         return
 
-    # MID-MARKET PRICING: Balance between maker rebates and faster fills
-    # Calculate mid-market price for better fill rates while maintaining decent pricing
+    # DYNAMIC SPREAD-BASED PRICING:
+    # - Tight spreads (≤5 cents): Use taker pricing for immediate fills
+    # - Wide spreads (>5 cents): Use mid-market + $0.01 for better pricing
     best_bid_val = float(best_bid)
     best_ask_val = float(best_ask)
-    mid_market = (best_bid_val + best_ask_val) / 2.0
+    spread = best_ask_val - best_bid_val
+
+    # Threshold for tight vs wide spread (can be adjusted via settings)
+    TIGHT_SPREAD_THRESHOLD = 0.05  # 5 cents
 
     if actual_side == "UP":
-        # Price slightly above mid-market for UP tokens
-        # This improves fill rate vs pure maker while still being competitive
         token_id = up_id
         side = "UP"
-        price = round(mid_market + 0.01, 2)  # Mid + 1 cent
 
-        # Clamp to valid range and ensure we're between bid/ask
-        price = max(best_bid_val + 0.01, min(best_ask_val, price))
+        if spread <= TIGHT_SPREAD_THRESHOLD:
+            # TIGHT SPREAD: Use taker pricing (hit the ask) for immediate fill
+            price = best_ask_val
+            pricing_strategy = "taker (tight spread)"
+        else:
+            # WIDE SPREAD: Use mid-market pricing for better value
+            mid_market = (best_bid_val + best_ask_val) / 2.0
+            price = round(mid_market + 0.01, 2)  # Mid + 1 cent
+            # Clamp to valid range
+            price = max(best_bid_val + 0.01, min(best_ask_val, price))
+            pricing_strategy = "mid-market (wide spread)"
 
         if verbose:
             log(
-                f"   💹 [{symbol}] {side} pricing: bid=${best_bid_val:.2f}, mid=${mid_market:.2f}, ask=${best_ask_val:.2f} → ${price:.2f}"
+                f"   💹 [{symbol}] {side} pricing: bid=${best_bid_val:.2f}, ask=${best_ask_val:.2f}, spread=${spread:.2f} → ${price:.2f} ({pricing_strategy})"
             )
     else:
-        # Price slightly below mid-market for DOWN tokens
         token_id = down_id
         side = "DOWN"
         # DOWN token pricing: if UP ask is 0.60, DOWN bid is 0.40 (1 - 0.60)
         down_best_bid = 1.0 - best_ask_val
         down_best_ask = 1.0 - best_bid_val
-        down_mid_market = (down_best_bid + down_best_ask) / 2.0
+        down_spread = down_best_ask - down_best_bid  # Should equal UP spread
 
-        price = round(down_mid_market + 0.01, 2)  # Mid + 1 cent
-
-        # Clamp to valid range
-        price = max(down_best_bid + 0.01, min(down_best_ask, price))
+        if down_spread <= TIGHT_SPREAD_THRESHOLD:
+            # TIGHT SPREAD: Use taker pricing (hit the ask)
+            price = down_best_ask
+            pricing_strategy = "taker (tight spread)"
+        else:
+            # WIDE SPREAD: Use mid-market pricing
+            down_mid_market = (down_best_bid + down_best_ask) / 2.0
+            price = round(down_mid_market + 0.01, 2)  # Mid + 1 cent
+            # Clamp to valid range
+            price = max(down_best_bid + 0.01, min(down_best_ask, price))
+            pricing_strategy = "mid-market (wide spread)"
 
         if verbose:
             log(
-                f"   💹 [{symbol}] {side} pricing: bid=${down_best_bid:.2f}, mid=${down_mid_market:.2f}, ask=${down_best_ask:.2f} → ${price:.2f}"
+                f"   💹 [{symbol}] {side} pricing: bid=${down_best_bid:.2f}, ask=${down_best_ask:.2f}, spread=${down_spread:.2f} → ${price:.2f} ({pricing_strategy})"
             )
 
     # NEW: Check if we already have a trade for THIS SIDE in this window
