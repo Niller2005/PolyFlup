@@ -774,6 +774,82 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                         f"🔍 [{symbol}] CANCEL {order_id_short} | Previous status: {current_status}"
                     )
 
+                    # CRITICAL: Check if hedge order exists and has filled
+                    # If entry cancelled but hedge filled, we have unhedged exposure
+                    c.execute(
+                        "SELECT hedge_order_id, token_id, size FROM trades WHERE id = ?",
+                        (trade_id,),
+                    )
+                    hedge_check = c.fetchone()
+
+                    if hedge_check:
+                        hedge_order_id, token_id, size = hedge_check
+
+                        if hedge_order_id:
+                            # Check if hedge order has filled
+                            try:
+                                from src.trading.orders import get_order
+
+                                hedge_order = get_order(hedge_order_id)
+                                if hedge_order:
+                                    hedge_status = hedge_order.get("status", "").upper()
+
+                                    if hedge_status == "MATCHED":
+                                        # Hedge filled but entry cancelled - UNHEDGED EXPOSURE!
+                                        log(
+                                            f"🚨 [{symbol}] Entry cancelled but hedge FILLED - Emergency selling hedge position!"
+                                        )
+
+                                        # Emergency sell the hedge position
+                                        from src.trading.execution import (
+                                            emergency_sell_position,
+                                        )
+
+                                        # Need to determine hedge token_id
+                                        # Entry was for token_id, hedge is opposite
+                                        from src.trading.execution import get_token_ids
+
+                                        up_id, down_id = get_token_ids(symbol)
+                                        if up_id and down_id:
+                                            # If entry was UP, hedge is DOWN and vice versa
+                                            hedge_token_id = (
+                                                down_id if side == "UP" else up_id
+                                            )
+
+                                            emergency_sell_position(
+                                                symbol,
+                                                hedge_token_id,
+                                                size,
+                                                reason="entry order cancelled after hedge filled",
+                                            )
+
+                                        # Send Discord alert
+                                        send_discord(
+                                            f"🚨 **[{symbol}] #{trade_id} Entry cancelled after hedge filled!** Attempted emergency sell of hedge position."
+                                        )
+
+                                    else:
+                                        # Hedge not filled yet - just cancel it
+                                        log(
+                                            f"   🚫 [{symbol}] Cancelling unfilled hedge order..."
+                                        )
+                                        from src.trading.orders import cancel_order
+
+                                        cancel_result = cancel_order(hedge_order_id)
+                                        if cancel_result:
+                                            log(
+                                                f"   ✅ [{symbol}] Hedge order cancelled successfully"
+                                            )
+                                        else:
+                                            log(
+                                                f"   ⚠️  [{symbol}] Failed to cancel hedge order"
+                                            )
+
+                            except Exception as e:
+                                log_error(
+                                    f"[{symbol}] Error checking/handling hedge after entry cancel: {e}"
+                                )
+
                     # Clear order_id and mark as cancelled to prevent monitoring ghost orders
                     c.execute(
                         "UPDATE trades SET order_id = NULL, order_status = 'CANCELLED' WHERE id = ?",
