@@ -343,256 +343,300 @@ def place_entry_and_hedge_atomic(
         entry_result = results[0]
         hedge_result = results[1]
 
-        # CRITICAL: If hedge fails, cancel entry to prevent unhedged position
-        if entry_result.get("success") and not hedge_result.get("success"):
-            entry_order_id = entry_result.get("order_id")
+        entry_success = entry_result.get("success")
+        hedge_success = hedge_result.get("success")
+
+        # CRITICAL: Handle order placement failures
+        # If one succeeds and other fails, clean up the successful one
+
+        # Case 1: Entry failed (e.g., POST_ONLY crossed book)
+        if not entry_success and hedge_success:
+            hedge_order_id = hedge_result.get("order_id")
+            log(f"   ❌ [{symbol}] Entry order failed: {entry_result.get('error')}")
             log(
-                f"   ⚠️  [{symbol}] Hedge order failed, cancelling entry order {entry_order_id[:10]} to prevent unhedged position"
+                f"   ⚠️  [{symbol}] Hedge placed but entry failed - cancelling hedge {hedge_order_id[:10]}"
+            )
+            try:
+                cancel_order(hedge_order_id)
+                log(f"   ✅ [{symbol}] Hedge order cancelled successfully")
+            except Exception as cancel_err:
+                log_error(
+                    f"[{symbol}] Failed to cancel hedge order {hedge_order_id[:10]}: {cancel_err}"
+                )
+                # Try to sell the hedge if it filled quickly
+                log(f"   💥 [{symbol}] Attempting emergency sell of hedge")
+                time.sleep(2)  # Wait for potential fill
+                hedge_token_id = hedge_result.get("token_id") or (
+                    up_id if hedge_side == "UP" else down_id
+                )
+                emergency_sell_position(
+                    symbol=symbol,
+                    token_id=hedge_token_id,
+                    size=entry_size,
+                    reason="hedge without entry",
+                    entry_order_id=hedge_order_id,
+                )
+            return None, None
+
+        # Case 2: Hedge failed (original logic)
+        if entry_success and not hedge_success:
+            entry_order_id = entry_result.get("order_id")
+            log(f"   ❌ [{symbol}] Hedge order failed: {hedge_result.get('error')}")
+            log(
+                f"   ⚠️  [{symbol}] Entry placed but hedge failed - cancelling entry {entry_order_id[:10]}"
             )
             try:
                 cancel_order(entry_order_id)
                 log(f"   ✅ [{symbol}] Entry order cancelled successfully")
-                return None, None
             except Exception as cancel_err:
                 log_error(
-                    f"[{symbol}] CRITICAL: Failed to cancel entry order {entry_order_id[:10]}: {cancel_err}"
+                    f"[{symbol}] Failed to cancel entry order {entry_order_id[:10]}: {cancel_err}"
                 )
-                # Continue with original flow - entry might already be filled
+                # Try to sell the entry if it filled quickly
+                log(f"   💥 [{symbol}] Attempting emergency sell of entry")
+                time.sleep(2)  # Wait for potential fill
+                emergency_sell_position(
+                    symbol=symbol,
+                    token_id=entry_token_id,
+                    size=entry_size,
+                    reason="entry without hedge",
+                    entry_order_id=entry_order_id,
+                )
+            return None, None
 
-        # Log results
-        if entry_result.get("success"):
+        # Case 3: Both failed
+        if not entry_success and not hedge_success:
             log(
-                f"   ✅ [{symbol}] Entry order placed: {entry_side} {entry_size:.1f} @ ${entry_price:.2f} (ID: {entry_result.get('order_id', 'unknown')[:10]})"
+                f"   ❌ [{symbol}] Both orders failed - Entry: {entry_result.get('error')}, Hedge: {hedge_result.get('error')}"
             )
-        else:
-            log(f"   ❌ [{symbol}] Entry order failed: {entry_result.get('error')}")
+            return None, None
 
-        if hedge_result.get("success"):
-            log(
-                f"   ✅ [{symbol}] Hedge order placed: {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f} (ID: {hedge_result.get('order_id', 'unknown')[:10]})"
-            )
-        else:
-            log(f"   ❌ [{symbol}] Hedge order failed: {hedge_result.get('error')}")
+        # Log results for successful placements (both orders succeeded)
+        log(
+            f"   ✅ [{symbol}] Entry order placed: {entry_side} {entry_size:.1f} @ ${entry_price:.2f} (ID: {entry_result.get('order_id', 'unknown')[:10]})"
+        )
+        log(
+            f"   ✅ [{symbol}] Hedge order placed: {hedge_side} {entry_size:.1f} @ ${hedge_price:.2f} (ID: {hedge_result.get('order_id', 'unknown')[:10]})"
+        )
 
         # MONITOR: Poll both orders for fill status
         # If BOTH fill within timeout, save trade. Otherwise cancel BOTH.
-        if entry_result.get("success") and hedge_result.get("success"):
-            from src.config.settings import (
-                HEDGE_FILL_TIMEOUT_SECONDS,
-                HEDGE_POLL_INTERVAL_SECONDS,
-            )
+        from src.config.settings import (
+            HEDGE_FILL_TIMEOUT_SECONDS,
+            HEDGE_POLL_INTERVAL_SECONDS,
+        )
 
-            entry_order_id = entry_result.get("order_id")
-            hedge_order_id = hedge_result.get("order_id")
+        entry_order_id = entry_result.get("order_id")
+        hedge_order_id = hedge_result.get("order_id")
 
-            if not entry_order_id or not hedge_order_id:
-                log(f"   ⚠️  [{symbol}] Missing order IDs, skipping monitoring")
-                return None, None
+        if not entry_order_id or not hedge_order_id:
+            log(f"   ⚠️  [{symbol}] Missing order IDs, skipping monitoring")
+            return None, None
 
+        log(
+            f"   ⏱️  [{symbol}] Monitoring fills for {HEDGE_FILL_TIMEOUT_SECONDS}s (polling every {HEDGE_POLL_INTERVAL_SECONDS}s)..."
+        )
+
+        elapsed = 0
+        both_filled = False
+
+        while elapsed < HEDGE_FILL_TIMEOUT_SECONDS:
+            time.sleep(HEDGE_POLL_INTERVAL_SECONDS)
+            elapsed += HEDGE_POLL_INTERVAL_SECONDS
+
+            try:
+                # Check both orders
+                entry_status = get_order(entry_order_id)
+                hedge_status = get_order(hedge_order_id)
+
+                entry_filled_size = 0.0
+                hedge_filled_size = 0.0
+
+                if entry_status:
+                    entry_filled_size = float(entry_status.get("size_matched", 0))
+
+                if hedge_status:
+                    hedge_filled_size = float(hedge_status.get("size_matched", 0))
+
+                entry_filled = entry_filled_size >= (entry_size - 0.01)
+                hedge_filled = hedge_filled_size >= (entry_size - 0.01)
+
+                # SUCCESS: Both filled!
+                if entry_filled and hedge_filled:
+                    log(
+                        f"   ✅ [{symbol}] Both orders filled after {elapsed}s - trade complete!"
+                    )
+                    both_filled = True
+                    break
+
+                # Log partial fills
+                if entry_filled_size > 0 or hedge_filled_size > 0:
+                    log(
+                        f"   ⏳ [{symbol}] Partial fills ({elapsed}s): Entry {entry_filled_size:.2f}/{entry_size:.1f}, Hedge {hedge_filled_size:.2f}/{entry_size:.1f}"
+                    )
+
+            except Exception as poll_err:
+                log(f"   ⚠️  [{symbol}] Error polling order status: {poll_err}")
+
+        # TIMEOUT: Cancel BOTH orders if not both filled
+        if not both_filled:
             log(
-                f"   ⏱️  [{symbol}] Monitoring fills for {HEDGE_FILL_TIMEOUT_SECONDS}s (polling every {HEDGE_POLL_INTERVAL_SECONDS}s)..."
+                f"   ❌ [{symbol}] TIMEOUT: Both orders not filled after {HEDGE_FILL_TIMEOUT_SECONDS}s - cancelling both"
             )
 
-            elapsed = 0
-            both_filled = False
+            # Check final fill status before cancelling
+            try:
+                final_entry_status = get_order(entry_order_id)
+                final_hedge_status = get_order(hedge_order_id)
 
-            while elapsed < HEDGE_FILL_TIMEOUT_SECONDS:
-                time.sleep(HEDGE_POLL_INTERVAL_SECONDS)
-                elapsed += HEDGE_POLL_INTERVAL_SECONDS
+                final_entry_filled_size = 0.0
+                final_hedge_filled_size = 0.0
 
-                try:
-                    # Check both orders
-                    entry_status = get_order(entry_order_id)
-                    hedge_status = get_order(hedge_order_id)
+                if final_entry_status:
+                    final_entry_filled_size = float(
+                        final_entry_status.get("size_matched", 0)
+                    )
 
-                    entry_filled_size = 0.0
-                    hedge_filled_size = 0.0
+                if final_hedge_status:
+                    final_hedge_filled_size = float(
+                        final_hedge_status.get("size_matched", 0)
+                    )
 
-                    if entry_status:
-                        entry_filled_size = float(entry_status.get("size_matched", 0))
+                final_entry_filled = final_entry_filled_size >= (entry_size - 0.01)
+                final_hedge_filled = final_hedge_filled_size >= (entry_size - 0.01)
 
-                    if hedge_status:
-                        hedge_filled_size = float(hedge_status.get("size_matched", 0))
+                # CRITICAL: Handle partial fills with emergency sell
+                # NEW BEHAVIOR: Emergency sell BOTH positions on ANY partial fill
+                # to prevent orphaned positions
+                if final_entry_filled and not final_hedge_filled:
+                    # Entry filled but hedge didn't (or partially filled)
+                    log(
+                        f"   🚨 [{symbol}] CRITICAL: Entry filled ({final_entry_filled_size:.2f}) but hedge timed out (filled {final_hedge_filled_size:.2f}/{entry_size:.1f})"
+                    )
 
-                    entry_filled = entry_filled_size >= (entry_size - 0.01)
-                    hedge_filled = hedge_filled_size >= (entry_size - 0.01)
+                    # Emergency sell entry position
+                    log(
+                        f"   💥 [{symbol}] Emergency selling entry position ({final_entry_filled_size:.2f} shares)"
+                    )
+                    emergency_sell_position(
+                        symbol=symbol,
+                        token_id=entry_token_id,
+                        size=final_entry_filled_size,
+                        reason="hedge timeout after entry fill",
+                        entry_order_id=entry_order_id,
+                    )
 
-                    # SUCCESS: Both filled!
-                    if entry_filled and hedge_filled:
+                    # If hedge partially filled, emergency sell those shares too
+                    if final_hedge_filled_size > 0.01:
                         log(
-                            f"   ✅ [{symbol}] Both orders filled after {elapsed}s - trade complete!"
-                        )
-                        both_filled = True
-                        break
-
-                    # Log partial fills
-                    if entry_filled_size > 0 or hedge_filled_size > 0:
-                        log(
-                            f"   ⏳ [{symbol}] Partial fills ({elapsed}s): Entry {entry_filled_size:.2f}/{entry_size:.1f}, Hedge {hedge_filled_size:.2f}/{entry_size:.1f}"
-                        )
-
-                except Exception as poll_err:
-                    log(f"   ⚠️  [{symbol}] Error polling order status: {poll_err}")
-
-            # TIMEOUT: Cancel BOTH orders if not both filled
-            if not both_filled:
-                log(
-                    f"   ❌ [{symbol}] TIMEOUT: Both orders not filled after {HEDGE_FILL_TIMEOUT_SECONDS}s - cancelling both"
-                )
-
-                # Check final fill status before cancelling
-                try:
-                    final_entry_status = get_order(entry_order_id)
-                    final_hedge_status = get_order(hedge_order_id)
-
-                    final_entry_filled_size = 0.0
-                    final_hedge_filled_size = 0.0
-
-                    if final_entry_status:
-                        final_entry_filled_size = float(
-                            final_entry_status.get("size_matched", 0)
-                        )
-
-                    if final_hedge_status:
-                        final_hedge_filled_size = float(
-                            final_hedge_status.get("size_matched", 0)
-                        )
-
-                    final_entry_filled = final_entry_filled_size >= (entry_size - 0.01)
-                    final_hedge_filled = final_hedge_filled_size >= (entry_size - 0.01)
-
-                    # CRITICAL: Handle partial fills with emergency sell
-                    # NEW BEHAVIOR: Emergency sell BOTH positions on ANY partial fill
-                    # to prevent orphaned positions
-                    if final_entry_filled and not final_hedge_filled:
-                        # Entry filled but hedge didn't (or partially filled)
-                        log(
-                            f"   🚨 [{symbol}] CRITICAL: Entry filled ({final_entry_filled_size:.2f}) but hedge timed out (filled {final_hedge_filled_size:.2f}/{entry_size:.1f})"
-                        )
-
-                        # Emergency sell entry position
-                        log(
-                            f"   💥 [{symbol}] Emergency selling entry position ({final_entry_filled_size:.2f} shares)"
-                        )
-                        emergency_sell_position(
-                            symbol=symbol,
-                            token_id=entry_token_id,
-                            size=final_entry_filled_size,
-                            reason="hedge timeout after entry fill",
-                            entry_order_id=entry_order_id,
-                        )
-
-                        # If hedge partially filled, emergency sell those shares too
-                        if final_hedge_filled_size > 0.01:
-                            log(
-                                f"   💥 [{symbol}] Emergency selling partial hedge position ({final_hedge_filled_size:.2f} shares)"
-                            )
-                            emergency_sell_position(
-                                symbol=symbol,
-                                token_id=hedge_token_id,
-                                size=final_hedge_filled_size,
-                                reason="partial hedge fill cleanup",
-                                entry_order_id=hedge_order_id,
-                            )
-
-                        # Cancel unfilled hedge
-                        try:
-                            cancel_order(hedge_order_id)
-                            log(f"   ✅ [{symbol}] Hedge order cancelled")
-                        except Exception as e:
-                            log_error(f"[{symbol}] Error cancelling hedge: {e}")
-
-                    elif final_hedge_filled and not final_entry_filled:
-                        # Hedge filled but entry didn't (or partially filled)
-                        log(
-                            f"   🚨 [{symbol}] CRITICAL: Hedge filled ({final_hedge_filled_size:.2f}) but entry timed out (filled {final_entry_filled_size:.2f}/{entry_size:.1f})"
-                        )
-
-                        # Emergency sell hedge position
-                        log(
-                            f"   💥 [{symbol}] Emergency selling hedge position ({final_hedge_filled_size:.2f} shares)"
+                            f"   💥 [{symbol}] Emergency selling partial hedge position ({final_hedge_filled_size:.2f} shares)"
                         )
                         emergency_sell_position(
                             symbol=symbol,
                             token_id=hedge_token_id,
                             size=final_hedge_filled_size,
-                            reason="entry timeout after hedge fill",
+                            reason="partial hedge fill cleanup",
                             entry_order_id=hedge_order_id,
                         )
 
-                        # If entry partially filled, emergency sell those shares too
-                        if final_entry_filled_size > 0.01:
-                            log(
-                                f"   💥 [{symbol}] Emergency selling partial entry position ({final_entry_filled_size:.2f} shares)"
-                            )
-                            emergency_sell_position(
-                                symbol=symbol,
-                                token_id=entry_token_id,
-                                size=final_entry_filled_size,
-                                reason="partial entry fill cleanup",
-                                entry_order_id=entry_order_id,
-                            )
+                    # Cancel unfilled hedge
+                    try:
+                        cancel_order(hedge_order_id)
+                        log(f"   ✅ [{symbol}] Hedge order cancelled")
+                    except Exception as e:
+                        log_error(f"[{symbol}] Error cancelling hedge: {e}")
 
-                        # Cancel unfilled entry
-                        try:
-                            cancel_order(entry_order_id)
-                            log(f"   ✅ [{symbol}] Entry order cancelled")
-                        except Exception as e:
-                            log_error(f"[{symbol}] Error cancelling entry: {e}")
-
-                    else:
-                        # Neither filled or both partially filled - cancel both and sell any partials
-                        log(
-                            f"   🚨 [{symbol}] TIMEOUT: Neither order fully filled - cleaning up"
-                        )
-
-                        # Sell any partial entry fills
-                        if final_entry_filled_size > 0.01:
-                            log(
-                                f"   💥 [{symbol}] Emergency selling partial entry position ({final_entry_filled_size:.2f} shares)"
-                            )
-                            emergency_sell_position(
-                                symbol=symbol,
-                                token_id=entry_token_id,
-                                size=final_entry_filled_size,
-                                reason="partial entry fill cleanup",
-                                entry_order_id=entry_order_id,
-                            )
-
-                        # Sell any partial hedge fills
-                        if final_hedge_filled_size > 0.01:
-                            log(
-                                f"   💥 [{symbol}] Emergency selling partial hedge position ({final_hedge_filled_size:.2f} shares)"
-                            )
-                            emergency_sell_position(
-                                symbol=symbol,
-                                token_id=hedge_token_id,
-                                size=final_hedge_filled_size,
-                                reason="partial hedge fill cleanup",
-                                entry_order_id=hedge_order_id,
-                            )
-
-                        # Cancel entry
-                        try:
-                            cancel_order(entry_order_id)
-                            log(f"   ✅ [{symbol}] Entry order cancelled")
-                        except Exception as e:
-                            log_error(f"[{symbol}] Error cancelling entry: {e}")
-
-                        # Cancel hedge
-                        try:
-                            cancel_order(hedge_order_id)
-                            log(f"   ✅ [{symbol}] Hedge order cancelled")
-                        except Exception as e:
-                            log_error(f"[{symbol}] Error cancelling hedge: {e}")
-
-                except Exception as timeout_err:
-                    log_error(
-                        f"[{symbol}] Error handling timeout with partial fills: {timeout_err}"
+                elif final_hedge_filled and not final_entry_filled:
+                    # Hedge filled but entry didn't (or partially filled)
+                    log(
+                        f"   🚨 [{symbol}] CRITICAL: Hedge filled ({final_hedge_filled_size:.2f}) but entry timed out (filled {final_entry_filled_size:.2f}/{entry_size:.1f})"
                     )
 
-                log(f"   🚫 [{symbol}] Trade skipped - atomic pair failed")
-                return None, None
+                    # Emergency sell hedge position
+                    log(
+                        f"   💥 [{symbol}] Emergency selling hedge position ({final_hedge_filled_size:.2f} shares)"
+                    )
+                    emergency_sell_position(
+                        symbol=symbol,
+                        token_id=hedge_token_id,
+                        size=final_hedge_filled_size,
+                        reason="entry timeout after hedge fill",
+                        entry_order_id=hedge_order_id,
+                    )
+
+                    # If entry partially filled, emergency sell those shares too
+                    if final_entry_filled_size > 0.01:
+                        log(
+                            f"   💥 [{symbol}] Emergency selling partial entry position ({final_entry_filled_size:.2f} shares)"
+                        )
+                        emergency_sell_position(
+                            symbol=symbol,
+                            token_id=entry_token_id,
+                            size=final_entry_filled_size,
+                            reason="partial entry fill cleanup",
+                            entry_order_id=entry_order_id,
+                        )
+
+                    # Cancel unfilled entry
+                    try:
+                        cancel_order(entry_order_id)
+                        log(f"   ✅ [{symbol}] Entry order cancelled")
+                    except Exception as e:
+                        log_error(f"[{symbol}] Error cancelling entry: {e}")
+
+                else:
+                    # Neither filled or both partially filled - cancel both and sell any partials
+                    log(
+                        f"   🚨 [{symbol}] TIMEOUT: Neither order fully filled - cleaning up"
+                    )
+
+                    # Sell any partial entry fills
+                    if final_entry_filled_size > 0.01:
+                        log(
+                            f"   💥 [{symbol}] Emergency selling partial entry position ({final_entry_filled_size:.2f} shares)"
+                        )
+                        emergency_sell_position(
+                            symbol=symbol,
+                            token_id=entry_token_id,
+                            size=final_entry_filled_size,
+                            reason="partial entry fill cleanup",
+                            entry_order_id=entry_order_id,
+                        )
+
+                    # Sell any partial hedge fills
+                    if final_hedge_filled_size > 0.01:
+                        log(
+                            f"   💥 [{symbol}] Emergency selling partial hedge position ({final_hedge_filled_size:.2f} shares)"
+                        )
+                        emergency_sell_position(
+                            symbol=symbol,
+                            token_id=hedge_token_id,
+                            size=final_hedge_filled_size,
+                            reason="partial hedge fill cleanup",
+                            entry_order_id=hedge_order_id,
+                        )
+
+                    # Cancel entry
+                    try:
+                        cancel_order(entry_order_id)
+                        log(f"   ✅ [{symbol}] Entry order cancelled")
+                    except Exception as e:
+                        log_error(f"[{symbol}] Error cancelling entry: {e}")
+
+                    # Cancel hedge
+                    try:
+                        cancel_order(hedge_order_id)
+                        log(f"   ✅ [{symbol}] Hedge order cancelled")
+                    except Exception as e:
+                        log_error(f"[{symbol}] Error cancelling hedge: {e}")
+
+            except Exception as timeout_err:
+                log_error(
+                    f"[{symbol}] Error handling timeout with partial fills: {timeout_err}"
+                )
+
+            log(f"   🚫 [{symbol}] Trade skipped - atomic pair failed")
+            return None, None
 
         return entry_result, hedge_result
 
