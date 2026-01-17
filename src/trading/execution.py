@@ -304,6 +304,7 @@ def emergency_sell_position(
     """
     Emergency market sell of a filled position when hedge fails.
     Uses best bid price to immediately exit the position.
+    Falls back to simple limit order at 0.05 if orderbook unavailable.
 
     Returns True if sell order placed successfully, False otherwise.
     """
@@ -312,46 +313,66 @@ def emergency_sell_position(
         clob_client = get_clob_client()
         orderbook = clob_client.get_order_book(token_id)
 
-        if not orderbook or not isinstance(orderbook, dict):
-            log_error(f"[{symbol}] Cannot emergency sell: orderbook unavailable")
-            return False
+        best_bid = None
+        if orderbook and isinstance(orderbook, dict):
+            bids = orderbook.get("bids", [])
+            if bids and len(bids) > 0:
+                best_bid = float(bids[0].get("price", 0))
 
-        bids = orderbook.get("bids", [])
-        if not bids or len(bids) == 0:
-            log_error(f"[{symbol}] Cannot emergency sell: no bids in orderbook")
-            return False
-
-        # Use best bid price for immediate fill (taker order)
-        best_bid = float(bids[0].get("price", 0))
-
-        if best_bid <= 0.01:
-            log_error(
-                f"[{symbol}] Cannot emergency sell: best bid too low (${best_bid:.2f})"
+        # If we have a valid best bid, use it
+        if best_bid and best_bid > 0.01:
+            log(
+                f"   🚨 [{symbol}] EMERGENCY SELL: Exiting {size:.2f} shares at ${best_bid:.2f} (best bid) due to {reason}"
             )
-            return False
 
+            # Place SELL limit order at best bid (should fill immediately as taker)
+            result = place_limit_order(
+                token_id=token_id,
+                price=best_bid,
+                size=size,
+                side=SELL,
+                order_type="FOK",  # Fill-or-Kill: fill immediately or cancel
+            )
+
+            if result.get("success"):
+                order_id = result.get("order_id", "unknown")
+                log(
+                    f"   ✅ [{symbol}] Emergency sell order placed: {size:.2f} @ ${best_bid:.2f} (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
+                )
+                return True
+            else:
+                log_error(
+                    f"[{symbol}] Emergency sell at best bid failed: {result.get('error', 'unknown error')}"
+                )
+        else:
+            log(
+                f"   ⚠️  [{symbol}] Orderbook unavailable or no bids - using fallback price"
+            )
+
+        # FALLBACK: If orderbook unavailable or FOK failed, place simple limit order at low price
+        # Use $0.05 to ensure quick fill while recovering some value
+        fallback_price = 0.05
         log(
-            f"   🚨 [{symbol}] EMERGENCY SELL: Exiting {size:.2f} shares at ${best_bid:.2f} (best bid) due to {reason}"
+            f"   🚨 [{symbol}] EMERGENCY SELL (FALLBACK): Exiting {size:.2f} shares at ${fallback_price:.2f} due to {reason}"
         )
 
-        # Place SELL limit order at best bid (should fill immediately as taker)
         result = place_limit_order(
             token_id=token_id,
-            price=best_bid,
+            price=fallback_price,
             size=size,
             side=SELL,
-            order_type="FOK",  # Fill-or-Kill: fill immediately or cancel
+            order_type="GTC",  # Good-til-cancelled: will sit on book until filled
         )
 
         if result.get("success"):
             order_id = result.get("order_id", "unknown")
             log(
-                f"   ✅ [{symbol}] Emergency sell order placed: {size:.2f} @ ${best_bid:.2f} (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
+                f"   ✅ [{symbol}] Emergency sell order placed (fallback): {size:.2f} @ ${fallback_price:.2f} (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
             )
             return True
         else:
             log_error(
-                f"[{symbol}] Emergency sell failed: {result.get('error', 'unknown error')}"
+                f"[{symbol}] Emergency sell failed (both attempts): {result.get('error', 'unknown error')}"
             )
             return False
 

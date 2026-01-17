@@ -521,13 +521,39 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                     # If hedge filled but entry not filled (or cancelled), we have unhedged exposure
                     if entry_status not in ["FILLED", "HEDGED"] or not entry_order_id:
                         log(
-                            f"🚨 [{symbol}] Hedge filled but entry NOT filled (status: {entry_status}) - Emergency selling hedge!"
+                            f"🚨 [{symbol}] Hedge filled but entry NOT filled (status: {entry_status})"
                         )
 
-                        # Emergency sell the hedge position immediately
+                        # STEP 1: Cancel the unfilled entry order (if still open)
+                        if entry_order_id and entry_status not in ["CANCELLED"]:
+                            try:
+                                from src.trading.orders import cancel_order
+
+                                log(
+                                    f"   🚫 [{symbol}] Cancelling unfilled entry order..."
+                                )
+                                cancel_result = cancel_order(entry_order_id)
+                                if cancel_result:
+                                    log(
+                                        f"   ✅ [{symbol}] Entry order cancelled successfully"
+                                    )
+                                else:
+                                    log(
+                                        f"   ⚠️  [{symbol}] Failed to cancel entry order"
+                                    )
+                            except Exception as e:
+                                log_error(
+                                    f"[{symbol}] Error cancelling entry order: {e}"
+                                )
+
+                        # STEP 2: Emergency sell the filled hedge position
                         from src.trading.execution import (
                             emergency_sell_position,
                             get_token_ids,
+                        )
+
+                        log(
+                            f"   🚨 [{symbol}] Emergency selling filled hedge position..."
                         )
 
                         # Determine hedge token_id (opposite of entry)
@@ -535,17 +561,27 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                         if up_id and down_id:
                             hedge_token_id = down_id if trade_side == "UP" else up_id
 
-                            emergency_sell_position(
+                            sell_success = emergency_sell_position(
                                 symbol,
                                 hedge_token_id,
                                 size,
                                 reason="hedge filled but entry not filled",
                             )
 
-                            # Send Discord alert
-                            send_discord(
-                                f"🚨 **[{symbol}] #{trade_id} Hedge filled but entry failed!** Emergency sold hedge position."
-                            )
+                            if sell_success:
+                                log(f"   ✅ [{symbol}] Hedge position emergency sold")
+                                # Send Discord alert
+                                send_discord(
+                                    f"🚨 **[{symbol}] #{trade_id} Hedge filled but entry failed!** Entry cancelled, hedge emergency sold."
+                                )
+                            else:
+                                log(
+                                    f"   ⚠️  [{symbol}] Emergency sell failed - hedge position still open on exchange"
+                                )
+                                # Send Discord alert for manual intervention
+                                send_discord(
+                                    f"🚨 **[{symbol}] #{trade_id} CRITICAL: Hedge filled but entry failed!** Entry cancelled but emergency sell failed. **MANUAL ACTION REQUIRED: Sell hedge position manually on Polymarket.**"
+                                )
 
                             # Mark trade as cancelled
                             c.execute(
