@@ -63,7 +63,7 @@ UNFILLED_TIMEOUT_SECONDS = int(
 
 # Hedge Order Monitoring
 HEDGE_FILL_TIMEOUT_SECONDS = int(
-    os.getenv("HEDGE_FILL_TIMEOUT_SECONDS", "30")
+    os.getenv("HEDGE_FILL_TIMEOUT_SECONDS", "90")
 )  # Time to wait for hedge to fill before cancelling entry
 HEDGE_POLL_INTERVAL_SECONDS = int(
     os.getenv("HEDGE_POLL_INTERVAL_SECONDS", "5")
