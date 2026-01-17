@@ -294,8 +294,9 @@ def place_entry_and_hedge_atomic(
             hedge_token_id = up_id
             hedge_side = "UP"
 
-        # CRITICAL: Use MAKER pricing for hedge to ensure profitability
-        # Strategy: Entry at TAKER (market) + Hedge at MAKER (limit)
+        # CRITICAL: Use MAKER pricing for BOTH entry and hedge to eliminate fees
+        # Strategy: Entry at MAKER (POST_ONLY) + Hedge at MAKER (POST_ONLY)
+        # Both orders earn 0.15% rebate instead of paying 1.54% taker fee
         # Combined must be <= $0.99 to guarantee profit on merge
         # Hedge price = $0.99 - entry_price
 
@@ -305,22 +306,24 @@ def place_entry_and_hedge_atomic(
         final_combined = entry_price + hedge_price
 
         log(
-            f"   📊 [{symbol}] Hedge using MAKER pricing: ${hedge_price:.2f} (target combined ${final_combined:.2f})"
+            f"   📊 [{symbol}] Both orders using MAKER (POST_ONLY) pricing: Entry ${entry_price:.2f} + Hedge ${hedge_price:.2f} (combined ${final_combined:.2f})"
         )
 
-        # Create batch order
+        # Create batch order - both use POST_ONLY (neg_risk=True) for maker rebates
         orders = [
             {
                 "token_id": entry_token_id,
                 "price": entry_price,
                 "size": entry_size,
                 "side": BUY,
+                "neg_risk": True,  # POST_ONLY: Earn 0.15% rebate, ensure whole number fills
             },
             {
                 "token_id": hedge_token_id,
                 "price": hedge_price,
                 "size": entry_size,
                 "side": BUY,
+                "neg_risk": True,  # POST_ONLY: Earn 0.15% rebate
             },
         ]
 

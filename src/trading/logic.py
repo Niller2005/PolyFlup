@@ -350,16 +350,17 @@ def _prepare_trade_params(
         side = "UP"
 
         if spread <= TIGHT_SPREAD_THRESHOLD:
-            # TIGHT SPREAD: Use taker pricing (hit the ask) for immediate fill
-            price = best_ask_val
-            pricing_strategy = "taker (tight spread)"
+            # TIGHT SPREAD: Use maker pricing (bid + 1 cent) for better economics
+            # POST_ONLY order earns 0.15% rebate instead of 1.54% taker fee
+            price = round(best_bid_val + 0.01, 2)
+            pricing_strategy = "maker (tight spread)"
         else:
             # WIDE SPREAD: Use mid-market pricing for better value
             mid_market = (best_bid_val + best_ask_val) / 2.0
-            price = round(mid_market + 0.01, 2)  # Mid + 1 cent
+            price = round(mid_market, 2)  # Use mid-market directly
             # Clamp to valid range
-            price = max(best_bid_val + 0.01, min(best_ask_val, price))
-            pricing_strategy = "mid-market (wide spread)"
+            price = max(best_bid_val + 0.01, min(best_ask_val - 0.01, price))
+            pricing_strategy = "maker (wide spread)"
 
         if verbose:
             log(
@@ -374,16 +375,16 @@ def _prepare_trade_params(
         down_spread = down_best_ask - down_best_bid  # Should equal UP spread
 
         if down_spread <= TIGHT_SPREAD_THRESHOLD:
-            # TIGHT SPREAD: Use taker pricing (hit the ask)
-            price = down_best_ask
-            pricing_strategy = "taker (tight spread)"
+            # TIGHT SPREAD: Use maker pricing (bid + 1 cent)
+            price = round(down_best_bid + 0.01, 2)
+            pricing_strategy = "maker (tight spread)"
         else:
             # WIDE SPREAD: Use mid-market pricing
             down_mid_market = (down_best_bid + down_best_ask) / 2.0
-            price = round(down_mid_market + 0.01, 2)  # Mid + 1 cent
+            price = round(down_mid_market, 2)  # Use mid-market directly
             # Clamp to valid range
-            price = max(down_best_bid + 0.01, min(down_best_ask, price))
-            pricing_strategy = "mid-market (wide spread)"
+            price = max(down_best_bid + 0.01, min(down_best_ask - 0.01, price))
+            pricing_strategy = "maker (wide spread)"
 
         if verbose:
             log(

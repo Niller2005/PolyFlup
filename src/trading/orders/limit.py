@@ -181,7 +181,9 @@ def place_market_order(
         }
 
 
-def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
+def place_batch_orders(
+    orders: List[Dict[str, Any]], order_type: str = "GTC"
+) -> List[dict]:
     if not orders:
         return []
     validated = []
@@ -208,6 +210,16 @@ def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
         return results
     try:
         _ensure_api_creds(client)
+
+        # Map order_type string to OrderType enum
+        otype_map = {
+            "GTC": OrderType.GTC,
+            "FOK": OrderType.FOK,
+            "FAK": OrderType.FAK,
+            "GTD": OrderType.GTD,
+        }
+        otype = otype_map.get(order_type, OrderType.GTC)
+
         batch = []
         for op in validated:
             oa = OrderArgs(
@@ -215,9 +227,10 @@ def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
                 price=op["price"],
                 size=op["size"],
                 side=op.get("side", BUY),
+                neg_risk=op.get("neg_risk", False),  # POST_ONLY when True
             )
             signed = client.create_order(oa)
-            batch.append(PostOrdersArgs(order=signed, orderType=OrderType.GTC))  # type: ignore
+            batch.append(PostOrdersArgs(order=signed, orderType=otype))  # type: ignore
         responses: Any = client.post_orders(batch)
         for r in responses:
             if isinstance(r, dict):
