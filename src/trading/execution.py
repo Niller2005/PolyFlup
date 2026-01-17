@@ -22,13 +22,12 @@ def emergency_sell_position(
     symbol: str,
     token_id: str,
     size: float,
-    reason: str = "hedge timeout",
-    entry_order_id: str = None,
+    reason: str,
+    entry_order_id: Optional[str] = None,
 ) -> bool:
     """
-    Emergency market sell of a filled position when hedge fails.
-    Uses best bid price to immediately exit the position.
-    Falls back to simple limit order at 0.05 if orderbook unavailable.
+    Emergency sell position using market order for immediate execution.
+    Falls back to progressive pricing FOK orders if market order fails.
 
     Args:
         symbol: Trading symbol
@@ -84,8 +83,35 @@ def emergency_sell_position(
                     f"[{symbol}] Error cancelling exit order before emergency sell: {cancel_exit_err}"
                 )
                 # Continue anyway - maybe the exit order is already filled
+
+        # NEW STRATEGY: Use market order for immediate execution at best available price
+        log(
+            f"   🚨 [{symbol}] EMERGENCY SELL: Placing MARKET order for {size:.2f} shares due to {reason}"
+        )
+
+        from src.trading.orders.limit import place_market_order
+
+        result = place_market_order(
+            token_id=token_id,
+            size=size,
+            side=SELL,
+            order_type="FOK",  # Fill-or-Kill: execute immediately or cancel
+            silent_on_balance_error=False,
+        )
+
+        if result.get("success"):
+            order_id = result.get("order_id", "unknown")
+            log(
+                f"   ✅ [{symbol}] Emergency MARKET sell filled: {size:.2f} shares at best available price (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
+            )
+            return True
+        else:
+            log(
+                f"   ⚠️  [{symbol}] Market order failed: {result.get('error', 'no fill')} - trying progressive pricing"
+            )
+
+        # FALLBACK: If market order failed, try progressive pricing with orderbook
         # Get current orderbook to find best bid
-        # Try WebSocket cache first (real-time), fallback to API if unavailable
         from src.utils.websocket_manager import ws_manager
 
         best_bid = None
@@ -152,8 +178,10 @@ def emergency_sell_position(
 
             for attempt_name, attempt_price in attempts:
                 log(
-                    f"   🚨 [{symbol}] EMERGENCY SELL: Trying {size:.2f} shares at ${attempt_price:.2f} ({attempt_name}) due to {reason}"
+                    f"   🚨 [{symbol}] EMERGENCY SELL: Trying {size:.2f} shares at ${attempt_price:.2f} ({attempt_name})"
                 )
+
+                from src.trading.orders.limit import place_limit_order
 
                 result = place_limit_order(
                     token_id=token_id,
@@ -178,12 +206,14 @@ def emergency_sell_position(
                 f"   ⚠️  [{symbol}] Orderbook unavailable - skipping progressive pricing"
             )
 
-        # FINAL FALLBACK: If all FOK attempts failed, place GTC order at conservative price
+        # FINAL FALLBACK: If all attempts failed, place GTC order at conservative price
         # Use $0.10 instead of $0.05 - better recovery value, still fills quickly
         fallback_price = 0.10
         log(
             f"   🚨 [{symbol}] EMERGENCY SELL (FINAL FALLBACK): Placing GTC at ${fallback_price:.2f} due to {reason}"
         )
+
+        from src.trading.orders.limit import place_limit_order
 
         result = place_limit_order(
             token_id=token_id,
@@ -204,6 +234,10 @@ def emergency_sell_position(
                 f"[{symbol}] Emergency sell failed (all attempts): {result.get('error', 'unknown error')}"
             )
             return False
+
+    except Exception as e:
+        log_error(f"[{symbol}] Emergency sell exception: {e}")
+        return False
 
     except Exception as e:
         log_error(f"[{symbol}] Emergency sell exception: {e}")

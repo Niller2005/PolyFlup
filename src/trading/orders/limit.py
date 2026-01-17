@@ -1,4 +1,4 @@
-"""Limit order placement logic"""
+"""Limit order and market order placement logic"""
 
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta, timezone
@@ -6,6 +6,7 @@ from py_clob_client.clob_types import (
     OrderArgs,
     OrderType,
     PostOrdersArgs,
+    MarketOrderArgs,
 )
 from src.utils.logger import log, log_error
 from .client import client, _ensure_api_creds
@@ -90,6 +91,94 @@ def place_limit_order(
 def place_order(token_id: str, price: float, size: float) -> dict:
     """Convenience function for BUY limit orders"""
     return place_limit_order(token_id, price, size, BUY)
+
+
+def place_market_order(
+    token_id: str,
+    size: float,
+    side: str,
+    order_type: str = "FOK",
+    silent_on_balance_error: bool = False,
+) -> dict:
+    """
+    Place a market order that executes at best available price immediately.
+
+    Args:
+        token_id: Token ID to trade
+        size: Number of shares to trade
+        side: "BUY" or "SELL"
+        order_type: "FOK" (fill-or-kill, default) or "FAK" (fill-and-kill)
+        silent_on_balance_error: If True, don't log balance errors
+
+    Returns:
+        dict with success, status, order_id, error
+    """
+    # Market orders don't need price validation, only size
+    if size <= 0:
+        return {
+            "success": False,
+            "status": "VALIDATION_ERROR",
+            "error": "Size must be positive",
+        }
+
+    # Extract enum value
+    otype: Any
+    if order_type.upper() == "FAK":
+        otype = OrderType.FAK
+    else:
+        otype = OrderType.FOK  # Default to FOK for immediate fill
+
+    def _place():
+        _ensure_api_creds(client)
+        truncated_size = truncate_float(size, 2)
+
+        # MarketOrderArgs: token_id, amount, side, price=0, order_type
+        # The price parameter can be left as 0 for true market orders
+        moa = MarketOrderArgs(
+            token_id=token_id,
+            amount=truncated_size,
+            side=side,
+            price=0,  # Market order - no price limit
+            order_type=otype,
+        )
+        signed = client.create_market_order(moa)
+        return client.post_order(signed, otype)  # type: ignore
+
+    try:
+        resp: Any = _execute_with_retry(_place)
+        status = resp.get("status", "UNKNOWN") if isinstance(resp, dict) else "UNKNOWN"
+        oid = resp.get("orderID") if isinstance(resp, dict) else None
+        emsg = resp.get("errorMsg", "") if isinstance(resp, dict) else ""
+        success = resp.get("success", True) if isinstance(resp, dict) else True
+        has_err = bool(emsg) and not bool(oid)
+        return {
+            "success": (success and not has_err) or bool(oid),
+            "status": status,
+            "order_id": oid,
+            "error": emsg if has_err else None,
+        }
+    except Exception as e:
+        emsg = _parse_api_error(str(e))
+        oid = None
+        try:
+            r: Any = getattr(e, "response", None)
+            if r and hasattr(r, "json"):
+                oid = r.json().get("orderID")
+        except:
+            pass
+        if not (silent_on_balance_error and "balance" in str(e).lower()):
+            if "Insufficient funds" in emsg and side == "SELL":
+                log(
+                    f"   ⚠️  {side} Market Order: {emsg} (likely already filled or locked)"
+                )
+            else:
+                log_error(f"{side} Market Order error: {emsg}")
+        return {
+            "success": bool(oid),
+            "status": "ERROR" if not oid else "UNKNOWN",
+            "order_id": oid,
+            "error": emsg,
+        }
 
 
 def place_batch_orders(orders: List[Dict[str, Any]]) -> List[dict]:
