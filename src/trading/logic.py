@@ -351,7 +351,7 @@ def _prepare_trade_params(
 
         if spread <= TIGHT_SPREAD_THRESHOLD:
             # TIGHT SPREAD: Use maker pricing (bid + 1 cent) for better economics
-            # POST_ONLY order earns 0.15% rebate instead of 1.54% taker fee
+            # Maker orders earn 0.15% rebate instead of paying 1.54% taker fee
             price = round(best_bid_val + 0.01, 2)
             pricing_strategy = "maker (tight spread)"
         else:

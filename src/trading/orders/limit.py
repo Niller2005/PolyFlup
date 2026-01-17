@@ -227,7 +227,6 @@ def place_batch_orders(
                 price=op["price"],
                 size=op["size"],
                 side=op.get("side", BUY),
-                neg_risk=op.get("neg_risk", False),  # POST_ONLY when True
             )
             signed = client.create_order(oa)
             batch.append(PostOrdersArgs(order=signed, orderType=otype))  # type: ignore
