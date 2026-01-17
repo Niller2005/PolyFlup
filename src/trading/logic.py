@@ -331,12 +331,44 @@ def _prepare_trade_params(
                 log("")
         return
 
+    # MID-MARKET PRICING: Balance between maker rebates and faster fills
+    # Calculate mid-market price for better fill rates while maintaining decent pricing
+    best_bid_val = float(best_bid)
+    best_ask_val = float(best_ask)
+    mid_market = (best_bid_val + best_ask_val) / 2.0
+
     if actual_side == "UP":
-        # MAKER PRICING: Join the best bid for UP tokens
-        token_id, side, price = up_id, "UP", float(best_bid)
+        # Price slightly above mid-market for UP tokens
+        # This improves fill rate vs pure maker while still being competitive
+        token_id = up_id
+        side = "UP"
+        price = round(mid_market + 0.01, 2)  # Mid + 1 cent
+
+        # Clamp to valid range and ensure we're between bid/ask
+        price = max(best_bid_val + 0.01, min(best_ask_val, price))
+
+        if verbose:
+            log(
+                f"   💹 [{symbol}] {side} pricing: bid=${best_bid_val:.2f}, mid=${mid_market:.2f}, ask=${best_ask_val:.2f} → ${price:.2f}"
+            )
     else:
-        # MAKER PRICING: Join the best bid for DOWN tokens (which is 1 - UP best ask)
-        token_id, side, price = down_id, "DOWN", 1.0 - float(best_ask)
+        # Price slightly below mid-market for DOWN tokens
+        token_id = down_id
+        side = "DOWN"
+        # DOWN token pricing: if UP ask is 0.60, DOWN bid is 0.40 (1 - 0.60)
+        down_best_bid = 1.0 - best_ask_val
+        down_best_ask = 1.0 - best_bid_val
+        down_mid_market = (down_best_bid + down_best_ask) / 2.0
+
+        price = round(down_mid_market + 0.01, 2)  # Mid + 1 cent
+
+        # Clamp to valid range
+        price = max(down_best_bid + 0.01, min(down_best_ask, price))
+
+        if verbose:
+            log(
+                f"   💹 [{symbol}] {side} pricing: bid=${down_best_bid:.2f}, mid=${down_mid_market:.2f}, ask=${down_best_ask:.2f} → ${price:.2f}"
+            )
 
     # NEW: Check if we already have a trade for THIS SIDE in this window
     window_start, window_end = get_window_times(symbol)
