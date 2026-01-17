@@ -205,6 +205,10 @@ def _calculate_bet_size(
     if MAX_SIZE and size > MAX_SIZE:
         size = MAX_SIZE
 
+    # Round to whole number to avoid decimal share sizes
+    # This ensures clean position sizes (6.0 instead of 5.9075)
+    size = round(size)
+
     # Calculate actual cost based on entry price
     bet_usd_effective = size * price
 
