@@ -343,6 +343,14 @@ def place_entry_and_hedge_atomic(
         entry_result = results[0]
         hedge_result = results[1]
 
+        # DEBUG: Log API responses to understand success/failure detection
+        log(
+            f"   🐛 [{symbol}] DEBUG Entry result: success={entry_result.get('success')}, order_id={entry_result.get('order_id')}, error={entry_result.get('error')}"
+        )
+        log(
+            f"   🐛 [{symbol}] DEBUG Hedge result: success={hedge_result.get('success')}, order_id={hedge_result.get('order_id')}, error={hedge_result.get('error')}"
+        )
+
         entry_success = entry_result.get("success")
         hedge_success = hedge_result.get("success")
 
@@ -353,9 +361,17 @@ def place_entry_and_hedge_atomic(
         if not entry_success and hedge_success:
             hedge_order_id = hedge_result.get("order_id")
             log(f"   ❌ [{symbol}] Entry order failed: {entry_result.get('error')}")
+            hedge_id_display = hedge_order_id[:10] if hedge_order_id else "unknown"
             log(
-                f"   ⚠️  [{symbol}] Hedge placed but entry failed - cancelling hedge {hedge_order_id[:10]}"
+                f"   ⚠️  [{symbol}] Hedge placed but entry failed - cancelling hedge {hedge_id_display}"
             )
+
+            if not hedge_order_id:
+                log_error(
+                    f"[{symbol}] Cannot cancel hedge - order ID not returned from API"
+                )
+                return None, None
+
             try:
                 cancel_order(hedge_order_id)
                 log(f"   ✅ [{symbol}] Hedge order cancelled successfully")
@@ -383,6 +399,12 @@ def place_entry_and_hedge_atomic(
             entry_order_id = entry_result.get("order_id")
             log(f"   ❌ [{symbol}] Hedge order failed: {hedge_result.get('error')}")
             log(f"   🔄 [{symbol}] Entry succeeded - retrying hedge with fresh pricing")
+
+            if not entry_order_id:
+                log_error(
+                    f"[{symbol}] Cannot manage entry - order ID not returned from API"
+                )
+                return None, None
 
             # Retry hedge up to 3 times with fresh orderbook pricing
             MAX_HEDGE_RETRIES = 3
@@ -452,8 +474,9 @@ def place_entry_and_hedge_atomic(
 
             # If all retries failed, cancel entry and emergency sell if needed
             if not hedge_placed:
+                entry_id_display = entry_order_id[:10] if entry_order_id else "unknown"
                 log(
-                    f"   ❌ [{symbol}] All hedge retries failed - cancelling entry {entry_order_id[:10]}"
+                    f"   ❌ [{symbol}] All hedge retries failed - cancelling entry {entry_id_display}"
                 )
                 try:
                     cancel_order(entry_order_id)
