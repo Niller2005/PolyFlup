@@ -243,18 +243,45 @@ def merge_hedged_position(
                 [merge_tx], f"Merge {amount / 1_000_000:.1f} USDC"
             )
 
-            # Return transaction hash immediately (don't wait for confirmation)
-            # The relayer will handle confirmation in the background
+            # Check if we got a transaction hash
             if (
                 response
                 and hasattr(response, "transaction_hash")
                 and response.transaction_hash
             ):
+                tx_hash = response.transaction_hash
                 log(
-                    f"✅ [{symbol}] #{trade_id} MERGE SUCCESS (GASLESS): {amount / 1_000_000:.1f} USDC freed"
+                    f"   📡 [{symbol}] #{trade_id} Relayer submitted merge tx: {tx_hash[:16]}..."
                 )
-                log(f"   Tx: {response.transaction_hash}")
-                return response.transaction_hash
+
+                # Wait for transaction confirmation and verify success
+                try:
+                    web3 = get_web3_client()
+                    tx_receipt = web3.eth.wait_for_transaction_receipt(
+                        tx_hash, timeout=60
+                    )
+
+                    # Check transaction status (1 = success, 0 = failure)
+                    if tx_receipt.get("status") == 1:
+                        log(
+                            f"✅ [{symbol}] #{trade_id} MERGE SUCCESS (GASLESS): {amount / 1_000_000:.1f} USDC freed"
+                        )
+                        log(f"   Tx: {tx_hash}")
+                        return tx_hash
+                    else:
+                        log_error(
+                            f"[{symbol}] #{trade_id} Merge transaction FAILED on-chain (status=0)"
+                        )
+                        log(f"   Failed tx: {tx_hash}")
+                        return None
+
+                except Exception as confirm_err:
+                    log_error(
+                        f"[{symbol}] #{trade_id} Could not confirm merge transaction: {confirm_err}"
+                    )
+                    log(f"   Tx (unconfirmed): {tx_hash}")
+                    # Return None since we can't confirm success
+                    return None
             else:
                 log_error(
                     f"[{symbol}] #{trade_id} Relayer merge failed, falling back to Web3"
@@ -416,16 +443,43 @@ def redeem_winning_tokens(
             # Execute via relayer (gasless!)
             response = relay_client.execute([redeem_tx], "Redeem winning tokens")
 
-            # Return transaction hash immediately (don't wait for confirmation)
-            # The relayer will handle confirmation in the background
+            # Check if we got a transaction hash
             if (
                 response
                 and hasattr(response, "transaction_hash")
                 and response.transaction_hash
             ):
-                log(f"✅ [{symbol}] #{trade_id} REDEEM SUCCESS (GASLESS)")
-                log(f"   Tx: {response.transaction_hash}")
-                return response.transaction_hash
+                tx_hash = response.transaction_hash
+                log(
+                    f"   📡 [{symbol}] #{trade_id} Relayer submitted redeem tx: {tx_hash[:16]}..."
+                )
+
+                # Wait for transaction confirmation and verify success
+                try:
+                    web3 = get_web3_client()
+                    tx_receipt = web3.eth.wait_for_transaction_receipt(
+                        tx_hash, timeout=60
+                    )
+
+                    # Check transaction status (1 = success, 0 = failure)
+                    if tx_receipt.get("status") == 1:
+                        log(f"✅ [{symbol}] #{trade_id} REDEEM SUCCESS (GASLESS)")
+                        log(f"   Tx: {tx_hash}")
+                        return tx_hash
+                    else:
+                        log_error(
+                            f"[{symbol}] #{trade_id} Redeem transaction FAILED on-chain (status=0)"
+                        )
+                        log(f"   Failed tx: {tx_hash}")
+                        return None
+
+                except Exception as confirm_err:
+                    log_error(
+                        f"[{symbol}] #{trade_id} Could not confirm redeem transaction: {confirm_err}"
+                    )
+                    log(f"   Tx (unconfirmed): {tx_hash}")
+                    # Return None since we can't confirm success
+                    return None
             else:
                 log_error(
                     f"[{symbol}] #{trade_id} Relayer redeem failed, falling back to Web3"
