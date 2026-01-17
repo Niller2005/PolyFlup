@@ -356,6 +356,12 @@ def main():
 
             if now_ts - last_settle_check >= 60:
                 check_and_settle_trades()
+
+                # Auto-redeem winning tokens from recently settled trades
+                from src.trading.settlement import redeem_recent_settled_trades
+
+                redeem_recent_settled_trades()
+
                 last_settle_check = now_ts
 
             # Periodic position sync to detect external merges/closes

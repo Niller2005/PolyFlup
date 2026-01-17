@@ -407,3 +407,95 @@ def check_and_settle_trades():
         _audit_settlements()
     except:
         pass
+
+
+def redeem_recent_settled_trades():
+    """
+    Redeem winning tokens from recently settled trades (last 30 minutes).
+
+    Called after check_and_settle_trades() to automatically redeem winning positions.
+    Only processes trades that:
+    - Are settled (settled=1)
+    - Resolved favorably (final_outcome='RESOLVED')
+    - Not exited early (exited_early=0)
+    - Haven't been merged or redeemed yet
+    - Settled in last 30 minutes
+
+    Transaction Budget:
+    - Unverified tier: 100 transactions/day
+    - With 96 trades/day max (4 symbols × 4 windows/hour × 24 hours)
+    - This leaves 4 transactions for manual operations
+    """
+    from src.trading.ctf_operations import redeem_winning_tokens
+
+    with db_connection() as conn:
+        c = conn.cursor()
+
+        # Find recently settled trades that need redemption (last 30 minutes)
+        c.execute("""
+            SELECT id, symbol, slug, condition_id, pnl_usd
+            FROM trades 
+            WHERE settled = 1 
+                AND final_outcome = 'RESOLVED'
+                AND exited_early = 0
+                AND merge_tx_hash IS NULL
+                AND redeem_tx_hash IS NULL
+                AND datetime(settled_at) > datetime('now', '-30 minutes')
+            ORDER BY id DESC
+        """)
+
+        trades = c.fetchall()
+
+        if not trades:
+            return
+
+        log("")
+        log(f"💰 Auto-redeeming {len(trades)} recently settled trade(s)")
+
+        for trade_id, symbol, slug, condition_id, pnl_usd in trades:
+            try:
+                value = pnl_usd or 0.0
+
+                # Fetch condition_id from API if not in database
+                if not condition_id:
+                    log(
+                        f"   [{symbol}] #{trade_id} Fetching condition_id from {slug}..."
+                    )
+                    r = requests.get(f"{GAMMA_API_BASE}/markets/slug/{slug}", timeout=5)
+                    if r.status_code == 200:
+                        data = r.json()
+                        condition_id = (
+                            data.get("conditionId") or data.get("condition_id") or ""
+                        )
+                        if condition_id and condition_id != "0x" + ("0" * 64):
+                            # Update database with condition_id
+                            c.execute(
+                                "UPDATE trades SET condition_id = ? WHERE id = ?",
+                                (condition_id, trade_id),
+                            )
+
+                if not condition_id or condition_id == "0x" + ("0" * 64):
+                    log(
+                        f"   ⏭️  [{symbol}] #{trade_id} Skipped (no condition_id, market may be expired)"
+                    )
+                    continue
+
+                # Execute redemption
+                log(f"   🎫 [{symbol}] #{trade_id} Redeeming (PnL: ${value:+.2f})...")
+                redeem_tx_hash = redeem_winning_tokens(trade_id, symbol, condition_id)
+
+                if redeem_tx_hash:
+                    # Update database with redemption tx
+                    c.execute(
+                        "UPDATE trades SET redeem_tx_hash = ? WHERE id = ?",
+                        (redeem_tx_hash, trade_id),
+                    )
+                    log(
+                        f"   ✅ [{symbol}] #{trade_id} Redeemed! Tx: {redeem_tx_hash[:16]}..."
+                    )
+                else:
+                    log(f"   ⚠️  [{symbol}] #{trade_id} Redemption failed")
+
+            except Exception as e:
+                log_error(f"[{symbol}] #{trade_id} Redemption error: {e}")
+                continue
