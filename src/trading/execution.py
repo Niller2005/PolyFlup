@@ -294,10 +294,10 @@ def place_entry_and_hedge_atomic(
             hedge_token_id = up_id
             hedge_side = "UP"
 
-        # CRITICAL: Use MAKER pricing for BOTH entry and hedge to eliminate fees
+        # CRITICAL: Use MAKER pricing with POST_ONLY for both entry and hedge
         # Strategy: Entry at MAKER (bid+1¢) + Hedge at MAKER (calculated)
+        # postOnly=True ensures orders won't cross spread (maker-only)
         # Maker orders earn 0.15% rebate instead of paying 1.54% taker fee
-        # Orders at bid-side act as POST_ONLY (won't cross spread)
         # Combined must be <= $0.99 to guarantee profit on merge
         # Hedge price = $0.99 - entry_price
 
@@ -307,23 +307,25 @@ def place_entry_and_hedge_atomic(
         final_combined = entry_price + hedge_price
 
         log(
-            f"   📊 [{symbol}] Both orders using MAKER pricing: Entry ${entry_price:.2f} + Hedge ${hedge_price:.2f} (combined ${final_combined:.2f})"
+            f"   📊 [{symbol}] Both orders using MAKER (POST_ONLY) pricing: Entry ${entry_price:.2f} + Hedge ${hedge_price:.2f} (combined ${final_combined:.2f})"
         )
 
-        # Create batch order - both use maker pricing (bid-side) for rebates
-        # Orders placed at bid+1¢ act as POST_ONLY (rejected if would cross spread)
+        # Create batch order - both use POST_ONLY for maker rebates
+        # postOnly=True ensures orders are rejected if they would cross the spread
         orders = [
             {
                 "token_id": entry_token_id,
                 "price": entry_price,
                 "size": entry_size,
                 "side": BUY,
+                "post_only": True,  # POST_ONLY: Earn 0.15% rebate, ensure whole number fills
             },
             {
                 "token_id": hedge_token_id,
                 "price": hedge_price,
                 "size": entry_size,
                 "side": BUY,
+                "post_only": True,  # POST_ONLY: Earn 0.15% rebate
             },
         ]
 

@@ -229,7 +229,11 @@ def place_batch_orders(
                 side=op.get("side", BUY),
             )
             signed = client.create_order(oa)
-            batch.append(PostOrdersArgs(order=signed, orderType=otype))  # type: ignore
+            # Add postOnly flag for maker orders (earns rebate, ensures whole number fills)
+            post_only = op.get("post_only", False)
+            batch.append(
+                PostOrdersArgs(order=signed, orderType=otype, postOnly=post_only)
+            )  # type: ignore
         responses: Any = client.post_orders(batch)
         for r in responses:
             if isinstance(r, dict):
