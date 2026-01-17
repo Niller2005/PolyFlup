@@ -572,21 +572,25 @@ def place_entry_and_hedge_atomic(
                                         f"   🚨 [{symbol}] EARLY EXIT TRIGGER: Entry filled but hedge unfilled after {elapsed}s - exiting now"
                                     )
 
-                                    # STEP 1: Cancel the unfilled hedge order FIRST to prevent it filling later
-                                    try:
-                                        cancel_result = cancel_order(hedge_order_id)
-                                        if cancel_result:
-                                            log(
-                                                f"   ✅ [{symbol}] Hedge order cancelled successfully"
-                                            )
-                                        else:
-                                            log(
-                                                f"   ⚠️  [{symbol}] Failed to cancel hedge order (may already be filling)"
-                                            )
-                                    except Exception as e:
-                                        log_error(
-                                            f"[{symbol}] Error cancelling hedge order: {e}"
+                                # STEP 1: Cancel the unfilled hedge order FIRST to prevent it filling later
+                                try:
+                                    from src.trading.orders import (
+                                        cancel_order as cancel_order_func,
+                                    )
+
+                                    cancel_result = cancel_order_func(hedge_order_id)
+                                    if cancel_result:
+                                        log(
+                                            f"   ✅ [{symbol}] Hedge order cancelled successfully"
                                         )
+                                    else:
+                                        log(
+                                            f"   ⚠️  [{symbol}] Failed to cancel hedge order (may already be filling)"
+                                        )
+                                except Exception as e:
+                                    log_error(
+                                        f"[{symbol}] Error cancelling hedge order: {e}"
+                                    )
 
                                     # STEP 2: Emergency sell the filled entry position
                                     sell_success = emergency_sell_position(
@@ -630,7 +634,11 @@ def place_entry_and_hedge_atomic(
 
                                 # STEP 1: Cancel the unfilled hedge order FIRST
                                 try:
-                                    cancel_result = cancel_order(hedge_order_id)
+                                    from src.trading.orders import (
+                                        cancel_order as cancel_order_func,
+                                    )
+
+                                    cancel_result = cancel_order_func(hedge_order_id)
                                     if cancel_result:
                                         log(
                                             f"   ✅ [{symbol}] Hedge order cancelled (no longer needed)"
