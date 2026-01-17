@@ -85,45 +85,58 @@ def emergency_sell_position(
                 )
                 # Continue anyway - maybe the exit order is already filled
         # Get current orderbook to find best bid
-        clob_client = get_clob_client()
+        # Try WebSocket cache first (real-time), fallback to API if unavailable
+        from src.utils.websocket_manager import ws_manager
 
         best_bid = None
         orderbook_available = False
 
-        try:
-            orderbook = clob_client.get_order_book(token_id)
+        # 1. Try WebSocket cache (fastest, real-time)
+        ws_bid, _ = ws_manager.get_bid_ask(token_id)
+        if ws_bid and ws_bid > 0.01:
+            best_bid = ws_bid
+            orderbook_available = True
+            log(
+                f"   📊 [{symbol}] Orderbook available: best bid = ${best_bid:.2f} (from WebSocket)"
+            )
+        else:
+            # 2. Fallback to CLOB API orderbook query
+            clob_client = get_clob_client()
 
-            if orderbook:
-                # Handle both dict and OrderBookSummary object responses
-                if isinstance(orderbook, dict):
-                    bids = orderbook.get("bids", []) or []
-                else:
-                    bids = getattr(orderbook, "bids", []) or []
+            try:
+                orderbook = clob_client.get_order_book(token_id)
 
-                if bids and len(bids) > 0:
-                    # Handle both dict and object bid entries
-                    if hasattr(bids[0], "price"):
-                        best_bid = float(bids[0].price)
-                    elif isinstance(bids[0], dict):
-                        best_bid = float(bids[0].get("price", 0))
-
-                    if best_bid and best_bid > 0.01:
-                        orderbook_available = True
-                        log(
-                            f"   📊 [{symbol}] Orderbook available: best bid = ${best_bid:.2f}"
-                        )
+                if orderbook:
+                    # Handle both dict and OrderBookSummary object responses
+                    if isinstance(orderbook, dict):
+                        bids = orderbook.get("bids", []) or []
                     else:
-                        log(
-                            f"   ⚠️  [{symbol}] Orderbook has invalid best bid: ${best_bid:.2f}"
-                        )
+                        bids = getattr(orderbook, "bids", []) or []
+
+                    if bids and len(bids) > 0:
+                        # Handle both dict and object bid entries
+                        if hasattr(bids[0], "price"):
+                            best_bid = float(bids[0].price)
+                        elif isinstance(bids[0], dict):
+                            best_bid = float(bids[0].get("price", 0))
+
+                        if best_bid and best_bid > 0.01:
+                            orderbook_available = True
+                            log(
+                                f"   📊 [{symbol}] Orderbook available: best bid = ${best_bid:.2f} (from API)"
+                            )
+                        else:
+                            log(
+                                f"   ⚠️  [{symbol}] Orderbook has invalid best bid: ${best_bid:.2f}"
+                            )
+                    else:
+                        log(f"   ⚠️  [{symbol}] Orderbook has no bids (empty book)")
                 else:
-                    log(f"   ⚠️  [{symbol}] Orderbook has no bids (empty book)")
-            else:
-                log(
-                    f"   ⚠️  [{symbol}] Orderbook unavailable - skipping progressive pricing"
-                )
-        except Exception as book_err:
-            log(f"   ⚠️  [{symbol}] Error fetching orderbook: {book_err}")
+                    log(
+                        f"   ⚠️  [{symbol}] Orderbook unavailable - skipping progressive pricing"
+                    )
+            except Exception as book_err:
+                log(f"   ⚠️  [{symbol}] Error fetching orderbook: {book_err}")
 
         # PROGRESSIVE PRICING: Try multiple prices before falling back to low price
         # This maximizes recovery value while ensuring quick fill
@@ -226,34 +239,46 @@ def place_entry_and_hedge_atomic(
             hedge_side = "UP"
 
         # CRITICAL: Use TAKER pricing for hedge to ensure immediate fill
-        # Query orderbook to get best ask (market's sell price)
-        clob_client = get_clob_client()
-        orderbook = clob_client.get_order_book(hedge_token_id)
+        # Try WebSocket cache first (real-time), fallback to API if unavailable
+        from src.utils.websocket_manager import ws_manager
 
         hedge_price = None
         best_ask = None
         used_orderbook = False
 
-        # Handle both dict and OrderBookSummary object responses
-        if orderbook:
-            if isinstance(orderbook, dict):
-                asks = orderbook.get("asks", []) or []
-            else:
-                asks = getattr(orderbook, "asks", []) or []
+        # 1. Try WebSocket cache (fastest, real-time)
+        _, ws_ask = ws_manager.get_bid_ask(hedge_token_id)
+        if ws_ask and ws_ask > 0:
+            hedge_price = ws_ask
+            used_orderbook = True
+            log(
+                f"   📊 [{symbol}] Hedge using TAKER pricing: ${hedge_price:.2f} (best ask from WebSocket)"
+            )
+        else:
+            # 2. Fallback to CLOB API orderbook query
+            clob_client = get_clob_client()
+            orderbook = clob_client.get_order_book(hedge_token_id)
 
-            if asks and len(asks) > 0:
-                # Handle both dict and object ask entries
-                if hasattr(asks[0], "price"):
-                    best_ask = float(asks[0].price)
-                elif isinstance(asks[0], dict):
-                    best_ask = float(asks[0].get("price", 0))
+            # Handle both dict and OrderBookSummary object responses
+            if orderbook:
+                if isinstance(orderbook, dict):
+                    asks = orderbook.get("asks", []) or []
+                else:
+                    asks = getattr(orderbook, "asks", []) or []
 
-                if best_ask and best_ask > 0:
-                    hedge_price = best_ask
-                    used_orderbook = True
-                    log(
-                        f"   📊 [{symbol}] Hedge using TAKER pricing: ${hedge_price:.2f} (best ask)"
-                    )
+                if asks and len(asks) > 0:
+                    # Handle both dict and object ask entries
+                    if hasattr(asks[0], "price"):
+                        best_ask = float(asks[0].price)
+                    elif isinstance(asks[0], dict):
+                        best_ask = float(asks[0].get("price", 0))
+
+                    if best_ask and best_ask > 0:
+                        hedge_price = best_ask
+                        used_orderbook = True
+                        log(
+                            f"   📊 [{symbol}] Hedge using TAKER pricing: ${hedge_price:.2f} (best ask from API)"
+                        )
 
         # FALLBACK: If orderbook unavailable, calculate conservative target price
         # Use threshold - 0.005 to ensure we stay under combined price threshold
