@@ -28,8 +28,10 @@ from .exit import _check_exit_plan
 
 _failed_pnl_checks = {}
 _recent_hedge_placements = {}  # Track recent hedge order placements to avoid race condition
+_last_corrective_hedge_attempt = {}  # Track last corrective hedge attempt per trade to prevent spam
 _last_no_positions_log = 0.0  # Rate-limit "No open positions" message
 _NO_POSITIONS_LOG_COOLDOWN = 30  # Log once per 30 seconds
+_CORRECTIVE_HEDGE_COOLDOWN = 60  # Seconds between corrective hedge attempts per trade
 
 # Monitor health tracking
 _last_monitor_check = time.time()
@@ -444,6 +446,31 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                             1.0 - entry
                                         )  # Approximate
 
+                                        # COOLDOWN: Check if we recently attempted corrective hedge for this trade
+                                        last_attempt_time = (
+                                            _last_corrective_hedge_attempt.get(tid, 0)
+                                        )
+                                        time_since_last_attempt = (
+                                            now.timestamp() - last_attempt_time
+                                        )
+
+                                        if (
+                                            time_since_last_attempt
+                                            < _CORRECTIVE_HEDGE_COOLDOWN
+                                        ):
+                                            # Still in cooldown period, skip
+                                            remaining = (
+                                                _CORRECTIVE_HEDGE_COOLDOWN
+                                                - time_since_last_attempt
+                                            )
+                                            if (
+                                                int(remaining) % 30 == 0
+                                            ):  # Log every 30s during cooldown
+                                                log(
+                                                    f"   ⏳ [{sym}] #{tid} Corrective hedge cooldown: {remaining:.0f}s remaining"
+                                                )
+                                            continue
+
                                         if usdc_balance >= hedge_cost:
                                             log(
                                                 f"   🛡️  [{sym}] #{tid} Placing corrective hedge for {unhedged_amount:.2f} unhedged shares..."
@@ -531,6 +558,12 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                                                         hedge_price,
                                                         unhedged_amount,
                                                     )
+
+                                                    # Record attempt timestamp (success or failure)
+                                                    _last_corrective_hedge_attempt[
+                                                        tid
+                                                    ] = now.timestamp()
+
                                                     if result.get("success"):
                                                         log(
                                                             f"   ✅ [{sym}] #{tid} Corrective hedge placed: {unhedged_amount:.2f} @ ${hedge_price}"

@@ -320,6 +320,11 @@ def emergency_sell_position(
     Returns True if sell order placed successfully, False otherwise.
     """
     try:
+        # CRITICAL: Wait for balance API to sync after order fill
+        # The entry order just filled, but balance API has 1-3s lag before shares are available
+        log(f"   ⏳ [{symbol}] Waiting 3s for balance API to sync after fill...")
+        time.sleep(3)
+
         # CRITICAL: Cancel any existing exit order first to free up shares
         # Look up trade by entry_order_id since trade might be saved to DB between
         # atomic pair placement and emergency sell (WebSocket can trigger exit plan)
