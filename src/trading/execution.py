@@ -417,9 +417,12 @@ def execute_trade(
     bal_info = get_balance_allowance()
     if bal_info:
         usdc_balance = bal_info.get("balance", 0)
+        log(
+            f"   💰 [{symbol}] Balance check: ${usdc_balance:.2f} available, ${total_cost_needed:.2f} needed (entry ${entry_cost:.2f} + hedge ${hedge_cost:.2f})"
+        )
         if usdc_balance < total_cost_needed:
             log(
-                f"[{symbol}] ❌ Insufficient funds for entry + hedge (Need ${total_cost_needed:.2f} [entry ${entry_cost:.2f} + hedge ${hedge_cost:.2f}], Have ${usdc_balance:.2f})"
+                f"   ❌ [{symbol}] REJECTED: Insufficient funds (Need ${total_cost_needed:.2f}, Have ${usdc_balance:.2f})"
             )
             return None
 

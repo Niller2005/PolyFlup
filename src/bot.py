@@ -125,35 +125,62 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
     """
     Execute trading logic for multiple symbols using ATOMIC entry+hedge for each.
 
-    This function now calls execute_trade() for each symbol individually to ensure
-    every trade gets a hedge order placed atomically with the entry order.
+    This function processes symbols SEQUENTIALLY, checking balance before each symbol
+    to prevent placing orders without sufficient funds for both entry and hedge.
 
-    Previous implementation used batch orders without hedges, which caused unhedged
-    positions when balance was insufficient for fallback hedge placement.
+    Each trade is atomic: entry + hedge placed simultaneously. If balance is insufficient
+    for any symbol, we skip it and continue to the next symbol.
     """
     placed_count = 0
     remaining_balance = balance
 
-    for symbol in symbols:
+    log(
+        f"📋 Batch processing {len(symbols)} symbols sequentially with atomic entry+hedge"
+    )
+
+    for idx, symbol in enumerate(symbols, 1):
+        # Check balance before attempting trade
+        from src.trading.orders import get_balance_allowance
+
+        bal_info = get_balance_allowance()
+        if bal_info:
+            remaining_balance = bal_info.get("balance", 0)
+
+        # Calculate approximate cost needed (entry + hedge)
+        # Using BET_PERCENT to estimate position size
+        position_size = remaining_balance * (BET_PERCENT / 100.0)
+        approximate_cost = position_size * 1.0  # Worst case: $1.00 combined price
+
+        if remaining_balance < approximate_cost:
+            log(
+                f"⏭️  [{symbol}] ({idx}/{len(symbols)}) SKIPPED: Insufficient balance (${remaining_balance:.2f} < ${approximate_cost:.2f} needed)"
+            )
+            continue
+
+        log(
+            f"🎯 [{symbol}] ({idx}/{len(symbols)}) Processing with balance: ${remaining_balance:.2f}"
+        )
+
         # Each trade is executed independently with atomic entry+hedge
         trade_id = execute_first_entry(symbol, remaining_balance, verbose=verbose)
 
         if trade_id:
             placed_count += 1
-            # Update remaining balance for next symbol
-            # Note: We get fresh balance after each trade since hedge may have filled and merged
-            from src.trading.orders import get_balance_allowance
-
-            bal_info = get_balance_allowance()
-            if bal_info:
-                remaining_balance = bal_info.get("balance", 0)
+            log(
+                f"✅ [{symbol}] ({idx}/{len(symbols)}) Trade #{trade_id} placed successfully"
+            )
+        else:
+            log(
+                f"⏭️  [{symbol}] ({idx}/{len(symbols)}) No trade placed (filters/conditions not met)"
+            )
 
         # Small delay between trades to avoid rate limits
-        if placed_count > 0 and symbol != symbols[-1]:
+        if symbol != symbols[-1]:
             import time
 
             time.sleep(0.5)
 
+    log(f"📊 Batch complete: {placed_count}/{len(symbols)} trades placed")
     return placed_count
 
 
