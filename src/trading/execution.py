@@ -295,7 +295,7 @@ def place_entry_and_hedge_atomic(
             hedge_side = "UP"
 
         # CRITICAL: Use MAKER pricing with POST_ONLY for both entry and hedge
-        # Strategy: Entry at MAKER (bid+1¢) + Hedge at MAKER (calculated)
+        # Strategy: Entry at MAKER (bid+2¢) + Hedge at MAKER (calculated)
         # postOnly=True ensures orders won't cross spread (maker-only)
         # Maker orders earn 0.15% rebate instead of paying 1.54% taker fee
         # Combined must be <= $0.99 to guarantee profit on merge

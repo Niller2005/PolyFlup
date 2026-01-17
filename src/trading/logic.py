@@ -350,16 +350,16 @@ def _prepare_trade_params(
         side = "UP"
 
         if spread <= TIGHT_SPREAD_THRESHOLD:
-            # TIGHT SPREAD: Use maker pricing (bid + 1 cent) for better economics
-            # Maker orders earn 0.15% rebate instead of paying 1.54% taker fee
-            price = round(best_bid_val + 0.01, 2)
+            # TIGHT SPREAD: Use maker pricing (bid + 2 cents) for better fill rate
+            # More aggressive than bid+1¢ but still maker (earns 0.15% rebate)
+            price = round(best_bid_val + 0.02, 2)
             pricing_strategy = "maker (tight spread)"
         else:
             # WIDE SPREAD: Use mid-market pricing for better value
             mid_market = (best_bid_val + best_ask_val) / 2.0
             price = round(mid_market, 2)  # Use mid-market directly
             # Clamp to valid range
-            price = max(best_bid_val + 0.01, min(best_ask_val - 0.01, price))
+            price = max(best_bid_val + 0.02, min(best_ask_val - 0.01, price))
             pricing_strategy = "maker (wide spread)"
 
         if verbose:
@@ -375,15 +375,15 @@ def _prepare_trade_params(
         down_spread = down_best_ask - down_best_bid  # Should equal UP spread
 
         if down_spread <= TIGHT_SPREAD_THRESHOLD:
-            # TIGHT SPREAD: Use maker pricing (bid + 1 cent)
-            price = round(down_best_bid + 0.01, 2)
+            # TIGHT SPREAD: Use maker pricing (bid + 2 cents) for better fill rate
+            price = round(down_best_bid + 0.02, 2)
             pricing_strategy = "maker (tight spread)"
         else:
             # WIDE SPREAD: Use mid-market pricing
             down_mid_market = (down_best_bid + down_best_ask) / 2.0
             price = round(down_mid_market, 2)  # Use mid-market directly
             # Clamp to valid range
-            price = max(down_best_bid + 0.01, min(down_best_ask - 0.01, price))
+            price = max(down_best_bid + 0.02, min(down_best_ask - 0.01, price))
             pricing_strategy = "maker (wide spread)"
 
         if verbose:
