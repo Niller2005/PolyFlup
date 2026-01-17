@@ -86,17 +86,38 @@ def emergency_sell_position(
                 # Continue anyway - maybe the exit order is already filled
         # Get current orderbook to find best bid
         clob_client = get_clob_client()
-        orderbook = clob_client.get_order_book(token_id)
 
         best_bid = None
-        if orderbook and isinstance(orderbook, dict):
-            bids = orderbook.get("bids", [])
-            if bids and len(bids) > 0:
-                best_bid = float(bids[0].get("price", 0))
+        orderbook_available = False
+
+        try:
+            orderbook = clob_client.get_order_book(token_id)
+
+            if orderbook and isinstance(orderbook, dict):
+                bids = orderbook.get("bids", [])
+                if bids and len(bids) > 0:
+                    best_bid = float(bids[0].get("price", 0))
+                    if best_bid > 0.01:
+                        orderbook_available = True
+                        log(
+                            f"   📊 [{symbol}] Orderbook available: best bid = ${best_bid:.2f}"
+                        )
+                    else:
+                        log(
+                            f"   ⚠️  [{symbol}] Orderbook has invalid best bid: ${best_bid:.2f}"
+                        )
+                else:
+                    log(f"   ⚠️  [{symbol}] Orderbook has no bids (empty book)")
+            else:
+                log(
+                    f"   ⚠️  [{symbol}] Orderbook returned invalid data: {type(orderbook)}"
+                )
+        except Exception as book_err:
+            log(f"   ⚠️  [{symbol}] Error fetching orderbook: {book_err}")
 
         # PROGRESSIVE PRICING: Try multiple prices before falling back to low price
         # This maximizes recovery value while ensuring quick fill
-        if best_bid and best_bid > 0.01:
+        if orderbook_available and best_bid:
             # Strategy: Try best bid, then progressively lower prices with FOK
             # FOK ensures immediate fill or rejection, preventing stuck orders
             attempts = [
@@ -131,7 +152,7 @@ def emergency_sell_position(
                     )
         else:
             log(
-                f"   ⚠️  [{symbol}] Orderbook unavailable or no bids - using fallback price"
+                f"   ⚠️  [{symbol}] Orderbook unavailable - skipping progressive pricing"
             )
 
         # FINAL FALLBACK: If all FOK attempts failed, place GTC order at conservative price
@@ -194,54 +215,47 @@ def place_entry_and_hedge_atomic(
             hedge_token_id = up_id
             hedge_side = "UP"
 
-        # Calculate hedge price (always target $0.99 combined)
-        target_hedge_price = round(0.99 - entry_price, 2)
-        hedge_price = max(0.01, min(0.99, target_hedge_price))
+        # CRITICAL: Use TAKER pricing for hedge to ensure immediate fill
+        # Query orderbook to get best ask (market's sell price)
+        clob_client = get_clob_client()
+        orderbook = clob_client.get_order_book(hedge_token_id)
 
-        # Check orderbook to adjust hedge price for immediate fill
-        try:
-            clob_client = get_clob_client()
-            orderbook = clob_client.get_order_book(hedge_token_id)
+        hedge_price = None
+        best_ask = None
 
-            if orderbook and isinstance(orderbook, dict):
-                asks = orderbook.get("asks", [])
-                if asks and len(asks) > 0:
-                    best_ask = float(asks[0].get("price", 0))
+        if orderbook and isinstance(orderbook, dict):
+            asks = orderbook.get("asks", [])
+            if asks and len(asks) > 0:
+                best_ask = float(asks[0].get("price", 0))
+                if best_ask > 0:
+                    hedge_price = best_ask
+                    log(
+                        f"   📊 [{symbol}] Hedge using TAKER pricing: ${hedge_price:.2f} (best ask)"
+                    )
 
-                    if best_ask > hedge_price:
-                        # Market wants more, check if still profitable
-                        combined_price = entry_price + best_ask
-
-                        # CRITICAL: Combined must be <= $0.99 to guarantee profit
-                        # Allow tiny tolerance (0.001) for rounding: $0.991 is acceptable
-                        if combined_price <= 0.991:
-                            # Still profitable, use market price
-                            hedge_price = best_ask
-                            log(
-                                f"   📊 [{symbol}] Hedge adjusted for immediate fill: ${target_hedge_price:.2f} → ${hedge_price:.2f} (combined ${combined_price:.2f})"
-                            )
-                        else:
-                            # Would create break-even or loss, REJECT
-                            log(
-                                f"   ❌ [{symbol}] REJECTED: Combined ${combined_price:.2f} >= $0.99 (entry ${entry_price:.2f} + hedge ${best_ask:.2f})"
-                            )
-                            log(
-                                f"   💡 [{symbol}] Need hedge <= ${0.99 - entry_price:.2f} for profit, market wants ${best_ask:.2f}"
-                            )
-                            return None, None
-        except Exception as book_err:
+        # FALLBACK: If orderbook unavailable, calculate target price
+        if hedge_price is None:
+            target_hedge_price = round(0.99 - entry_price, 2)
+            hedge_price = max(0.01, min(0.99, target_hedge_price))
             log(
-                f"   ⚠️  [{symbol}] Could not check orderbook, using target hedge price: {book_err}"
+                f"   ⚠️  [{symbol}] Orderbook unavailable for hedge, using calculated price: ${hedge_price:.2f}"
             )
 
-        # FINAL SAFETY CHECK: Verify combined price guarantees profit
+        # PROFIT SAFETY CHECK: Verify combined price <= $0.98 for guaranteed profit
+        # Use $0.98 threshold (2 cent buffer) to ensure profitability after fees
         final_combined = entry_price + hedge_price
-        if final_combined > 0.991:  # Allow 0.001 rounding tolerance
+        if final_combined > 0.98:
             log(
-                f"   ❌ [{symbol}] REJECTED: Final combined ${final_combined:.2f} >= $0.99 (entry ${entry_price:.2f} + hedge ${hedge_price:.2f})"
+                f"   ❌ [{symbol}] REJECTED: Combined ${final_combined:.2f} > $0.98 (entry ${entry_price:.2f} + hedge ${hedge_price:.2f})"
             )
-            log(f"   💡 [{symbol}] Cannot guarantee profit with current market prices")
+            log(
+                f"   💡 [{symbol}] Need hedge <= ${0.98 - entry_price:.2f} for profit, market wants ${hedge_price:.2f}"
+            )
             return None, None
+
+        log(
+            f"   ✅ [{symbol}] Hedge pricing approved: ${hedge_price:.2f} (combined ${final_combined:.2f} <= $0.98)"
+        )
 
         # Create batch order
         orders = [
