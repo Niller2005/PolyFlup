@@ -400,12 +400,20 @@ def place_entry_and_hedge_atomic(
                         hedge_bid = float(spread_data["bid"])
                         hedge_ask = float(spread_data["ask"])
 
-                        # Use bid + 2¢ for maker pricing (consistent with entry)
+                        # CRITICAL: Maintain profitability - combined must be <= $0.99
+                        # Calculate max hedge price from entry price
+                        max_hedge_price = round(0.99 - entry_price, 2)
+                        max_hedge_price = max(0.01, min(0.99, max_hedge_price))
+
+                        # Try market pricing first (bid + 2¢), but cap at max_hedge_price
                         retry_hedge_price = round(hedge_bid + 0.02, 2)
+                        retry_hedge_price = min(retry_hedge_price, max_hedge_price)
                         retry_hedge_price = max(0.01, min(0.99, retry_hedge_price))
 
+                        combined_price = entry_price + retry_hedge_price
+
                         log(
-                            f"   💹 [{symbol}] Hedge retry price: ${retry_hedge_price:.2f} (bid ${hedge_bid:.2f} + 2¢)"
+                            f"   💹 [{symbol}] Hedge retry price: ${retry_hedge_price:.2f} (bid ${hedge_bid:.2f}, combined ${combined_price:.2f})"
                         )
 
                         # Place single hedge order
