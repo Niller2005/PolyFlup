@@ -238,78 +238,18 @@ def place_entry_and_hedge_atomic(
             hedge_token_id = up_id
             hedge_side = "UP"
 
-        # CRITICAL: Use TAKER pricing for hedge to ensure immediate fill
-        # Try WebSocket cache first (real-time), fallback to API if unavailable
-        from src.utils.websocket_manager import ws_manager
+        # CRITICAL: Use MAKER pricing for hedge to ensure profitability
+        # Strategy: Entry at TAKER (market) + Hedge at MAKER (limit)
+        # Combined must be <= $0.99 to guarantee profit on merge
+        # Hedge price = $0.99 - entry_price
 
-        hedge_price = None
-        best_ask = None
-        used_orderbook = False
-
-        # 1. Try WebSocket cache (fastest, real-time)
-        _, ws_ask = ws_manager.get_bid_ask(hedge_token_id)
-        if ws_ask and ws_ask > 0:
-            hedge_price = ws_ask
-            used_orderbook = True
-            log(
-                f"   📊 [{symbol}] Hedge using TAKER pricing: ${hedge_price:.2f} (best ask from WebSocket)"
-            )
-        else:
-            # 2. Fallback to CLOB API orderbook query
-            clob_client = get_clob_client()
-            orderbook = clob_client.get_order_book(hedge_token_id)
-
-            # Handle both dict and OrderBookSummary object responses
-            if orderbook:
-                if isinstance(orderbook, dict):
-                    asks = orderbook.get("asks", []) or []
-                else:
-                    asks = getattr(orderbook, "asks", []) or []
-
-                if asks and len(asks) > 0:
-                    # Handle both dict and object ask entries
-                    if hasattr(asks[0], "price"):
-                        best_ask = float(asks[0].price)
-                    elif isinstance(asks[0], dict):
-                        best_ask = float(asks[0].get("price", 0))
-
-                    if best_ask and best_ask > 0:
-                        hedge_price = best_ask
-                        used_orderbook = True
-                        log(
-                            f"   📊 [{symbol}] Hedge using TAKER pricing: ${hedge_price:.2f} (best ask from API)"
-                        )
-
-        # FALLBACK: If orderbook unavailable, calculate conservative target price
-        # Use threshold - 0.005 to ensure we stay under combined price threshold
-        if hedge_price is None:
-            from src.config.settings import COMBINED_PRICE_THRESHOLD
-
-            # Calculate target that ensures combined < threshold
-            max_hedge_for_profit = COMBINED_PRICE_THRESHOLD - entry_price - 0.005
-            target_hedge_price = round(0.99 - entry_price, 2)
-            hedge_price = min(max_hedge_for_profit, target_hedge_price)
-            hedge_price = max(0.01, min(0.99, hedge_price))
-            log(
-                f"   ⚠️  [{symbol}] Orderbook unavailable for hedge, using calculated price: ${hedge_price:.2f} (conservative estimate)"
-            )
-
-        # PROFIT SAFETY CHECK: Verify combined price ensures profitability
-        # Import threshold from settings (configurable via .env)
-        from src.config.settings import COMBINED_PRICE_THRESHOLD
+        hedge_price = round(0.99 - entry_price, 2)
+        hedge_price = max(0.01, min(0.99, hedge_price))
 
         final_combined = entry_price + hedge_price
-        if final_combined > COMBINED_PRICE_THRESHOLD:
-            log(
-                f"   ❌ [{symbol}] REJECTED: Combined ${final_combined:.2f} > ${COMBINED_PRICE_THRESHOLD:.3f} (entry ${entry_price:.2f} + hedge ${hedge_price:.2f})"
-            )
-            log(
-                f"   💡 [{symbol}] Need hedge <= ${COMBINED_PRICE_THRESHOLD - entry_price:.2f} for profit, {'market wants' if used_orderbook else 'calculated'} ${hedge_price:.2f}"
-            )
-            return None, None
 
         log(
-            f"   ✅ [{symbol}] Hedge pricing approved: ${hedge_price:.2f} (combined ${final_combined:.2f} <= ${COMBINED_PRICE_THRESHOLD:.3f})"
+            f"   📊 [{symbol}] Hedge using MAKER pricing: ${hedge_price:.2f} (target combined ${final_combined:.2f})"
         )
 
         # Create batch order
