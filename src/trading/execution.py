@@ -93,11 +93,21 @@ def emergency_sell_position(
         try:
             orderbook = clob_client.get_order_book(token_id)
 
-            if orderbook and isinstance(orderbook, dict):
-                bids = orderbook.get("bids", [])
+            if orderbook:
+                # Handle both dict and OrderBookSummary object responses
+                if isinstance(orderbook, dict):
+                    bids = orderbook.get("bids", []) or []
+                else:
+                    bids = getattr(orderbook, "bids", []) or []
+
                 if bids and len(bids) > 0:
-                    best_bid = float(bids[0].get("price", 0))
-                    if best_bid > 0.01:
+                    # Handle both dict and object bid entries
+                    if hasattr(bids[0], "price"):
+                        best_bid = float(bids[0].price)
+                    elif isinstance(bids[0], dict):
+                        best_bid = float(bids[0].get("price", 0))
+
+                    if best_bid and best_bid > 0.01:
                         orderbook_available = True
                         log(
                             f"   📊 [{symbol}] Orderbook available: best bid = ${best_bid:.2f}"
@@ -110,7 +120,7 @@ def emergency_sell_position(
                     log(f"   ⚠️  [{symbol}] Orderbook has no bids (empty book)")
             else:
                 log(
-                    f"   ⚠️  [{symbol}] Orderbook returned invalid data: {type(orderbook)}"
+                    f"   ⚠️  [{symbol}] Orderbook unavailable - skipping progressive pricing"
                 )
         except Exception as book_err:
             log(f"   ⚠️  [{symbol}] Error fetching orderbook: {book_err}")
@@ -224,11 +234,21 @@ def place_entry_and_hedge_atomic(
         best_ask = None
         used_orderbook = False
 
-        if orderbook and isinstance(orderbook, dict):
-            asks = orderbook.get("asks", [])
+        # Handle both dict and OrderBookSummary object responses
+        if orderbook:
+            if isinstance(orderbook, dict):
+                asks = orderbook.get("asks", []) or []
+            else:
+                asks = getattr(orderbook, "asks", []) or []
+
             if asks and len(asks) > 0:
-                best_ask = float(asks[0].get("price", 0))
-                if best_ask > 0:
+                # Handle both dict and object ask entries
+                if hasattr(asks[0], "price"):
+                    best_ask = float(asks[0].price)
+                elif isinstance(asks[0], dict):
+                    best_ask = float(asks[0].get("price", 0))
+
+                if best_ask and best_ask > 0:
                     hedge_price = best_ask
                     used_orderbook = True
                     log(
