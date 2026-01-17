@@ -10,7 +10,10 @@ from src.trading.orders import (
     get_order,
     get_balance_allowance,
     get_clob_client,
+    cancel_order,
+    place_limit_order,
     BUY,
+    SELL,
 )
 from src.data.market_data import get_token_ids
 
@@ -295,6 +298,68 @@ def place_hedge_order(
         return None
 
 
+def emergency_sell_position(
+    symbol: str, token_id: str, size: float, reason: str = "hedge timeout"
+) -> bool:
+    """
+    Emergency market sell of a filled position when hedge fails.
+    Uses best bid price to immediately exit the position.
+
+    Returns True if sell order placed successfully, False otherwise.
+    """
+    try:
+        # Get current orderbook to find best bid
+        clob_client = get_clob_client()
+        orderbook = clob_client.get_order_book(token_id)
+
+        if not orderbook or not isinstance(orderbook, dict):
+            log_error(f"[{symbol}] Cannot emergency sell: orderbook unavailable")
+            return False
+
+        bids = orderbook.get("bids", [])
+        if not bids or len(bids) == 0:
+            log_error(f"[{symbol}] Cannot emergency sell: no bids in orderbook")
+            return False
+
+        # Use best bid price for immediate fill (taker order)
+        best_bid = float(bids[0].get("price", 0))
+
+        if best_bid <= 0.01:
+            log_error(
+                f"[{symbol}] Cannot emergency sell: best bid too low (${best_bid:.2f})"
+            )
+            return False
+
+        log(
+            f"   🚨 [{symbol}] EMERGENCY SELL: Exiting {size:.2f} shares at ${best_bid:.2f} (best bid) due to {reason}"
+        )
+
+        # Place SELL limit order at best bid (should fill immediately as taker)
+        result = place_limit_order(
+            token_id=token_id,
+            price=best_bid,
+            size=size,
+            side=SELL,
+            order_type="FOK",  # Fill-or-Kill: fill immediately or cancel
+        )
+
+        if result.get("success"):
+            order_id = result.get("order_id", "unknown")
+            log(
+                f"   ✅ [{symbol}] Emergency sell order placed: {size:.2f} @ ${best_bid:.2f} (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
+            )
+            return True
+        else:
+            log_error(
+                f"[{symbol}] Emergency sell failed: {result.get('error', 'unknown error')}"
+            )
+            return False
+
+    except Exception as e:
+        log_error(f"[{symbol}] Emergency sell exception: {e}")
+        return False
+
+
 def place_entry_and_hedge_atomic(
     symbol: str,
     entry_token_id: str,
@@ -479,6 +544,38 @@ def place_entry_and_hedge_atomic(
                                     f"   ⚠️  [{symbol}] Entry filled but hedge not filled after {elapsed}s"
                                 )
 
+                                # EARLY EXIT: If entry filled after 10+ seconds and hedge still unfilled,
+                                # immediately exit the position to minimize loss
+                                if elapsed >= 10:
+                                    log(
+                                        f"   🚨 [{symbol}] EARLY EXIT TRIGGER: Entry filled but hedge unfilled after {elapsed}s - exiting now"
+                                    )
+
+                                    sell_success = emergency_sell_position(
+                                        symbol=symbol,
+                                        token_id=entry_token_id,
+                                        size=entry_filled_size,
+                                        reason=f"hedge unfilled after {elapsed}s",
+                                    )
+
+                                    if sell_success:
+                                        log(
+                                            f"   ✅ [{symbol}] Early exit successful - position closed"
+                                        )
+                                        # Cancel the hedge order
+                                        try:
+                                            cancel_order(hedge_order_id)
+                                            log(
+                                                f"   ✅ [{symbol}] Hedge order cancelled"
+                                            )
+                                        except Exception:
+                                            pass
+                                        return None, None
+                                    else:
+                                        log_error(
+                                            f"[{symbol}] Early exit FAILED - will retry at timeout"
+                                        )
+
                     except Exception as poll_err:
                         log(f"   ⚠️  [{symbol}] Error polling order status: {poll_err}")
 
@@ -498,10 +595,42 @@ def place_entry_and_hedge_atomic(
                                     f"   ❌ [{symbol}] HEDGE TIMEOUT: Entry filled ({entry_filled_size:.2f}) but hedge unfilled after {HEDGE_FILL_TIMEOUT_SECONDS}s"
                                 )
                                 log(
-                                    f"   ⚠️  [{symbol}] CRITICAL: Position is UNHEDGED - consider manual intervention"
+                                    f"   ⚠️  [{symbol}] CRITICAL: Position is UNHEDGED - initiating emergency exit"
                                 )
-                                # Don't cancel already-filled entry, but flag it
-                                # Return results so position manager can handle it
+
+                                # EMERGENCY EXIT: Market sell the filled entry position immediately
+                                # This prevents holding an unhedged position which could result in 50%+ losses
+                                sell_success = emergency_sell_position(
+                                    symbol=symbol,
+                                    token_id=entry_token_id,
+                                    size=entry_filled_size,
+                                    reason="hedge timeout",
+                                )
+
+                                if sell_success:
+                                    log(
+                                        f"   ✅ [{symbol}] Emergency exit successful - position closed"
+                                    )
+                                    # Cancel the hedge order since we no longer need it
+                                    try:
+                                        cancel_result = cancel_order(hedge_order_id)
+                                        if cancel_result:
+                                            log(
+                                                f"   ✅ [{symbol}] Hedge order cancelled (no longer needed)"
+                                            )
+                                    except Exception as cancel_err:
+                                        log(
+                                            f"   ⚠️  [{symbol}] Could not cancel hedge order: {cancel_err}"
+                                        )
+
+                                    # Return None to prevent trade from being saved to database
+                                    return None, None
+                                else:
+                                    log_error(
+                                        f"[{symbol}] Emergency exit FAILED - position remains unhedged!"
+                                    )
+                                    # Continue with original flow - position will be tracked as unhedged
+                                    # The position manager will attempt corrective hedges
                             else:
                                 # Entry not filled yet, cancel it
                                 log(
