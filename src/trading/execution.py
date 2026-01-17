@@ -414,13 +414,32 @@ def place_entry_and_hedge_atomic(
                 log(f"   🔄 [{symbol}] Hedge retry {retry}/{MAX_HEDGE_RETRIES}")
 
                 # Get fresh orderbook for hedge pricing
-                from src.trading.orders import get_spread
-
                 try:
-                    spread_data = get_spread(hedge_token_id)
-                    if spread_data and "bid" in spread_data and "ask" in spread_data:
-                        hedge_bid = float(spread_data["bid"])
-                        hedge_ask = float(spread_data["ask"])
+                    from src.trading.orders import get_clob_client
+
+                    client = get_clob_client()
+                    book = client.get_order_book(hedge_token_id)
+
+                    # Parse orderbook (handle both dict and object formats)
+                    if isinstance(book, dict):
+                        bids = book.get("bids", []) or []
+                        asks = book.get("asks", []) or []
+                    else:
+                        bids = getattr(book, "bids", []) or []
+                        asks = getattr(book, "asks", []) or []
+
+                    if bids and asks:
+                        # Get best bid/ask (last element is best price)
+                        hedge_bid = float(
+                            bids[-1].price
+                            if hasattr(bids[-1], "price")
+                            else bids[-1].get("price", 0)
+                        )
+                        hedge_ask = float(
+                            asks[-1].price
+                            if hasattr(asks[-1], "price")
+                            else asks[-1].get("price", 0)
+                        )
 
                         # CRITICAL: Maintain profitability - combined must be <= $0.99
                         # Calculate max hedge price from entry price
@@ -466,7 +485,7 @@ def place_entry_and_hedge_atomic(
                             log(f"   ⚠️  [{symbol}] Hedge retry {retry} failed: {error}")
                             time.sleep(1)  # Brief pause before next retry
                     else:
-                        log(f"   ⚠️  [{symbol}] Could not fetch spread for hedge retry")
+                        log(f"   ⚠️  [{symbol}] Empty orderbook for hedge retry")
                         time.sleep(1)
                 except Exception as e:
                     log_error(f"[{symbol}] Error during hedge retry {retry}: {e}")
