@@ -415,32 +415,55 @@ def place_entry_and_hedge_atomic(
 
                 # Get fresh orderbook for hedge pricing
                 try:
+                    from src.utils.websocket_manager import ws_manager
                     from src.trading.orders import get_clob_client
 
-                    client = get_clob_client()
-                    book = client.get_order_book(hedge_token_id)
+                    hedge_bid = None
+                    hedge_ask = None
 
-                    # Parse orderbook (handle both dict and object formats)
-                    if isinstance(book, dict):
-                        bids = book.get("bids", []) or []
-                        asks = book.get("asks", []) or []
+                    # 1. Try WebSocket cache first (fastest, real-time)
+                    ws_bid, ws_ask = ws_manager.get_bid_ask(hedge_token_id)
+                    if ws_bid and ws_ask and ws_bid > 0.01 and ws_ask > 0.01:
+                        hedge_bid = ws_bid
+                        hedge_ask = ws_ask
+                        log(
+                            f"   📊 [{symbol}] Using WebSocket prices: bid=${hedge_bid:.2f}, ask=${hedge_ask:.2f}"
+                        )
                     else:
-                        bids = getattr(book, "bids", []) or []
-                        asks = getattr(book, "asks", []) or []
+                        # 2. Fallback to CLOB API orderbook query
+                        client = get_clob_client()
+                        book = client.get_order_book(hedge_token_id)
 
-                    if bids and asks:
-                        # Get best bid/ask (last element is best price)
-                        hedge_bid = float(
-                            bids[-1].price
-                            if hasattr(bids[-1], "price")
-                            else bids[-1].get("price", 0)
-                        )
-                        hedge_ask = float(
-                            asks[-1].price
-                            if hasattr(asks[-1], "price")
-                            else asks[-1].get("price", 0)
-                        )
+                        # Parse orderbook (handle both dict and object formats)
+                        if isinstance(book, dict):
+                            bids = book.get("bids", []) or []
+                            asks = book.get("asks", []) or []
+                        else:
+                            bids = getattr(book, "bids", []) or []
+                            asks = getattr(book, "asks", []) or []
 
+                        if bids and asks:
+                            # Get best bid/ask (last element is best price)
+                            hedge_bid = float(
+                                bids[-1].price
+                                if hasattr(bids[-1], "price")
+                                else bids[-1].get("price", 0)
+                            )
+                            hedge_ask = float(
+                                asks[-1].price
+                                if hasattr(asks[-1], "price")
+                                else asks[-1].get("price", 0)
+                            )
+                            log(
+                                f"   📊 [{symbol}] Using API prices: bid=${hedge_bid:.2f}, ask=${hedge_ask:.2f}"
+                            )
+
+                    if (
+                        hedge_bid
+                        and hedge_ask
+                        and hedge_bid > 0.01
+                        and hedge_ask > 0.01
+                    ):
                         # CRITICAL: Maintain profitability - combined must be <= $0.99
                         # Calculate max hedge price from entry price
                         max_hedge_price = round(0.99 - entry_price, 2)
