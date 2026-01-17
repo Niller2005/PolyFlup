@@ -179,41 +179,34 @@ def _check_target_price_alignment(
 def _calculate_bet_size(
     balance: float, price: float, sizing_confidence: float
 ) -> tuple[float, float]:
-    """Calculate position size and effective bet amount"""
-    base_bet = balance * (BET_PERCENT / 100.0)
-    # Scaled bet based on confidence
-    confidence_multiplier = sizing_confidence * CONFIDENCE_SCALING_FACTOR
-    target_bet = base_bet * confidence_multiplier
+    """
+    Calculate position size using simplified model:
+    - $1 of balance = 1 share
+    - BET_PERCENT of balance per symbol
 
-    # Ensure at least some minimum multiplier if confidence is very low but valid
-    if target_bet < base_bet * 0.5:
-        target_bet = base_bet * 0.5
+    Example:
+        Balance: $100, BET_PERCENT: 20%
+        → $20 available per symbol
+        → 20 shares per symbol
+        → Entry 20 @ $0.51 + Hedge 20 @ $0.48 = $0.99 combined
+        → Profit: $0.01 per share × 20 shares = $0.20
+    """
+    # Simple: BET_PERCENT of balance = dollar allocation
+    allocation_usd = balance * (BET_PERCENT / 100.0)
 
-    size = round(target_bet / price, 4)
+    # Simple: $1 = 1 share (ignore price)
+    size = allocation_usd
 
-    # Bump to MIN_SIZE if calculated size is below minimum and we can afford it
+    # Enforce minimum size
     if size < MIN_SIZE:
-        min_size_cost = MIN_SIZE * price
-        if balance >= min_size_cost:
-            size = MIN_SIZE
-            bet_usd_effective = min_size_cost
-        else:
-            bet_usd_effective = target_bet
-    else:
-        bet_usd_effective = target_bet
+        size = MIN_SIZE
 
-    # Use MAX_SIZE strategy
-    if MAX_SIZE:
-        if MAX_SIZE_MODE == "MAXIMIZE":
-            # Use higher of balance % or MAX_SIZE
-            max_size_usd = MAX_SIZE * price
-            if bet_usd_effective < max_size_usd:
-                size = MAX_SIZE
-                bet_usd_effective = max_size_usd
-        else:  # CAP mode (default)
-            if size > MAX_SIZE:
-                size = MAX_SIZE
-                bet_usd_effective = size * price
+    # Enforce maximum size if configured
+    if MAX_SIZE and size > MAX_SIZE:
+        size = MAX_SIZE
+
+    # Calculate actual cost based on entry price
+    bet_usd_effective = size * price
 
     return size, bet_usd_effective
 
