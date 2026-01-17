@@ -125,44 +125,51 @@ def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> 
     """
     Execute trading logic for multiple symbols using ATOMIC entry+hedge for each.
 
-    This function processes symbols SEQUENTIALLY, checking balance before each symbol
-    to prevent placing orders without sufficient funds for both entry and hedge.
+    Each symbol uses BET_PERCENT of the INITIAL balance (not remaining balance).
+    Example: $100 balance, BET_PERCENT=20%, 4 symbols
+      → Each symbol gets $20 allocation (20 shares)
+      → Total needed: $80 for all 4 symbols
 
-    Each trade is atomic: entry + hedge placed simultaneously. If balance is insufficient
-    for any symbol, we skip it and continue to the next symbol.
+    Symbols are processed sequentially. If balance drops below the fixed allocation
+    needed for a symbol, that symbol and all remaining symbols are skipped.
     """
     placed_count = 0
-    remaining_balance = balance
+
+    # Calculate FIXED allocation per symbol based on INITIAL balance
+    # This is the same for all symbols, regardless of how many have traded
+    fixed_allocation_per_symbol = balance * (BET_PERCENT / 100.0)
+    approximate_cost_per_symbol = (
+        fixed_allocation_per_symbol * 1.0
+    )  # Worst case: $1.00 combined price
 
     log(
-        f"📋 Batch processing {len(symbols)} symbols sequentially with atomic entry+hedge"
+        f"📋 Batch processing {len(symbols)} symbols sequentially | Fixed allocation per symbol: ${fixed_allocation_per_symbol:.2f}"
     )
 
     for idx, symbol in enumerate(symbols, 1):
-        # Check balance before attempting trade
+        # Check current balance before attempting trade
         from src.trading.orders import get_balance_allowance
 
         bal_info = get_balance_allowance()
-        if bal_info:
-            remaining_balance = bal_info.get("balance", 0)
+        current_balance = bal_info.get("balance", 0) if bal_info else 0
 
-        # Calculate approximate cost needed (entry + hedge)
-        # Using BET_PERCENT to estimate position size
-        position_size = remaining_balance * (BET_PERCENT / 100.0)
-        approximate_cost = position_size * 1.0  # Worst case: $1.00 combined price
-
-        if remaining_balance < approximate_cost:
+        # Check if we have enough for the FIXED allocation
+        if current_balance < approximate_cost_per_symbol:
             log(
-                f"⏭️  [{symbol}] ({idx}/{len(symbols)}) SKIPPED: Insufficient balance (${remaining_balance:.2f} < ${approximate_cost:.2f} needed)"
+                f"⏭️  [{symbol}] ({idx}/{len(symbols)}) SKIPPED: Insufficient balance (${current_balance:.2f} < ${approximate_cost_per_symbol:.2f} needed)"
             )
-            continue
+            log(
+                f"   ⚠️  Skipping remaining {len(symbols) - idx + 1} symbol(s) - balance too low for fixed ${fixed_allocation_per_symbol:.2f} allocation"
+            )
+            break  # Skip this and all remaining symbols
 
         log(
-            f"🎯 [{symbol}] ({idx}/{len(symbols)}) Processing with balance: ${remaining_balance:.2f}"
+            f"🎯 [{symbol}] ({idx}/{len(symbols)}) Processing with ${fixed_allocation_per_symbol:.2f} allocation (balance: ${current_balance:.2f})"
         )
 
-        # Each trade is executed independently with atomic entry+hedge
-        trade_id = execute_first_entry(symbol, remaining_balance, verbose=verbose)
+        # Pass INITIAL balance so _calculate_bet_size() uses the fixed allocation
+        # This ensures all symbols use BET_PERCENT of the initial balance, not remaining
+        trade_id = execute_first_entry(symbol, balance, verbose=verbose)
 
         if trade_id:
             placed_count += 1
