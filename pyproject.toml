@@ -7,7 +7,7 @@ requires-python = ">=3.9.10"
 dependencies = [
     "eth-account>=0.13.7",
     "pandas>=2.3.3",
-    "py-clob-client>=0.34.1",
+    "py-clob-client>=0.34.5",
     "py-builder-relayer-client>=0.0.1",
     "py-builder-signing-sdk>=0.0.2",
     "python-dotenv>=1.2.1",

@@ -457,10 +457,17 @@ def place_entry_and_hedge_atomic(
                     final_hedge_filled = final_hedge_filled_size >= (entry_size - 0.01)
 
                     # CRITICAL: Handle partial fills with emergency sell
+                    # NEW BEHAVIOR: Emergency sell BOTH positions on ANY partial fill
+                    # to prevent orphaned positions
                     if final_entry_filled and not final_hedge_filled:
-                        # Entry filled but hedge didn't - emergency sell the entry position
+                        # Entry filled but hedge didn't (or partially filled)
                         log(
-                            f"   🚨 [{symbol}] CRITICAL: Entry filled ({final_entry_filled_size:.2f}) but hedge timed out - emergency selling entry"
+                            f"   🚨 [{symbol}] CRITICAL: Entry filled ({final_entry_filled_size:.2f}) but hedge timed out (filled {final_hedge_filled_size:.2f}/{entry_size:.1f})"
+                        )
+
+                        # Emergency sell entry position
+                        log(
+                            f"   💥 [{symbol}] Emergency selling entry position ({final_entry_filled_size:.2f} shares)"
                         )
                         emergency_sell_position(
                             symbol=symbol,
@@ -469,6 +476,20 @@ def place_entry_and_hedge_atomic(
                             reason="hedge timeout after entry fill",
                             entry_order_id=entry_order_id,
                         )
+
+                        # If hedge partially filled, emergency sell those shares too
+                        if final_hedge_filled_size > 0.01:
+                            log(
+                                f"   💥 [{symbol}] Emergency selling partial hedge position ({final_hedge_filled_size:.2f} shares)"
+                            )
+                            emergency_sell_position(
+                                symbol=symbol,
+                                token_id=hedge_token_id,
+                                size=final_hedge_filled_size,
+                                reason="partial hedge fill cleanup",
+                                entry_order_id=hedge_order_id,
+                            )
+
                         # Cancel unfilled hedge
                         try:
                             cancel_order(hedge_order_id)
@@ -477,9 +498,14 @@ def place_entry_and_hedge_atomic(
                             log_error(f"[{symbol}] Error cancelling hedge: {e}")
 
                     elif final_hedge_filled and not final_entry_filled:
-                        # Hedge filled but entry didn't - emergency sell the hedge position
+                        # Hedge filled but entry didn't (or partially filled)
                         log(
-                            f"   🚨 [{symbol}] CRITICAL: Hedge filled ({final_hedge_filled_size:.2f}) but entry timed out - emergency selling hedge"
+                            f"   🚨 [{symbol}] CRITICAL: Hedge filled ({final_hedge_filled_size:.2f}) but entry timed out (filled {final_entry_filled_size:.2f}/{entry_size:.1f})"
+                        )
+
+                        # Emergency sell hedge position
+                        log(
+                            f"   💥 [{symbol}] Emergency selling hedge position ({final_hedge_filled_size:.2f} shares)"
                         )
                         emergency_sell_position(
                             symbol=symbol,
@@ -488,6 +514,20 @@ def place_entry_and_hedge_atomic(
                             reason="entry timeout after hedge fill",
                             entry_order_id=hedge_order_id,
                         )
+
+                        # If entry partially filled, emergency sell those shares too
+                        if final_entry_filled_size > 0.01:
+                            log(
+                                f"   💥 [{symbol}] Emergency selling partial entry position ({final_entry_filled_size:.2f} shares)"
+                            )
+                            emergency_sell_position(
+                                symbol=symbol,
+                                token_id=entry_token_id,
+                                size=final_entry_filled_size,
+                                reason="partial entry fill cleanup",
+                                entry_order_id=entry_order_id,
+                            )
+
                         # Cancel unfilled entry
                         try:
                             cancel_order(entry_order_id)
@@ -496,7 +536,37 @@ def place_entry_and_hedge_atomic(
                             log_error(f"[{symbol}] Error cancelling entry: {e}")
 
                     else:
-                        # Neither filled or both partially filled - just cancel both
+                        # Neither filled or both partially filled - cancel both and sell any partials
+                        log(
+                            f"   🚨 [{symbol}] TIMEOUT: Neither order fully filled - cleaning up"
+                        )
+
+                        # Sell any partial entry fills
+                        if final_entry_filled_size > 0.01:
+                            log(
+                                f"   💥 [{symbol}] Emergency selling partial entry position ({final_entry_filled_size:.2f} shares)"
+                            )
+                            emergency_sell_position(
+                                symbol=symbol,
+                                token_id=entry_token_id,
+                                size=final_entry_filled_size,
+                                reason="partial entry fill cleanup",
+                                entry_order_id=entry_order_id,
+                            )
+
+                        # Sell any partial hedge fills
+                        if final_hedge_filled_size > 0.01:
+                            log(
+                                f"   💥 [{symbol}] Emergency selling partial hedge position ({final_hedge_filled_size:.2f} shares)"
+                            )
+                            emergency_sell_position(
+                                symbol=symbol,
+                                token_id=hedge_token_id,
+                                size=final_hedge_filled_size,
+                                reason="partial hedge fill cleanup",
+                                entry_order_id=hedge_order_id,
+                            )
+
                         # Cancel entry
                         try:
                             cancel_order(entry_order_id)
