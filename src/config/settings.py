@@ -27,6 +27,11 @@ else:
     MAX_SIZE = None  # No cap
 MAX_SIZE_MODE = os.getenv("MAX_SIZE_MODE", "CAP")  # CAP or MAXIMIZE
 
+# Hedge Pricing
+COMBINED_PRICE_THRESHOLD = float(
+    os.getenv("COMBINED_PRICE_THRESHOLD", "0.985")
+)  # Max combined entry+hedge price for profit (default 1.5¢ buffer)
+
 
 # Position Management
 ENABLE_STOP_LOSS = os.getenv("ENABLE_STOP_LOSS", "YES").upper() == "YES"

@@ -222,6 +222,7 @@ def place_entry_and_hedge_atomic(
 
         hedge_price = None
         best_ask = None
+        used_orderbook = False
 
         if orderbook and isinstance(orderbook, dict):
             asks = orderbook.get("asks", [])
@@ -229,32 +230,41 @@ def place_entry_and_hedge_atomic(
                 best_ask = float(asks[0].get("price", 0))
                 if best_ask > 0:
                     hedge_price = best_ask
+                    used_orderbook = True
                     log(
                         f"   📊 [{symbol}] Hedge using TAKER pricing: ${hedge_price:.2f} (best ask)"
                     )
 
-        # FALLBACK: If orderbook unavailable, calculate target price
+        # FALLBACK: If orderbook unavailable, calculate conservative target price
+        # Use threshold - 0.005 to ensure we stay under combined price threshold
         if hedge_price is None:
+            from src.config.settings import COMBINED_PRICE_THRESHOLD
+
+            # Calculate target that ensures combined < threshold
+            max_hedge_for_profit = COMBINED_PRICE_THRESHOLD - entry_price - 0.005
             target_hedge_price = round(0.99 - entry_price, 2)
-            hedge_price = max(0.01, min(0.99, target_hedge_price))
+            hedge_price = min(max_hedge_for_profit, target_hedge_price)
+            hedge_price = max(0.01, min(0.99, hedge_price))
             log(
-                f"   ⚠️  [{symbol}] Orderbook unavailable for hedge, using calculated price: ${hedge_price:.2f}"
+                f"   ⚠️  [{symbol}] Orderbook unavailable for hedge, using calculated price: ${hedge_price:.2f} (conservative estimate)"
             )
 
-        # PROFIT SAFETY CHECK: Verify combined price <= $0.98 for guaranteed profit
-        # Use $0.98 threshold (2 cent buffer) to ensure profitability after fees
+        # PROFIT SAFETY CHECK: Verify combined price ensures profitability
+        # Import threshold from settings (configurable via .env)
+        from src.config.settings import COMBINED_PRICE_THRESHOLD
+
         final_combined = entry_price + hedge_price
-        if final_combined > 0.98:
+        if final_combined > COMBINED_PRICE_THRESHOLD:
             log(
-                f"   ❌ [{symbol}] REJECTED: Combined ${final_combined:.2f} > $0.98 (entry ${entry_price:.2f} + hedge ${hedge_price:.2f})"
+                f"   ❌ [{symbol}] REJECTED: Combined ${final_combined:.2f} > ${COMBINED_PRICE_THRESHOLD:.3f} (entry ${entry_price:.2f} + hedge ${hedge_price:.2f})"
             )
             log(
-                f"   💡 [{symbol}] Need hedge <= ${0.98 - entry_price:.2f} for profit, market wants ${hedge_price:.2f}"
+                f"   💡 [{symbol}] Need hedge <= ${COMBINED_PRICE_THRESHOLD - entry_price:.2f} for profit, {'market wants' if used_orderbook else 'calculated'} ${hedge_price:.2f}"
             )
             return None, None
 
         log(
-            f"   ✅ [{symbol}] Hedge pricing approved: ${hedge_price:.2f} (combined ${final_combined:.2f} <= $0.98)"
+            f"   ✅ [{symbol}] Hedge pricing approved: ${hedge_price:.2f} (combined ${final_combined:.2f} <= ${COMBINED_PRICE_THRESHOLD:.3f})"
         )
 
         # Create batch order
