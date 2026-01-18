@@ -326,6 +326,9 @@ def emergency_sell_position(
                             f"   ⚠️  [{symbol}] Could not cancel {last_order_id[:10]}: {cancel_err}"
                         )
 
+                # Round to nearest $0.01 (Polymarket requirement)
+                attempt_price = round(attempt_price, 2)
+
                 log(
                     f"   🚨 [{symbol}] EMERGENCY SELL: Trying {size:.2f} shares at ${attempt_price:.2f} ({attempt_name})"
                 )
@@ -477,6 +480,9 @@ def emergency_sell_position(
                         log(
                             f"   ⚠️  [{symbol}] Could not cancel {last_order_id[:10]}: {cancel_err}"
                         )
+
+                # Round to nearest $0.01 (Polymarket requirement)
+                attempt_price = round(attempt_price, 2)
 
                 log(
                     f"   🚨 [{symbol}] EMERGENCY SELL: Trying {size:.2f} shares at ${attempt_price:.2f} ({attempt_name})"
