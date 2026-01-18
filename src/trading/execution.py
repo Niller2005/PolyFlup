@@ -1017,32 +1017,122 @@ def place_entry_and_hedge_atomic(
                         f"   🚨 [{symbol}] CRITICAL: {hedge_side} filled ({final_hedge_filled_size:.2f}) but {entry_side} timed out (filled {final_entry_filled_size:.2f}/{entry_size:.1f})"
                     )
 
-                    # Emergency sell hedge position
-                    log(
-                        f"   💥 [{symbol}] Emergency selling {hedge_side} position ({final_hedge_filled_size:.2f} shares)"
-                    )
-                    emergency_sell_position(
-                        symbol=symbol,
-                        token_id=hedge_token_id,
-                        size=final_hedge_filled_size,
-                        reason=f"{entry_side} timeout after {hedge_side} fill",
-                        entry_order_id=hedge_order_id,
-                        entry_price=hedge_price,  # Use hedge price as reference
+                    # SMART DECISION: Check if hedge position is winning before emergency selling
+                    # If hedge is on winning side, HOLD it as directional bet
+                    from src.utils.websocket_manager import ws_manager
+                    from src.config.settings import (
+                        EMERGENCY_SELL_HOLD_IF_WINNING,
+                        EMERGENCY_SELL_PRICE_TOLERANCE_PCT,
+                        EMERGENCY_SELL_MIN_PROFIT_CENTS,
                     )
 
-                    # If entry partially filled, emergency sell those shares too
-                    if final_entry_filled_size > 0.01:
+                    should_hold_hedge = False
+                    should_hold_entry = False
+
+                    if EMERGENCY_SELL_HOLD_IF_WINNING:
+                        # Check hedge position
+                        hedge_bid, hedge_ask = ws_manager.get_bid_ask(hedge_token_id)
+                        if hedge_bid and hedge_ask and hedge_bid > 0.01:
+                            hedge_mid = (hedge_bid + hedge_ask) / 2
+                            price_diff_pct = (
+                                abs(hedge_mid - hedge_price) / hedge_price * 100
+                                if hedge_price > 0
+                                else 100
+                            )
+                            min_profit = EMERGENCY_SELL_MIN_PROFIT_CENTS / 100
+
+                            log(
+                                f"   📊 [{symbol}] {hedge_side} check: Filled ${hedge_price:.2f}, now ${hedge_mid:.2f}"
+                            )
+
+                            # HOLD if winning or reasonable
+                            if hedge_mid > hedge_price + min_profit:
+                                log(
+                                    f"   🎉 [{symbol}] {hedge_side} is WINNING! (+${hedge_mid - hedge_price:.2f})"
+                                )
+                                should_hold_hedge = True
+                            elif price_diff_pct <= EMERGENCY_SELL_PRICE_TOLERANCE_PCT:
+                                log(
+                                    f"   ✅ [{symbol}] {hedge_side} still reasonable (within {EMERGENCY_SELL_PRICE_TOLERANCE_PCT}%)"
+                                )
+                                should_hold_hedge = True
+                            else:
+                                log(
+                                    f"   ⚠️  [{symbol}] {hedge_side} is losing (-${hedge_price - hedge_mid:.2f})"
+                                )
+
+                        # Check entry position if partially filled
+                        if final_entry_filled_size > 0.01:
+                            entry_bid, entry_ask = ws_manager.get_bid_ask(
+                                entry_token_id
+                            )
+                            if entry_bid and entry_ask and entry_bid > 0.01:
+                                entry_mid = (entry_bid + entry_ask) / 2
+                                price_diff_pct = (
+                                    abs(entry_mid - entry_price) / entry_price * 100
+                                    if entry_price > 0
+                                    else 100
+                                )
+                                min_profit = EMERGENCY_SELL_MIN_PROFIT_CENTS / 100
+
+                                log(
+                                    f"   📊 [{symbol}] {entry_side} check: Filled ${entry_price:.2f}, now ${entry_mid:.2f}"
+                                )
+
+                                # HOLD if winning or reasonable
+                                if entry_mid > entry_price + min_profit:
+                                    log(
+                                        f"   🎉 [{symbol}] {entry_side} is WINNING! (+${entry_mid - entry_price:.2f})"
+                                    )
+                                    should_hold_entry = True
+                                elif (
+                                    price_diff_pct <= EMERGENCY_SELL_PRICE_TOLERANCE_PCT
+                                ):
+                                    log(
+                                        f"   ✅ [{symbol}] {entry_side} still reasonable (within {EMERGENCY_SELL_PRICE_TOLERANCE_PCT}%)"
+                                    )
+                                    should_hold_entry = True
+                                else:
+                                    log(
+                                        f"   ⚠️  [{symbol}] {entry_side} is losing (-${entry_price - entry_mid:.2f})"
+                                    )
+
+                    # Emergency sell hedge if not holding
+                    if not should_hold_hedge:
                         log(
-                            f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
+                            f"   💥 [{symbol}] Emergency selling {hedge_side} position ({final_hedge_filled_size:.2f} shares)"
                         )
                         emergency_sell_position(
                             symbol=symbol,
-                            token_id=entry_token_id,
-                            size=final_entry_filled_size,
-                            reason=f"partial {entry_side} fill cleanup",
-                            entry_order_id=entry_order_id,
-                            entry_price=entry_price,  # Use entry price as reference
+                            token_id=hedge_token_id,
+                            size=final_hedge_filled_size,
+                            reason=f"{entry_side} timeout after {hedge_side} fill",
+                            entry_order_id=hedge_order_id,
+                            entry_price=hedge_price,  # Use hedge price as reference
                         )
+                    else:
+                        log(
+                            f"   🎯 [{symbol}] HOLDING {hedge_side} position ({final_hedge_filled_size:.2f} shares) - Taking directional bet!"
+                        )
+
+                    # Emergency sell partial entry if not holding
+                    if final_entry_filled_size > 0.01:
+                        if not should_hold_entry:
+                            log(
+                                f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
+                            )
+                            emergency_sell_position(
+                                symbol=symbol,
+                                token_id=entry_token_id,
+                                size=final_entry_filled_size,
+                                reason=f"partial {entry_side} fill cleanup",
+                                entry_order_id=entry_order_id,
+                                entry_price=entry_price,  # Use entry price as reference
+                            )
+                        else:
+                            log(
+                                f"   🎯 [{symbol}] HOLDING partial {entry_side} position ({final_entry_filled_size:.2f} shares) - Taking directional bet!"
+                            )
 
                     # Cancel unfilled entry
                     try:
@@ -1057,33 +1147,125 @@ def place_entry_and_hedge_atomic(
                         f"   🚨 [{symbol}] TIMEOUT: Neither order fully filled - cleaning up"
                     )
 
-                    # Sell any partial entry fills
-                    if final_entry_filled_size > 0.01:
-                        log(
-                            f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
-                        )
-                        emergency_sell_position(
-                            symbol=symbol,
-                            token_id=entry_token_id,
-                            size=final_entry_filled_size,
-                            reason=f"partial {entry_side} fill cleanup",
-                            entry_order_id=entry_order_id,
-                            entry_price=entry_price,  # Use entry price as reference
-                        )
+                    # SMART DECISION: Check if partial fills are winning before emergency selling
+                    from src.utils.websocket_manager import ws_manager
+                    from src.config.settings import (
+                        EMERGENCY_SELL_HOLD_IF_WINNING,
+                        EMERGENCY_SELL_PRICE_TOLERANCE_PCT,
+                        EMERGENCY_SELL_MIN_PROFIT_CENTS,
+                    )
 
-                    # Sell any partial hedge fills
+                    should_hold_entry = False
+                    should_hold_hedge = False
+
+                    if EMERGENCY_SELL_HOLD_IF_WINNING:
+                        # Check entry position if partially filled
+                        if final_entry_filled_size > 0.01:
+                            entry_bid, entry_ask = ws_manager.get_bid_ask(
+                                entry_token_id
+                            )
+                            if entry_bid and entry_ask and entry_bid > 0.01:
+                                entry_mid = (entry_bid + entry_ask) / 2
+                                price_diff_pct = (
+                                    abs(entry_mid - entry_price) / entry_price * 100
+                                    if entry_price > 0
+                                    else 100
+                                )
+                                min_profit = EMERGENCY_SELL_MIN_PROFIT_CENTS / 100
+
+                                log(
+                                    f"   📊 [{symbol}] {entry_side} check: Filled ${entry_price:.2f}, now ${entry_mid:.2f}"
+                                )
+
+                                if entry_mid > entry_price + min_profit:
+                                    log(
+                                        f"   🎉 [{symbol}] {entry_side} is WINNING! (+${entry_mid - entry_price:.2f})"
+                                    )
+                                    should_hold_entry = True
+                                elif (
+                                    price_diff_pct <= EMERGENCY_SELL_PRICE_TOLERANCE_PCT
+                                ):
+                                    log(
+                                        f"   ✅ [{symbol}] {entry_side} still reasonable (within {EMERGENCY_SELL_PRICE_TOLERANCE_PCT}%)"
+                                    )
+                                    should_hold_entry = True
+                                else:
+                                    log(
+                                        f"   ⚠️  [{symbol}] {entry_side} is losing (-${entry_price - entry_mid:.2f})"
+                                    )
+
+                        # Check hedge position if partially filled
+                        if final_hedge_filled_size > 0.01:
+                            hedge_bid, hedge_ask = ws_manager.get_bid_ask(
+                                hedge_token_id
+                            )
+                            if hedge_bid and hedge_ask and hedge_bid > 0.01:
+                                hedge_mid = (hedge_bid + hedge_ask) / 2
+                                price_diff_pct = (
+                                    abs(hedge_mid - hedge_price) / hedge_price * 100
+                                    if hedge_price > 0
+                                    else 100
+                                )
+                                min_profit = EMERGENCY_SELL_MIN_PROFIT_CENTS / 100
+
+                                log(
+                                    f"   📊 [{symbol}] {hedge_side} check: Filled ${hedge_price:.2f}, now ${hedge_mid:.2f}"
+                                )
+
+                                if hedge_mid > hedge_price + min_profit:
+                                    log(
+                                        f"   🎉 [{symbol}] {hedge_side} is WINNING! (+${hedge_mid - hedge_price:.2f})"
+                                    )
+                                    should_hold_hedge = True
+                                elif (
+                                    price_diff_pct <= EMERGENCY_SELL_PRICE_TOLERANCE_PCT
+                                ):
+                                    log(
+                                        f"   ✅ [{symbol}] {hedge_side} still reasonable (within {EMERGENCY_SELL_PRICE_TOLERANCE_PCT}%)"
+                                    )
+                                    should_hold_hedge = True
+                                else:
+                                    log(
+                                        f"   ⚠️  [{symbol}] {hedge_side} is losing (-${hedge_price - hedge_mid:.2f})"
+                                    )
+
+                    # Sell any partial entry fills (if not holding)
+                    if final_entry_filled_size > 0.01:
+                        if not should_hold_entry:
+                            log(
+                                f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
+                            )
+                            emergency_sell_position(
+                                symbol=symbol,
+                                token_id=entry_token_id,
+                                size=final_entry_filled_size,
+                                reason=f"partial {entry_side} fill cleanup",
+                                entry_order_id=entry_order_id,
+                                entry_price=entry_price,  # Use entry price as reference
+                            )
+                        else:
+                            log(
+                                f"   🎯 [{symbol}] HOLDING partial {entry_side} position ({final_entry_filled_size:.2f} shares) - Taking directional bet!"
+                            )
+
+                    # Sell any partial hedge fills (if not holding)
                     if final_hedge_filled_size > 0.01:
-                        log(
-                            f"   💥 [{symbol}] Emergency selling partial {hedge_side} position ({final_hedge_filled_size:.2f} shares)"
-                        )
-                        emergency_sell_position(
-                            symbol=symbol,
-                            token_id=hedge_token_id,
-                            size=final_hedge_filled_size,
-                            reason=f"partial {hedge_side} fill cleanup",
-                            entry_order_id=hedge_order_id,
-                            entry_price=hedge_price,  # Use hedge price as reference
-                        )
+                        if not should_hold_hedge:
+                            log(
+                                f"   💥 [{symbol}] Emergency selling partial {hedge_side} position ({final_hedge_filled_size:.2f} shares)"
+                            )
+                            emergency_sell_position(
+                                symbol=symbol,
+                                token_id=hedge_token_id,
+                                size=final_hedge_filled_size,
+                                reason=f"partial {hedge_side} fill cleanup",
+                                entry_order_id=hedge_order_id,
+                                entry_price=hedge_price,  # Use hedge price as reference
+                            )
+                        else:
+                            log(
+                                f"   🎯 [{symbol}] HOLDING partial {hedge_side} position ({final_hedge_filled_size:.2f} shares) - Taking directional bet!"
+                            )
 
                     # Cancel entry
                     try:
