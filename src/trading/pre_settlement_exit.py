@@ -1,21 +1,30 @@
 """
-Pre-Settlement Exit Strategy for Unhedged Positions
+Pre-Settlement Exit Strategy for Both Hedged and Unhedged Positions
 
-When holding an unhedged position (one side winning), this module checks
-if we can safely exit the losing side before window close to extract
-additional value, while riding the winning side to full settlement.
+Sells the losing side before window close to extract additional value:
+- **Hedged positions**: ALWAYS sell losing side (we know one side loses)
+- **Unhedged positions**: Sell losing side if winning side has high confidence
 
 Strategy:
-1. Monitor unhedged positions approaching window close
-2. Check if winning side has high confidence (e.g. 70%+)
-3. If safe, sell losing side using progressive pricing
-4. Ride winning side to $1.00 settlement payout
+1. Monitor positions approaching window close (45s before settlement)
+2. Identify which side is winning based on current price
+3. Sell losing side using progressive pricing
+4. Ride winning side to full $1.00 settlement payout
 
-Example:
-  Timeout: UP @ $0.48 (winning), DOWN @ $0.51 (partial, sold immediately)
+Example (Hedged):
+  Entry: UP @ $0.48 (6.0 shares, $2.88 cost)
+  Hedge: DOWN @ $0.52 (6.0 shares, $3.12 cost)
+  Total: $6.00 perfectly hedged
+
+  45s before close: UP @ $0.75, DOWN @ $0.25
+  Action: Sell losing DOWN @ $0.25 → Recover $1.50
+  Settlement: UP wins → $6.00 payout
+  Net: $6.00 + $1.50 - $6.00 = +$1.50 profit! 🚀
+
+Example (Unhedged):
+  Timeout: UP @ $0.48 (winning), DOWN sold immediately
   45s before close: UP @ $0.75 (75% confidence - very safe)
-  Action: Sell losing DOWN side for ~$0.25 recovery
-  Settlement: UP wins → Full $1.00 payout on UP position
+  Settlement: UP wins → Full $1.00 payout
 """
 
 import time
@@ -131,15 +140,17 @@ def check_pre_settlement_exits():
         with db_connection() as conn:
             c = conn.cursor()
 
-            # Find unhedged positions within exit window
+            # Find both hedged AND unhedged positions within exit window
+            # For unhedged: sell losing side if winning side has high confidence
+            # For hedged: ALWAYS sell losing side (we know one side will lose)
             c.execute(
                 """
                 SELECT id, symbol, slug, token_id, side, entry_price, size, 
-                       window_end, bayesian_confidence, additive_confidence
+                       window_end, bayesian_confidence, additive_confidence, is_hedged,
+                       hedge_order_price
                 FROM trades
                 WHERE settled = 0 
                   AND exited_early = 0
-                  AND is_hedged = 0
                   AND datetime(window_end) BETWEEN datetime(?) AND datetime(?)
                 ORDER BY window_end ASC
                 """,
@@ -163,6 +174,8 @@ def check_pre_settlement_exits():
                     window_end,
                     bayesian_conf,
                     additive_conf,
+                    is_hedged,
+                    hedge_price,
                 ) = pos
 
                 # Skip if already processed
@@ -174,30 +187,71 @@ def check_pre_settlement_exits():
 
                 # Use bayesian confidence (more reliable for near-settlement predictions)
                 confidence = bayesian_conf if bayesian_conf else additive_conf
-                if not confidence:
-                    log(
-                        f"   ⚠️  [{symbol}] #{trade_id} No confidence data, skipping pre-settlement exit"
-                    )
-                    continue
 
-                # Get current price of winning side
-                winning_price = ws_manager.get_price(winning_token_id)
-                if not winning_price or winning_price < 0.01:
-                    log(
-                        f"   ⚠️  [{symbol}] #{trade_id} Could not get current price for winning side"
-                    )
-                    continue
+                # For hedged positions, we don't need confidence check
+                # We KNOW one side will lose, so always try to exit the losing side
+                if not is_hedged:
+                    if not confidence:
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} No confidence data, skipping pre-settlement exit"
+                        )
+                        continue
 
-                # Check if it's safe to exit losing side
-                is_safe, reason = _check_position_safety(
-                    symbol, winning_side, confidence, winning_price, entry_price
-                )
+                    # Get current price of winning side
+                    winning_price = ws_manager.get_price(winning_token_id)
+                    if not winning_price or winning_price < 0.01:
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} Could not get current price for winning side"
+                        )
+                        continue
 
-                if not is_safe:
-                    log(
-                        f"   🛡️  [{symbol}] #{trade_id} Not safe to exit losing side: {reason}"
+                    # Check if it's safe to exit losing side (UNHEDGED only)
+                    is_safe, reason = _check_position_safety(
+                        symbol, winning_side, confidence, winning_price, entry_price
                     )
-                    continue
+
+                    if not is_safe:
+                        log(
+                            f"   🛡️  [{symbol}] #{trade_id} Not safe to exit losing side: {reason}"
+                        )
+                        continue
+
+                    hedge_status = "⚠️  UNHEDGED"
+                else:
+                    # HEDGED position - always safe to exit losing side
+                    # Determine which side is winning based on current prices
+                    winning_price = ws_manager.get_price(winning_token_id)
+                    if not winning_price or winning_price < 0.01:
+                        log(f"   ⚠️  [{symbol}] #{trade_id} Could not get current price")
+                        continue
+
+                    # For hedged positions, check which side is actually winning
+                    # If entry side price > 0.50, entry side is winning
+                    # If entry side price < 0.50, hedge side is winning
+                    if winning_price > 0.50:
+                        # Entry side winning, winning_side and winning_token_id are correct
+                        reason = f"Hedged position, {winning_side} @ ${winning_price:.2f} > $0.50"
+                    else:
+                        # Hedge side winning! Need to swap which side we consider "winning"
+                        # Get hedge token_id
+                        hedge_token_id = _get_losing_side_token_id(
+                            symbol, winning_side, slug
+                        )
+                        if not hedge_token_id:
+                            continue
+
+                        hedge_current_price = ws_manager.get_price(hedge_token_id)
+                        if not hedge_current_price or hedge_current_price < 0.01:
+                            continue
+
+                        # Swap: hedge is now winning side
+                        winning_token_id = hedge_token_id
+                        winning_side = "DOWN" if winning_side == "UP" else "UP"
+                        winning_price = hedge_current_price
+                        entry_price = hedge_price if hedge_price else 0.50
+                        reason = f"Hedged position, {winning_side} @ ${winning_price:.2f} > $0.50"
+
+                    hedge_status = "🛡️ HEDGED"
 
                 # Get losing side token_id
                 losing_token_id = _get_losing_side_token_id(symbol, winning_side, slug)
@@ -223,10 +277,18 @@ def check_pre_settlement_exits():
                 seconds_left = (window_end_dt - now).total_seconds()
 
                 log(f"   💰 [{symbol}] #{trade_id} PRE-SETTLEMENT EXIT OPPORTUNITY")
-                log(
-                    f"   📊 [{symbol}] Winning {winning_side} @ ${winning_price:.2f} ({confidence:.1%} conf) | "
-                    f"Losing {losing_side} @ ${losing_price:.2f} | {int(seconds_left)}s left"
-                )
+
+                if is_hedged:
+                    log(
+                        f"   📊 [{symbol}] {hedge_status} | Winning {winning_side} @ ${winning_price:.2f} | "
+                        f"Losing {losing_side} @ ${losing_price:.2f} | {int(seconds_left)}s left"
+                    )
+                else:
+                    log(
+                        f"   📊 [{symbol}] {hedge_status} | Winning {winning_side} @ ${winning_price:.2f} ({confidence:.1%} conf) | "
+                        f"Losing {losing_side} @ ${losing_price:.2f} | {int(seconds_left)}s left"
+                    )
+
                 log(
                     f"   🎯 [{symbol}] {reason} - Selling losing {losing_side} side for profit recovery"
                 )
@@ -272,7 +334,13 @@ def _pre_settlement_task():
     """Background thread that periodically checks for pre-settlement exit opportunities"""
     log(
         f"🎯 [Startup] Pre-settlement exit task started (check every {PRE_SETTLEMENT_CHECK_INTERVAL}s, "
-        f"exit {PRE_SETTLEMENT_EXIT_SECONDS}s before close, min confidence {PRE_SETTLEMENT_MIN_CONFIDENCE:.0%})"
+        f"exit {PRE_SETTLEMENT_EXIT_SECONDS}s before close)"
+    )
+    log(
+        f"   💡 Strategy: Sell losing side of ALL positions (hedged + unhedged) for profit recovery"
+    )
+    log(
+        f"   📊 Unhedged positions require {PRE_SETTLEMENT_MIN_CONFIDENCE:.0%} confidence | Hedged positions always exit"
     )
 
     while True:
@@ -294,6 +362,4 @@ def start_pre_settlement_monitor():
         target=_pre_settlement_task, name="PreSettlementExit", daemon=True
     )
     thread.start()
-    log(
-        f"   ✅ Pre-settlement exit monitoring enabled (exit {PRE_SETTLEMENT_EXIT_SECONDS}s before close)"
-    )
+    log(f"   ✅ Pre-settlement exit monitoring enabled (hedged + unhedged positions)")
