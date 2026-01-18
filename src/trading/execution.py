@@ -616,16 +616,33 @@ def place_entry_and_hedge_atomic(
         # Strategy: Entry at MAKER (bid+2¢) + Hedge at MAKER (calculated)
         # postOnly=True ensures orders won't cross spread (maker-only)
         # Maker orders earn 0.15% rebate instead of paying 1.54% taker fee
-        # Combined must be <= $0.99 to guarantee profit on merge
-        # Hedge price = $0.99 - entry_price
+        # Combined must be <= COMBINED_PRICE_THRESHOLD to guarantee profitability
 
-        hedge_price = round(0.99 - entry_price, 2)
+        from src.config.settings import COMBINED_PRICE_THRESHOLD
+
+        # Calculate hedge price to meet threshold
+        max_hedge_price = COMBINED_PRICE_THRESHOLD - entry_price
+        hedge_price = round(max_hedge_price, 2)
         hedge_price = max(0.01, min(0.99, hedge_price))
 
         final_combined = entry_price + hedge_price
 
+        # VALIDATION: Reject if combined price exceeds threshold
+        # This ensures we can profit even if pre-settlement exit fails
+        if final_combined > COMBINED_PRICE_THRESHOLD:
+            log_error(
+                f"[{symbol}] ❌ HEDGE REJECTED: Combined price ${final_combined:.2f} > ${COMBINED_PRICE_THRESHOLD:.2f} threshold"
+            )
+            log_error(
+                f"[{symbol}] Entry @ ${entry_price:.2f} requires hedge @ ${hedge_price:.2f} = ${final_combined:.2f} combined (not profitable)"
+            )
+            return None, None
+
+        # Calculate edge: amount under threshold
+        edge_cents = (COMBINED_PRICE_THRESHOLD - final_combined) * 100
+
         log(
-            f"   📊 [{symbol}] Both orders using MAKER (POST_ONLY) pricing: {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f} (combined ${final_combined:.2f})"
+            f"   📊 [{symbol}] Both orders using MAKER (POST_ONLY) pricing: {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f} (combined ${final_combined:.2f}, {edge_cents:.1f}¢ edge)"
         )
 
         # Create batch order - both use POST_ONLY for maker rebates
@@ -789,9 +806,13 @@ def place_entry_and_hedge_atomic(
                         and hedge_bid > 0.01
                         and hedge_ask > 0.01
                     ):
-                        # CRITICAL: Maintain profitability - combined must be <= $0.99
+                        # CRITICAL: Maintain profitability - combined must be <= COMBINED_PRICE_THRESHOLD
+                        from src.config.settings import COMBINED_PRICE_THRESHOLD
+
                         # Calculate max hedge price from entry price
-                        max_hedge_price = round(0.99 - entry_price, 2)
+                        max_hedge_price = round(
+                            COMBINED_PRICE_THRESHOLD - entry_price, 2
+                        )
                         max_hedge_price = max(0.01, min(0.99, max_hedge_price))
 
                         # Try market pricing first (bid + 2¢), but cap at max_hedge_price
@@ -800,6 +821,14 @@ def place_entry_and_hedge_atomic(
                         retry_hedge_price = max(0.01, min(0.99, retry_hedge_price))
 
                         combined_price = entry_price + retry_hedge_price
+
+                        # Validate combined price doesn't exceed threshold
+                        if combined_price > COMBINED_PRICE_THRESHOLD:
+                            log_error(
+                                f"   ❌ [{symbol}] Hedge retry rejected: Combined ${combined_price:.2f} > ${COMBINED_PRICE_THRESHOLD:.2f}"
+                            )
+                            # Skip retry, will remain unhedged
+                            continue
 
                         log(
                             f"   💹 [{symbol}] Hedge retry price: ${retry_hedge_price:.2f} (bid ${hedge_bid:.2f}, combined ${combined_price:.2f})"
