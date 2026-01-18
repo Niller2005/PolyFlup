@@ -1133,13 +1133,28 @@ def place_entry_and_hedge_atomic(
                                 entry_order_id=entry_order_id,
                                 entry_price=entry_price,
                             )
+                        # Cancel unfilled entry since we're selling both
+                        try:
+                            cancel_order(entry_order_id)
+                            log(f"   ✅ [{symbol}] {entry_side} order cancelled")
+                        except Exception as e:
+                            log_error(f"[{symbol}] Error cancelling {entry_side}: {e}")
 
-                    # Cancel unfilled entry
-                    try:
-                        cancel_order(entry_order_id)
-                        log(f"   ✅ [{symbol}] {entry_side} order cancelled")
-                    except Exception as e:
-                        log_error(f"[{symbol}] Error cancelling {entry_side}: {e}")
+                    # If holding winning entry, keep the order open for more fills
+                    # Only cancel if we decided to sell both (neither winning)
+                    if not (
+                        EMERGENCY_SELL_HOLD_IF_WINNING
+                        and final_entry_filled_size > 0.01
+                        and entry_profit > min_profit
+                        and entry_profit > hedge_profit
+                    ):
+                        # Not holding entry as winning - safe to cancel was done above in else block
+                        pass
+                    else:
+                        # Holding winning entry - keep order open
+                        log(
+                            f"   📋 [{symbol}] Keeping {entry_side} order open for potential additional fills at ${entry_price:.2f}"
+                        )
 
                 else:
                     # Neither filled or both partially filled - cancel both and check what to keep
@@ -1263,19 +1278,47 @@ def place_entry_and_hedge_atomic(
                                 entry_price=hedge_price,
                             )
 
-                    # Cancel entry
-                    try:
-                        cancel_order(entry_order_id)
-                        log(f"   ✅ [{symbol}] {entry_side} order cancelled")
-                    except Exception as e:
-                        log_error(f"[{symbol}] Error cancelling {entry_side}: {e}")
+                        # Cancel both orders since we're selling both sides
+                        try:
+                            cancel_order(entry_order_id)
+                            log(f"   ✅ [{symbol}] {entry_side} order cancelled")
+                        except Exception as e:
+                            log_error(f"[{symbol}] Error cancelling {entry_side}: {e}")
 
-                    # Cancel hedge
-                    try:
-                        cancel_order(hedge_order_id)
-                        log(f"   ✅ [{symbol}] {hedge_side} order cancelled")
-                    except Exception as e:
-                        log_error(f"[{symbol}] Error cancelling {hedge_side}: {e}")
+                        try:
+                            cancel_order(hedge_order_id)
+                            log(f"   ✅ [{symbol}] {hedge_side} order cancelled")
+                        except Exception as e:
+                            log_error(f"[{symbol}] Error cancelling {hedge_side}: {e}")
+
+                    # If holding winning entry, keep its order open for more fills
+                    if (
+                        EMERGENCY_SELL_HOLD_IF_WINNING
+                        and final_entry_filled_size > 0.01
+                        and entry_profit > min_profit
+                        and entry_profit > hedge_profit
+                    ):
+                        log(
+                            f"   📋 [{symbol}] Keeping {entry_side} order open for potential additional fills at ${entry_price:.2f}"
+                        )
+                    # If holding winning hedge, keep its order open for more fills
+                    elif (
+                        EMERGENCY_SELL_HOLD_IF_WINNING
+                        and final_hedge_filled_size > 0.01
+                        and hedge_profit > min_profit
+                        and hedge_profit > entry_profit
+                    ):
+                        log(
+                            f"   📋 [{symbol}] Keeping {hedge_side} order open for potential additional fills at ${hedge_price:.2f}"
+                        )
+                        # Cancel the losing side's order
+                        try:
+                            cancel_order(entry_order_id)
+                            log(
+                                f"   ✅ [{symbol}] {entry_side} order cancelled (losing side)"
+                            )
+                        except Exception as e:
+                            log_error(f"[{symbol}] Error cancelling {entry_side}: {e}")
 
             except Exception as timeout_err:
                 log_error(
