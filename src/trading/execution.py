@@ -18,6 +18,41 @@ from src.trading.orders import (
 from src.data.market_data import get_token_ids
 
 
+def _record_exit_price(
+    entry_order_id: Optional[str], exit_price: float, symbol: str
+) -> None:
+    """
+    Record the exit price in the database for P&L tracking.
+    Used when emergency selling a position (pre-settlement or partial fill cleanup).
+
+    Args:
+        entry_order_id: The order_id of the entry trade
+        exit_price: The actual price the position was sold at
+        symbol: Trading symbol (for logging)
+    """
+    if not entry_order_id:
+        return
+
+    try:
+        from src.data.db_connection import db_connection
+
+        with db_connection() as conn:
+            c = conn.cursor()
+            # Update the trade's exit price and mark as exited early
+            c.execute(
+                "UPDATE trades SET exit_price = ?, exited_early = 1 WHERE order_id = ?",
+                (exit_price, entry_order_id),
+            )
+
+            # Log success if a row was updated
+            if c.rowcount > 0:
+                log(
+                    f"   💾 [{symbol}] Recorded exit price ${exit_price:.2f} in database"
+                )
+    except Exception as e:
+        log_error(f"[{symbol}] Failed to record exit price: {e}")
+
+
 def emergency_sell_position(
     symbol: str,
     token_id: str,
@@ -358,6 +393,8 @@ def emergency_sell_position(
                     log(
                         f"   ✅ [{symbol}] Emergency sell filled: {size:.2f} @ ${attempt_price:.2f} ({attempt_name}) (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
                     )
+                    # Record exit price in database for P&L tracking
+                    _record_exit_price(entry_order_id, attempt_price, symbol)
                     return True
 
                 # GTC orders need time to be taken - wait and check status
@@ -376,6 +413,10 @@ def emergency_sell_position(
                             if filled_size >= (size - 0.01):
                                 log(
                                     f"   ✅ [{symbol}] Emergency sell filled after {elapsed}s: {size:.2f} @ ${attempt_price:.2f} (ID: {order_id[:10]})"
+                                )
+                                # Record exit price in database for P&L tracking
+                                _record_exit_price(
+                                    entry_order_id, attempt_price, symbol
                                 )
                                 return True
                     except Exception as poll_err:
@@ -512,6 +553,8 @@ def emergency_sell_position(
                     log(
                         f"   ✅ [{symbol}] Emergency sell filled: {size:.2f} @ ${attempt_price:.2f} ({attempt_name}) (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
                     )
+                    # Record exit price in database for P&L tracking
+                    _record_exit_price(entry_order_id, attempt_price, symbol)
                     return True
 
                 # GTC orders need time to be taken - wait and check status
@@ -530,6 +573,10 @@ def emergency_sell_position(
                             if filled_size >= (size - 0.01):
                                 log(
                                     f"   ✅ [{symbol}] Emergency sell filled after {elapsed}s: {size:.2f} @ ${attempt_price:.2f} (ID: {order_id[:10]})"
+                                )
+                                # Record exit price in database for P&L tracking
+                                _record_exit_price(
+                                    entry_order_id, attempt_price, symbol
                                 )
                                 return True
                     except Exception as poll_err:

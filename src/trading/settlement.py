@@ -267,7 +267,28 @@ def check_and_settle_trades():
                     )
                     cancel_order(scale_in_order_id)
 
-                exit_value = final_price
+                # Determine exit value for P&L calculation
+                # If position was exited early (pre-settlement or emergency sell),
+                # use the recorded exit price instead of the resolution price
+                exit_value = final_price  # Default to resolution price (0.00 or 1.00)
+
+                # Check if position was exited early with recorded exit price
+                c.execute(
+                    "SELECT exit_price, exited_early FROM trades WHERE id = ?",
+                    (trade_id,),
+                )
+                exit_check = c.fetchone()
+
+                if exit_check:
+                    recorded_exit_price, exited_early_flag = exit_check
+
+                    # Use recorded exit price if available and position was exited early
+                    if exited_early_flag and recorded_exit_price is not None:
+                        exit_value = recorded_exit_price
+                        log(
+                            f"   💰 [{symbol}] #{trade_id} Using early exit price ${exit_value:.2f} (resolution: ${final_price:.2f})"
+                        )
+
                 pnl_usd = (exit_value * size) - bet_usd
                 roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
