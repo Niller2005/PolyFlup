@@ -590,19 +590,19 @@ def place_entry_and_hedge_atomic(
     entry_side: str,
     entry_price: float,
     entry_size: float,
-) -> tuple[Optional[dict], Optional[dict]]:
+) -> tuple[Optional[dict], Optional[dict], Optional[float]]:
     """
     Place entry and hedge orders simultaneously using batch order API.
     This eliminates timing gaps and improves hedge fill rates.
 
     Returns:
-        (entry_result, hedge_result) - Both are dicts with success, order_id, status
+        (entry_result, hedge_result, hedge_price) - Results are dicts with success, order_id, status; hedge_price is the calculated price
     """
     try:
         # Get token IDs
         up_id, down_id = get_token_ids(symbol)
         if not up_id or not down_id:
-            return None, None
+            return None, None, None
 
         # Determine hedge token and price
         if entry_side == "UP":
@@ -636,7 +636,7 @@ def place_entry_and_hedge_atomic(
             log_error(
                 f"[{symbol}] Entry @ ${entry_price:.2f} requires hedge @ ${hedge_price:.2f} = ${final_combined:.2f} combined (not profitable)"
             )
-            return None, None
+            return None, None, None
 
         # Calculate edge: amount under threshold
         edge_cents = (COMBINED_PRICE_THRESHOLD - final_combined) * 100
@@ -673,7 +673,7 @@ def place_entry_and_hedge_atomic(
 
         if len(results) < 2:
             log_error(f"[{symbol}] Batch order returned insufficient results")
-            return None, None
+            return None, None, None
 
         entry_result = results[0]
         hedge_result = results[1]
@@ -707,7 +707,7 @@ def place_entry_and_hedge_atomic(
                 log_error(
                     f"[{symbol}] Cannot cancel {hedge_side} - order ID not returned from API"
                 )
-                return None, None
+                return None, None, None
 
             try:
                 cancel_order(hedge_order_id)
@@ -730,7 +730,7 @@ def place_entry_and_hedge_atomic(
                     entry_order_id=hedge_order_id,
                     entry_price=hedge_price,  # Use hedge price as reference
                 )
-            return None, None
+            return None, None, None
 
         # Case 2: Entry succeeded, hedge failed - RETRY HEDGE
         if entry_success and not hedge_success:
@@ -746,7 +746,7 @@ def place_entry_and_hedge_atomic(
                 log_error(
                     f"[{symbol}] Cannot manage {entry_side} - order ID not returned from API"
                 )
-                return None, None
+                return None, None, None
 
             # Retry hedge up to 3 times with fresh orderbook pricing
             MAX_HEDGE_RETRIES = 3
@@ -894,14 +894,14 @@ def place_entry_and_hedge_atomic(
                         entry_order_id=entry_order_id,
                         entry_price=entry_price,  # Use entry price as reference
                     )
-                return None, None
+                return None, None, None
 
         # Case 3: Both failed
         if not entry_success and not hedge_success:
             log(
                 f"   ❌ [{symbol}] Both orders failed - Entry: {entry_result.get('error')}, Hedge: {hedge_result.get('error')}"
             )
-            return None, None
+            return None, None, None
 
         # Log results for successful placements (both orders succeeded)
         log(
@@ -923,7 +923,7 @@ def place_entry_and_hedge_atomic(
 
         if not entry_order_id or not hedge_order_id:
             log(f"   ⚠️  [{symbol}] Missing order IDs, skipping monitoring")
-            return None, None
+            return None, None, None
 
         log(
             f"   ⏱️  [{symbol}] Monitoring fills for {HEDGE_FILL_TIMEOUT_SECONDS}s (polling every {HEDGE_POLL_INTERVAL_SECONDS}s)..."
@@ -1355,13 +1355,13 @@ def place_entry_and_hedge_atomic(
                 )
 
             log(f"   🚫 [{symbol}] Trade skipped - atomic pair failed")
-            return None, None
+            return None, None, None
 
-        return entry_result, hedge_result
+        return entry_result, hedge_result, hedge_price
 
     except Exception as e:
         log_error(f"[{symbol}] Error in atomic entry+hedge placement: {e}")
-        return None, None
+        return None, None, None
 
 
 def execute_trade(
@@ -1398,11 +1398,12 @@ def execute_trade(
 
     # ATOMIC PLACEMENT: Place entry and hedge simultaneously (unless reversal)
     hedge_order_id = None
+    hedge_price = None
     actual_size = size
     actual_price = price
 
     if not is_reversal:
-        entry_result, hedge_result = place_entry_and_hedge_atomic(
+        entry_result, hedge_result, hedge_price = place_entry_and_hedge_atomic(
             symbol, token_id, side, price, size
         )
 
@@ -1544,8 +1545,8 @@ def execute_trade(
                 if entry_filled and hedge_filled and not entry_cancelled:
                     if cursor:
                         cursor.execute(
-                            "UPDATE trades SET hedge_order_id = ?, is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
-                            (hedge_order_id, trade_id),
+                            "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ?, is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
+                            (hedge_order_id, hedge_price, trade_id),
                         )
                         log(
                             f"   ✅ [{symbol}] #{trade_id} Hedge verified filled - position fully hedged"
@@ -1556,18 +1557,18 @@ def execute_trade(
                         with db_connection() as conn:
                             c = conn.cursor()
                             c.execute(
-                                "UPDATE trades SET hedge_order_id = ?, is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
-                                (hedge_order_id, trade_id),
+                                "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ?, is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
+                                (hedge_order_id, hedge_price, trade_id),
                             )
                             log(
                                 f"   ✅ [{symbol}] #{trade_id} Hedge verified filled - position fully hedged"
                             )
                 else:
-                    # At least one order is not filled/cancelled - save hedge_order_id but don't mark as hedged
+                    # At least one order is not filled/cancelled - save hedge_order_id and hedge_price but don't mark as hedged
                     if cursor:
                         cursor.execute(
-                            "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
-                            (hedge_order_id, trade_id),
+                            "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ? WHERE id = ?",
+                            (hedge_order_id, hedge_price, trade_id),
                         )
                     else:
                         from src.data.db_connection import db_connection
@@ -1575,8 +1576,8 @@ def execute_trade(
                         with db_connection() as conn:
                             c = conn.cursor()
                             c.execute(
-                                "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
-                                (hedge_order_id, trade_id),
+                                "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ? WHERE id = ?",
+                                (hedge_order_id, hedge_price, trade_id),
                             )
 
                     # Log specific reason why not hedged
@@ -1594,11 +1595,11 @@ def execute_trade(
                         )
             except Exception as verify_err:
                 log_error(f"[{symbol}] Error verifying hedge after save: {verify_err}")
-                # Still save hedge_order_id even if verification failed
+                # Still save hedge_order_id and hedge_price even if verification failed
                 if cursor:
                     cursor.execute(
-                        "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
-                        (hedge_order_id, trade_id),
+                        "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ? WHERE id = ?",
+                        (hedge_order_id, hedge_price, trade_id),
                     )
                 else:
                     from src.data.db_connection import db_connection
@@ -1606,8 +1607,8 @@ def execute_trade(
                     with db_connection() as conn:
                         c = conn.cursor()
                         c.execute(
-                            "UPDATE trades SET hedge_order_id = ? WHERE id = ?",
-                            (hedge_order_id, trade_id),
+                            "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ? WHERE id = ?",
+                            (hedge_order_id, hedge_price, trade_id),
                         )
 
         emoji = trade_params.get("emoji", "🚀")
