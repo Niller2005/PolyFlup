@@ -267,9 +267,6 @@ def check_pre_settlement_exits():
                 if required_confidence is None:
                     continue
 
-                # Mark as processed to avoid duplicate attempts
-                _processed_trade_ids.add(trade_id)
-
                 # Use bayesian confidence (more reliable for near-settlement predictions)
                 confidence = bayesian_conf if bayesian_conf else additive_conf
 
@@ -542,6 +539,9 @@ def check_pre_settlement_exits():
                 )
 
                 if success:
+                    # Mark as processed to avoid duplicate exit attempts
+                    _processed_trade_ids.add(trade_id)
+
                     if is_hedged:
                         log(
                             f"   ✅ [{symbol}] #{trade_id} Pre-settlement exit complete | "
