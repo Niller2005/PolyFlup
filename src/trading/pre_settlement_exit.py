@@ -431,7 +431,24 @@ def check_pre_settlement_exits():
                 losing_price, losing_price_age = ws_manager.get_price_with_age(
                     losing_token_id, max_age_seconds=PRE_SETTLEMENT_PRICE_MAX_AGE
                 )
-                if not losing_price:
+
+                # If WebSocket/cache unavailable, try API fallback
+                if not losing_price or losing_price < 0.01:
+                    log(
+                        f"   🔄 [{symbol}] #{trade_id} No cached losing side price, fetching from API..."
+                    )
+                    losing_price = _get_token_price_from_api(losing_token_id, symbol)
+                    if losing_price:
+                        losing_price_age = 0  # Fresh from API
+                        log(
+                            f"   ✅ [{symbol}] #{trade_id} Got fresh losing side price from API: ${losing_price:.2f}"
+                        )
+                    else:
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} Could not get losing side price from cache or API"
+                        )
+                        continue
+                elif not losing_price:
                     log(
                         f"   ⚠️  [{symbol}] #{trade_id} Could not get price for losing side"
                     )
