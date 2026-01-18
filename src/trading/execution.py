@@ -106,35 +106,13 @@ def emergency_sell_position(
                 )
                 # Continue anyway - maybe the exit order is already filled
 
-        # NEW STRATEGY: Use market order for immediate execution at best available price
+        # TIME-BASED PROGRESSIVE PRICING STRATEGY
+        # Start at best bid for optimal price discovery, progressively lower with wait periods
+        # This gives maker orders time to be taken while maximizing recovery value
+        # Better than MARKET order which crosses spread instantly without price improvement
         log(
-            f"   🚨 [{symbol}] EMERGENCY SELL: Placing MARKET order for {size:.2f} shares due to {reason}"
+            f"   🚨 [{symbol}] EMERGENCY SELL: Starting progressive pricing for {size:.2f} shares due to {reason}"
         )
-
-        from src.trading.orders.limit import place_market_order
-
-        result = place_market_order(
-            token_id=token_id,
-            size=size,
-            side=SELL,
-            order_type="FOK",  # Fill-or-Kill: execute immediately or cancel
-            silent_on_balance_error=False,
-        )
-
-        if result.get("success"):
-            order_id = result.get("order_id", "unknown")
-            log(
-                f"   ✅ [{symbol}] Emergency MARKET sell filled: {size:.2f} shares at best available price (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
-            )
-            return True
-        else:
-            log(
-                f"   ⚠️  [{symbol}] Market order failed: {result.get('error', 'no fill')} - trying progressive pricing"
-            )
-
-        # FALLBACK: If market order failed, try progressive pricing with orderbook
-        # TIME-BASED STRATEGY: Place GTC orders at progressively lower prices with delays
-        # This gives maker orders time to be taken by other traders
         from src.utils.websocket_manager import ws_manager
 
         best_bid = None
