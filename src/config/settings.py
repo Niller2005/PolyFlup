@@ -87,6 +87,15 @@ EMERGENCY_SELL_WAIT_LONG = int(
 EMERGENCY_SELL_FALLBACK_PRICE = float(
     os.getenv("EMERGENCY_SELL_FALLBACK_PRICE", "0.10")
 )  # Final fallback price if all attempts fail
+EMERGENCY_SELL_HOLD_IF_WINNING = (
+    os.getenv("EMERGENCY_SELL_HOLD_IF_WINNING", "YES").upper() == "YES"
+)  # Hold position if it's winning or still reasonable vs market
+EMERGENCY_SELL_PRICE_TOLERANCE_PCT = float(
+    os.getenv("EMERGENCY_SELL_PRICE_TOLERANCE_PCT", "10.0")
+)  # Hold if price within this % of entry (default 10%)
+EMERGENCY_SELL_MIN_PROFIT_CENTS = float(
+    os.getenv("EMERGENCY_SELL_MIN_PROFIT_CENTS", "5.0")
+)  # Consider "winning" if +5¢ or more
 
 # Enhanced Balance Validation for API Reliability Issues
 ENABLE_ENHANCED_BALANCE_VALIDATION = (

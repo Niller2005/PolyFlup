@@ -68,6 +68,84 @@ def emergency_sell_position(
                 f"   ⚠️  [{symbol}] Could not verify balance, using requested size {size:.2f}"
             )
 
+        # SMART POSITION HOLD: Check if filled price is still reasonable vs current market
+        # If position is on winning side, HOLD it as directional bet instead of emergency sell
+        # This prevents dumping positions that are actually favorable
+        if entry_price and entry_price > 0.01:
+            from src.utils.websocket_manager import ws_manager
+            from src.config.settings import (
+                EMERGENCY_SELL_HOLD_IF_WINNING,
+                EMERGENCY_SELL_PRICE_TOLERANCE_PCT,
+                EMERGENCY_SELL_MIN_PROFIT_CENTS,
+            )
+
+            # Skip this check if feature is disabled
+            if not EMERGENCY_SELL_HOLD_IF_WINNING:
+                log(
+                    f"   ⚠️  [{symbol}] Smart position hold disabled, proceeding with emergency sell"
+                )
+            else:
+                # Get current market bid/ask for this token
+                current_bid, current_ask = ws_manager.get_bid_ask(token_id)
+
+                if (
+                    current_bid
+                    and current_ask
+                    and current_bid > 0.01
+                    and current_ask > 0.01
+                ):
+                    current_mid = (current_bid + current_ask) / 2
+                    price_diff = abs(current_mid - entry_price)
+                    price_diff_pct = (
+                        (price_diff / entry_price) * 100 if entry_price > 0 else 100
+                    )
+
+                    log(
+                        f"   📊 [{symbol}] Price check: Entry ${entry_price:.2f}, Current mid ${current_mid:.2f}, Diff ${price_diff:.2f} ({price_diff_pct:.1f}%)"
+                    )
+
+                    # If price hasn't moved much (within tolerance %), position is still reasonable - HOLD IT
+                    # This means market agrees with our entry price, so keep the directional bet
+                    if price_diff_pct <= EMERGENCY_SELL_PRICE_TOLERANCE_PCT:
+                        log(
+                            f"   ✅ [{symbol}] Position still reasonable! Entry ${entry_price:.2f} vs market ${current_mid:.2f} (within {EMERGENCY_SELL_PRICE_TOLERANCE_PCT}%)"
+                        )
+                        log(
+                            f"   🎯 [{symbol}] HOLDING UNHEDGED POSITION - Taking directional bet (market supports our price)"
+                        )
+                        return True  # Return success without selling
+
+                    # If current price is HIGHER than entry (we're winning), definitely HOLD
+                    min_profit = (
+                        EMERGENCY_SELL_MIN_PROFIT_CENTS / 100
+                    )  # Convert cents to dollars
+                    if current_mid > entry_price + min_profit:
+                        log(
+                            f"   🎉 [{symbol}] Position is WINNING! Entry ${entry_price:.2f}, now ${current_mid:.2f} (+${current_mid - entry_price:.2f})"
+                        )
+                        log(
+                            f"   🎯 [{symbol}] HOLDING UNHEDGED POSITION - Already in profit!"
+                        )
+                        return True  # Return success without selling
+
+                    # If current price is significantly lower, we're on losing side - proceed with emergency sell
+                    if current_mid < entry_price - min_profit:
+                        log(
+                            f"   ⚠️  [{symbol}] Position is LOSING! Entry ${entry_price:.2f}, now ${current_mid:.2f} (-${entry_price - current_mid:.2f})"
+                        )
+                        log(
+                            f"   💥 [{symbol}] Proceeding with emergency sell to cut losses"
+                        )
+                        # Fall through to emergency sell logic
+                    else:
+                        log(
+                            f"   ⚠️  [{symbol}] Price moved {price_diff_pct:.1f}% but within neutral zone, proceeding with emergency sell"
+                        )
+                else:
+                    log(
+                        f"   ⚠️  [{symbol}] Could not get current market price (bid={current_bid}, ask={current_ask}), proceeding with emergency sell"
+                    )
+
         # CRITICAL: Cancel any existing exit order first to free up shares
         # Look up trade by entry_order_id since trade might be saved to DB between
         # atomic pair placement and emergency sell (WebSocket can trigger exit plan)
