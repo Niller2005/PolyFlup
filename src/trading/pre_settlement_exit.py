@@ -276,18 +276,34 @@ def check_pre_settlement_exits():
                 try:
                     from src.trading.strategy import calculate_confidence
                     from src.trading.orders import get_clob_client
+                    from src.data.market_data import get_token_ids
+
+                    # calculate_confidence() ALWAYS expects UP token and returns UP confidence
+                    # We need to get UP token_id regardless of which side we bet on
+                    up_token_id, down_token_id = get_token_ids(symbol)
+
+                    if not up_token_id:
+                        raise ValueError(f"Could not get UP token_id for {symbol}")
 
                     client = get_clob_client()
                     fresh_confidence, bias, p_up, _, _, _, _ = calculate_confidence(
-                        symbol, winning_token_id, client
+                        symbol, up_token_id, client
                     )
 
                     if fresh_confidence and fresh_confidence > 0:
-                        # Use fresh confidence if available
+                        # fresh_confidence is ALWAYS for UP side
+                        # If we bet DOWN, we need to flip it
                         old_conf = confidence
-                        confidence = fresh_confidence
+
+                        if winning_side == "UP":
+                            # We bet UP, use UP confidence as-is
+                            confidence = fresh_confidence
+                        else:
+                            # We bet DOWN, flip UP confidence to get DOWN confidence
+                            confidence = 1.0 - fresh_confidence
+
                         log(
-                            f"   🔄 [{symbol}] #{trade_id} Updated confidence: {old_conf:.1%} (entry) → {confidence:.1%} (current)"
+                            f"   🔄 [{symbol}] #{trade_id} Updated confidence: {old_conf:.1%} (entry) → {confidence:.1%} (current {winning_side})"
                         )
                 except Exception as e:
                     # Fall back to stored confidence if calculation fails
