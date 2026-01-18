@@ -68,6 +68,26 @@ HEDGE_FILL_TIMEOUT_SECONDS = int(
 HEDGE_POLL_INTERVAL_SECONDS = int(
     os.getenv("HEDGE_POLL_INTERVAL_SECONDS", "5")
 )  # Check hedge fill status every N seconds
+
+# Emergency Sell Progressive Pricing (Time-based strategy)
+# When hedge timeout triggers emergency sell, uses progressive pricing with wait periods
+# Strategy: Start aggressive (near bid), progressively lower price with increasing wait times
+EMERGENCY_SELL_ENABLE_PROGRESSIVE = (
+    os.getenv("EMERGENCY_SELL_ENABLE_PROGRESSIVE", "YES").upper() == "YES"
+)  # Enable time-based progressive pricing
+EMERGENCY_SELL_WAIT_SHORT = int(
+    os.getenv("EMERGENCY_SELL_WAIT_SHORT", "5")
+)  # Wait time for aggressive prices (5s)
+EMERGENCY_SELL_WAIT_MEDIUM = int(
+    os.getenv("EMERGENCY_SELL_WAIT_MEDIUM", "8")
+)  # Wait time for medium prices (8s)
+EMERGENCY_SELL_WAIT_LONG = int(
+    os.getenv("EMERGENCY_SELL_WAIT_LONG", "10")
+)  # Wait time for conservative prices (10s)
+EMERGENCY_SELL_FALLBACK_PRICE = float(
+    os.getenv("EMERGENCY_SELL_FALLBACK_PRICE", "0.10")
+)  # Final fallback price if all attempts fail
+
 # Enhanced Balance Validation for API Reliability Issues
 ENABLE_ENHANCED_BALANCE_VALIDATION = (
     os.getenv("ENABLE_ENHANCED_BALANCE_VALIDATION", "YES").upper() == "YES"

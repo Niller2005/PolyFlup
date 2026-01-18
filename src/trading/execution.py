@@ -133,7 +133,8 @@ def emergency_sell_position(
             )
 
         # FALLBACK: If market order failed, try progressive pricing with orderbook
-        # Get current orderbook to find best bid
+        # TIME-BASED STRATEGY: Place GTC orders at progressively lower prices with delays
+        # This gives maker orders time to be taken by other traders
         from src.utils.websocket_manager import ws_manager
 
         best_bid = None
@@ -186,19 +187,87 @@ def emergency_sell_position(
             except Exception as book_err:
                 log(f"   ⚠️  [{symbol}] Error fetching orderbook: {book_err}")
 
-        # PROGRESSIVE PRICING: Try multiple prices before falling back to low price
-        # This maximizes recovery value while ensuring quick fill
+        # TIME-BASED PROGRESSIVE PRICING: Place GTC orders with wait periods
+        # Strategy: Start aggressive, progressively lower price with increasing wait times
+        # This gives maker orders time to be taken while maximizing recovery value
         if orderbook_available and best_bid:
-            # Strategy: Try best bid, then progressively lower prices with FOK
-            # FOK ensures immediate fill or rejection, preventing stuck orders
+            from src.config.settings import (
+                EMERGENCY_SELL_ENABLE_PROGRESSIVE,
+                EMERGENCY_SELL_WAIT_SHORT,
+                EMERGENCY_SELL_WAIT_MEDIUM,
+                EMERGENCY_SELL_WAIT_LONG,
+                EMERGENCY_SELL_FALLBACK_PRICE,
+            )
+
+            # Define pricing strategy: (price_description, price_value, wait_seconds, order_type)
+            # Start with FOK for immediate attempts, then use GTC with wait periods
             attempts = [
-                ("best bid", best_bid),
-                ("best bid - $0.01", max(0.01, best_bid - 0.01)),
-                ("best bid - $0.02", max(0.01, best_bid - 0.02)),
-                ("best bid - $0.03", max(0.01, best_bid - 0.03)),
+                ("best bid (FOK)", best_bid, 0, "FOK"),  # Try instant fill first
+                (
+                    f"best bid - $0.01 (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
+                    max(0.01, best_bid - 0.01),
+                    EMERGENCY_SELL_WAIT_SHORT,
+                    "GTC",
+                ),
+                (
+                    f"best bid - $0.02 (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
+                    max(0.01, best_bid - 0.02),
+                    EMERGENCY_SELL_WAIT_SHORT,
+                    "GTC",
+                ),
+                (
+                    f"best bid - $0.03 (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
+                    max(0.01, best_bid - 0.03),
+                    EMERGENCY_SELL_WAIT_SHORT,
+                    "GTC",
+                ),
+                (
+                    f"best bid - $0.05 (GTC {EMERGENCY_SELL_WAIT_MEDIUM}s)",
+                    max(0.01, best_bid - 0.05),
+                    EMERGENCY_SELL_WAIT_MEDIUM,
+                    "GTC",
+                ),
+                (
+                    f"best bid - $0.10 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                    max(0.01, best_bid - 0.10),
+                    EMERGENCY_SELL_WAIT_LONG,
+                    "GTC",
+                ),
+                (
+                    f"$0.30 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                    0.30,
+                    EMERGENCY_SELL_WAIT_LONG,
+                    "GTC",
+                ),
+                (
+                    f"$0.20 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                    0.20,
+                    EMERGENCY_SELL_WAIT_LONG,
+                    "GTC",
+                ),
+                (
+                    f"$0.15 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                    0.15,
+                    EMERGENCY_SELL_WAIT_LONG,
+                    "GTC",
+                ),
             ]
 
-            for attempt_name, attempt_price in attempts:
+            last_order_id = None
+
+            for attempt_name, attempt_price, wait_seconds, order_type in attempts:
+                # Cancel previous GTC order before placing new one
+                if last_order_id and order_type == "GTC":
+                    try:
+                        cancel_order(last_order_id)
+                        log(
+                            f"   🚫 [{symbol}] Cancelled previous attempt {last_order_id[:10]}"
+                        )
+                    except Exception as cancel_err:
+                        log(
+                            f"   ⚠️  [{symbol}] Could not cancel {last_order_id[:10]}: {cancel_err}"
+                        )
+
                 log(
                     f"   🚨 [{symbol}] EMERGENCY SELL: Trying {size:.2f} shares at ${attempt_price:.2f} ({attempt_name})"
                 )
@@ -210,18 +279,60 @@ def emergency_sell_position(
                     price=attempt_price,
                     size=size,
                     side=SELL,
-                    order_type="FOK",  # Fill-or-Kill: fill immediately or cancel
+                    order_type=order_type,
                 )
 
-                if result.get("success"):
-                    order_id = result.get("order_id", "unknown")
+                if not result.get("success"):
+                    log(
+                        f"   ⚠️  [{symbol}] Order placement failed: {result.get('error', 'unknown')}"
+                    )
+                    continue
+
+                order_id = result.get("order_id", "unknown")
+                last_order_id = order_id
+
+                # FOK orders either fill immediately or fail - no need to wait
+                if order_type == "FOK":
+                    # Check if filled (FOK returns success only if filled)
                     log(
                         f"   ✅ [{symbol}] Emergency sell filled: {size:.2f} @ ${attempt_price:.2f} ({attempt_name}) (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
                     )
                     return True
-                else:
+
+                # GTC orders need time to be taken - wait and check status
+                log(
+                    f"   ⏱️  [{symbol}] Waiting {wait_seconds}s for GTC order to fill..."
+                )
+
+                # Poll order status during wait period (check every second)
+                for elapsed in range(1, wait_seconds + 1):
+                    time.sleep(1)
+
+                    try:
+                        order_status = get_order(order_id)
+                        if order_status:
+                            filled_size = float(order_status.get("size_matched", 0))
+                            if filled_size >= (size - 0.01):
+                                log(
+                                    f"   ✅ [{symbol}] Emergency sell filled after {elapsed}s: {size:.2f} @ ${attempt_price:.2f} (ID: {order_id[:10]})"
+                                )
+                                return True
+                    except Exception as poll_err:
+                        log(f"   ⚠️  [{symbol}] Error checking order status: {poll_err}")
+
+                # Order didn't fill in time - will cancel and try next price
+                log(
+                    f"   ⏰ [{symbol}] Order at ${attempt_price:.2f} not filled after {wait_seconds}s"
+                )
+
+            # Cancel last attempt before final fallback
+            if last_order_id:
+                try:
+                    cancel_order(last_order_id)
+                    log(f"   🚫 [{symbol}] Cancelled last attempt {last_order_id[:10]}")
+                except Exception as cancel_err:
                     log(
-                        f"   ⚠️  [{symbol}] Attempt at ${attempt_price:.2f} failed: {result.get('error', 'no fill')}"
+                        f"   ⚠️  [{symbol}] Could not cancel {last_order_id[:10]}: {cancel_err}"
                     )
         else:
             log(
@@ -229,8 +340,10 @@ def emergency_sell_position(
             )
 
         # FINAL FALLBACK: If all attempts failed, place GTC order at conservative price
-        # Use $0.10 instead of $0.05 - better recovery value, still fills quickly
-        fallback_price = 0.10
+        # Use configurable fallback price (default $0.10) - this will eventually fill
+        from src.config.settings import EMERGENCY_SELL_FALLBACK_PRICE
+
+        fallback_price = EMERGENCY_SELL_FALLBACK_PRICE
         log(
             f"   🚨 [{symbol}] EMERGENCY SELL (FINAL FALLBACK): Placing GTC at ${fallback_price:.2f} due to {reason}"
         )
@@ -256,10 +369,6 @@ def emergency_sell_position(
                 f"[{symbol}] Emergency sell failed (all attempts): {result.get('error', 'unknown error')}"
             )
             return False
-
-    except Exception as e:
-        log_error(f"[{symbol}] Emergency sell exception: {e}")
-        return False
 
     except Exception as e:
         log_error(f"[{symbol}] Emergency sell exception: {e}")
@@ -852,15 +961,16 @@ def execute_trade(
     # Try to sync execution details immediately if filled
     if actual_status.upper() in ["FILLED", "MATCHED"]:
         try:
-            o_data = get_order(order_id)
-            if o_data:
-                sz_m = float(o_data.get("size_matched", 0))
-                pr_m = float(o_data.get("price", 0))
-                if sz_m > 0:
-                    actual_size = sz_m
-                    if pr_m > 0:
-                        actual_price = pr_m
-                    trade_params["bet_usd"] = actual_size * actual_price
+            if order_id:
+                o_data = get_order(order_id)
+                if o_data:
+                    sz_m = float(o_data.get("size_matched", 0))
+                    pr_m = float(o_data.get("price", 0))
+                    if sz_m > 0:
+                        actual_size = sz_m
+                        if pr_m > 0:
+                            actual_price = pr_m
+                        trade_params["bet_usd"] = actual_size * actual_price
         except Exception as e:
             log_error(f"[{symbol}] Could not sync execution details immediately: {e}")
 
