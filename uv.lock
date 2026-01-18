@@ -1600,7 +1600,7 @@ requires-dist = [
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "py-builder-relayer-client", specifier = ">=0.0.1" },
     { name = "py-builder-signing-sdk", specifier = ">=0.0.2" },
-    { name = "py-clob-client", specifier = ">=0.34.1" },
+    { name = "py-clob-client", specifier = ">=0.34.5" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "ta", specifier = ">=0.11.0" },

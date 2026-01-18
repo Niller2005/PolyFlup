@@ -278,37 +278,28 @@ def check_pre_settlement_exits():
                 # IMPORTANT: Recalculate confidence based on CURRENT market conditions
                 # The stored confidence is from trade entry (10-14 min ago)
                 # Market conditions change - we need fresh confidence for exit decision
+                fresh_confidence = None
+                fresh_bias = None
                 try:
                     from src.trading.strategy import calculate_confidence
                     from src.trading.orders import get_clob_client
                     from src.data.market_data import get_token_ids
 
-                    # calculate_confidence() ALWAYS expects UP token and returns UP confidence
-                    # We need to get UP token_id regardless of which side we bet on
+                    # calculate_confidence() expects UP token and returns symmetric confidence + bias
                     up_token_id, down_token_id = get_token_ids(symbol)
 
                     if not up_token_id:
                         raise ValueError(f"Could not get UP token_id for {symbol}")
 
                     client = get_clob_client()
-                    fresh_confidence, bias, p_up, _, _, _, _ = calculate_confidence(
-                        symbol, up_token_id, client
+                    fresh_confidence, fresh_bias, p_up, _, _, _, _ = (
+                        calculate_confidence(symbol, up_token_id, client)
                     )
 
+                    # We'll apply this confidence later after determining actual winning side
                     if fresh_confidence and fresh_confidence > 0:
-                        # fresh_confidence is ALWAYS for UP side
-                        # If we bet DOWN, we need to flip it
-                        old_conf = confidence
-
-                        if winning_side == "UP":
-                            # We bet UP, use UP confidence as-is
-                            confidence = fresh_confidence
-                        else:
-                            # We bet DOWN, flip UP confidence to get DOWN confidence
-                            confidence = 1.0 - fresh_confidence
-
                         log(
-                            f"   🔄 [{symbol}] #{trade_id} Updated confidence: {old_conf:.1%} (entry) → {confidence:.1%} (current {winning_side})"
+                            f"   🔄 [{symbol}] #{trade_id} Fresh market data: {fresh_confidence:.1%} confidence, bias={fresh_bias}"
                         )
                 except Exception as e:
                     # Fall back to stored confidence if calculation fails
@@ -361,6 +352,28 @@ def check_pre_settlement_exits():
                         log(
                             f"   💾 [{symbol}] #{trade_id} Using cached price (age: {price_age:.0f}s)"
                         )
+
+                    # Apply fresh confidence if available (for UNHEDGED, winning_side = entry side)
+                    if fresh_confidence and fresh_confidence > 0 and fresh_bias:
+                        old_conf = confidence
+                        if fresh_bias == winning_side:
+                            # Market agrees with our entry side
+                            confidence = fresh_confidence
+                            log(
+                                f"   ✅ [{symbol}] #{trade_id} Confidence updated: {old_conf:.1%} → {confidence:.1%} (market agrees)"
+                            )
+                        elif fresh_bias == "NEUTRAL":
+                            # Market is uncertain
+                            confidence = 0.0
+                            log(
+                                f"   ⚠️  [{symbol}] #{trade_id} Confidence updated: {old_conf:.1%} → {confidence:.1%} (market neutral)"
+                            )
+                        else:
+                            # Market favors opposite side
+                            confidence = 0.0
+                            log(
+                                f"   ⚠️  [{symbol}] #{trade_id} Confidence updated: {old_conf:.1%} → {confidence:.1%} (market disagrees: {fresh_bias} vs {winning_side})"
+                            )
 
                     # Check if it's safe to exit losing side (UNHEDGED only)
                     is_safe, reason = _check_position_safety(
@@ -463,15 +476,36 @@ def check_pre_settlement_exits():
                         winning_price = hedge_current_price
                         entry_price = hedge_price if hedge_price else 0.50
 
-                        # IMPORTANT: Since hedge side is winning, flip the confidence
-                        # If we bet UP with 60% confidence, DOWN has 40% confidence
-                        if confidence:
-                            confidence = 1.0 - confidence
+                        # Confidence is already symmetric - no need to flip
+                        # High confidence means the market is decisive, regardless of direction
+                        # We've already swapped winning_side above to reflect hedge is winning
 
                         reason = f"Hedged position, {winning_side} @ ${winning_price:.2f} > $0.50"
                         log(
                             f"      ✅ [{symbol}] Hedge side {winning_side} winning @ ${hedge_current_price:.2f}"
                         )
+
+                    # Apply fresh confidence if available (winning_side now reflects actual winner)
+                    if fresh_confidence and fresh_confidence > 0 and fresh_bias:
+                        old_conf = confidence
+                        if fresh_bias == winning_side:
+                            # Market agrees with the winning side
+                            confidence = fresh_confidence
+                            log(
+                                f"   ✅ [{symbol}] #{trade_id} Confidence updated: {old_conf:.1%} → {confidence:.1%} (market agrees: {fresh_bias})"
+                            )
+                        elif fresh_bias == "NEUTRAL":
+                            # Market is uncertain
+                            confidence = 0.0
+                            log(
+                                f"   ⚠️  [{symbol}] #{trade_id} Confidence updated: {old_conf:.1%} → {confidence:.1%} (market neutral)"
+                            )
+                        else:
+                            # Market favors opposite side
+                            confidence = 0.0
+                            log(
+                                f"   ⚠️  [{symbol}] #{trade_id} Confidence updated: {old_conf:.1%} → {confidence:.1%} (market disagrees: {fresh_bias} vs {winning_side})"
+                            )
 
                     # For hedged positions, still check confidence before exiting losing side
                     # Even though it's hedged, we need high confidence to avoid selling the wrong side
