@@ -415,10 +415,40 @@ def check_pre_settlement_exits():
                         winning_side = "DOWN" if winning_side == "UP" else "UP"
                         winning_price = hedge_current_price
                         entry_price = hedge_price if hedge_price else 0.50
+
+                        # IMPORTANT: Since hedge side is winning, flip the confidence
+                        # If we bet UP with 60% confidence, DOWN has 40% confidence
+                        if confidence:
+                            confidence = 1.0 - confidence
+
                         reason = f"Hedged position, {winning_side} @ ${winning_price:.2f} > $0.50"
                         log(
-                            f"      ✅ [{symbol}] Hedge side {winning_side} winning @ ${winning_price:.2f}"
+                            f"      ✅ [{symbol}] Hedge side {winning_side} winning @ ${hedge_current_price:.2f}"
                         )
+
+                    # For hedged positions, still check confidence before exiting losing side
+                    # Even though it's hedged, we need high confidence to avoid selling the wrong side
+                    if not confidence:
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} No confidence data, skipping pre-settlement exit"
+                        )
+                        continue
+
+                    # Check if confidence is sufficient for this time window
+                    is_safe, reason = _check_position_safety(
+                        symbol,
+                        winning_side,
+                        confidence,
+                        winning_price,
+                        entry_price,
+                        min_confidence=required_confidence,
+                    )
+
+                    if not is_safe:
+                        log(
+                            f"   🛡️  [{symbol}] #{trade_id} Confidence too low for hedged exit: {reason} (need {required_confidence:.0%}, have {confidence:.1%})"
+                        )
+                        continue
 
                     hedge_status = "🛡️ HEDGED"
 
