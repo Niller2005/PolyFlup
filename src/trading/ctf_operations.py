@@ -201,111 +201,15 @@ def merge_hedged_position(
     amount: int,
 ) -> Optional[str]:
     """
-    Merge UP + DOWN tokens back to USDC immediately after hedge fills.
+    DISABLED: Merge function is disabled to save transaction quota.
 
-    This frees up capital without waiting for market resolution.
-
-    Args:
-        trade_id: Database ID of the trade
-        symbol: Trading symbol (e.g., "BTC")
-        condition_id: Condition ID from market data (bytes32)
-        amount: Number of full sets to merge (in wei, 6 decimals for USDC)
+    User prefers to only use redemptions after market resolution,
+    not immediate merges after hedge fills.
 
     Returns:
-        Transaction hash if successful, None otherwise
-
-    Example:
-        merge_hedged_position(123, "BTC", "0xabc...", 10_000_000)
-        # Merges 10 full sets (10 UP + 10 DOWN) → 10 USDC
+        None (function disabled)
     """
-    # Try gasless RelayClient first
-    relay_client = _get_relayer_client()
-
-    if relay_client:
-        try:
-            from py_builder_relayer_client.models import SafeTransaction, OperationType
-
-            log(f"🌐 [{symbol}] #{trade_id} Using gasless Relayer for CTF merge")
-
-            # Encode merge function call
-            encoded_data = _encode_merge_positions(condition_id, amount)
-
-            # Create SafeTransaction for relayer
-            merge_tx = SafeTransaction(
-                to=CTF_ADDRESS,
-                operation=OperationType.Call,
-                data=f"0x{encoded_data}",
-                value="0",
-            )
-
-            # Execute via relayer (gasless!)
-            response = relay_client.execute(
-                [merge_tx], f"Merge {amount / 1_000_000:.1f} USDC"
-            )
-
-            # Check if we got a transaction hash
-            if (
-                response
-                and hasattr(response, "transaction_hash")
-                and response.transaction_hash
-            ):
-                tx_hash = response.transaction_hash
-                log(
-                    f"   📡 [{symbol}] #{trade_id} Relayer submitted merge tx: {tx_hash[:16]}..."
-                )
-
-                # Wait for transaction confirmation and verify success
-                try:
-                    web3 = get_web3_client()
-                    tx_receipt = web3.eth.wait_for_transaction_receipt(
-                        tx_hash, timeout=60
-                    )
-
-                    # Check transaction status (1 = success, 0 = failure)
-                    if tx_receipt.get("status") == 1:
-                        log(
-                            f"✅ [{symbol}] #{trade_id} MERGE SUCCESS (GASLESS): {amount / 1_000_000:.1f} USDC freed"
-                        )
-                        log(f"   Tx: {tx_hash}")
-                        return tx_hash
-                    else:
-                        log_error(
-                            f"[{symbol}] #{trade_id} Merge transaction FAILED on-chain (status=0)"
-                        )
-                        log(f"   Failed tx: {tx_hash}")
-                        return None
-
-                except Exception as confirm_err:
-                    log_error(
-                        f"[{symbol}] #{trade_id} Could not confirm merge transaction: {confirm_err}"
-                    )
-                    log(f"   Tx (unconfirmed): {tx_hash}")
-                    # Return None since we can't confirm success
-                    return None
-            else:
-                log_error(
-                    f"[{symbol}] #{trade_id} Relayer merge failed - no transaction hash returned"
-                )
-                return None
-        except Exception as e:
-            error_str = str(e)
-
-            # Check if error is due to quota exceeded (429)
-            if "429" in error_str or "quota exceeded" in error_str:
-                log(
-                    f"   ⚠️  [{symbol}] #{trade_id} Relayer quota exhausted, skipping merge (position will settle normally)"
-                )
-                return None
-
-            log_error(
-                f"[{symbol}] #{trade_id} Relayer error: {e} - skipping merge (position will settle normally)"
-            )
-            return None
-
-    # No relayer client available
-    log(
-        f"   ⚠️  [{symbol}] #{trade_id} Relayer client unavailable, skipping merge (position will settle normally)"
-    )
+    log(f"   ⚠️  [{symbol}] #{trade_id} Merge disabled - will redeem after resolution")
     return None
 
 
@@ -411,3 +315,118 @@ def redeem_winning_tokens(
     # No relayer client available
     log(f"   ⚠️  [{symbol}] #{trade_id} Relayer client unavailable, skipping redemption")
     return None
+
+
+def batch_redeem_winning_tokens(
+    redemptions: list[tuple[int, str, str]],
+) -> Optional[str]:
+    """
+    Redeem winning tokens for multiple markets in a single batch transaction.
+
+    More efficient than individual redemptions - uses only 1 transaction
+    for multiple markets instead of N transactions.
+
+    Args:
+        redemptions: List of (trade_id, symbol, condition_id) tuples to redeem
+
+    Returns:
+        Transaction hash if successful, None otherwise
+
+    Example:
+        batch_redeem_winning_tokens([
+            (123, "BTC", "0xabc..."),
+            (124, "ETH", "0xdef..."),
+            (125, "SOL", "0x123...")
+        ])
+    """
+    if not redemptions:
+        return None
+
+    # Try gasless RelayClient
+    relay_client = _get_relayer_client()
+
+    if not relay_client:
+        log(
+            "   ⚠️  [Batch Redeem] Relayer client unavailable, skipping batch redemption"
+        )
+        return None
+
+    try:
+        from py_builder_relayer_client.models import SafeTransaction, OperationType
+
+        # Build list of redemption transactions
+        redeem_txs = []
+        symbols_str = ", ".join(set(sym for _, sym, _ in redemptions))
+
+        log(
+            f"🌐 [Batch Redeem] Preparing {len(redemptions)} redemptions ({symbols_str})"
+        )
+
+        for trade_id, symbol, condition_id in redemptions:
+            # Encode redeem function call for this market
+            encoded_data = _encode_redeem_positions(condition_id)
+
+            # Create SafeTransaction for this redemption
+            redeem_tx = SafeTransaction(
+                to=CTF_ADDRESS,
+                operation=OperationType.Call,
+                data=f"0x{encoded_data}",
+                value="0",
+            )
+            redeem_txs.append(redeem_tx)
+            log(f"   📦 [{symbol}] #{trade_id} added to batch")
+
+        # Execute all redemptions in one batch transaction (gasless!)
+        response = relay_client.execute(
+            redeem_txs, f"Batch redeem {len(redemptions)} markets"
+        )
+
+        # Check if we got a transaction hash
+        if (
+            response
+            and hasattr(response, "transaction_hash")
+            and response.transaction_hash
+        ):
+            tx_hash = response.transaction_hash
+            log(f"   📡 [Batch Redeem] Relayer submitted batch tx: {tx_hash[:16]}...")
+
+            # Wait for transaction confirmation
+            try:
+                web3 = get_web3_client()
+                tx_receipt = web3.eth.wait_for_transaction_receipt(
+                    tx_hash,
+                    timeout=90,  # Longer timeout for batch
+                )
+
+                # Check transaction status
+                if tx_receipt.get("status") == 1:
+                    log(
+                        f"✅ [Batch Redeem] SUCCESS: {len(redemptions)} markets redeemed (GASLESS)"
+                    )
+                    log(f"   Tx: {tx_hash}")
+                    return tx_hash
+                else:
+                    log_error(f"[Batch Redeem] Transaction FAILED on-chain (status=0)")
+                    log(f"   Failed tx: {tx_hash}")
+                    return None
+
+            except Exception as confirm_err:
+                log_error(
+                    f"[Batch Redeem] Could not confirm transaction: {confirm_err}"
+                )
+                log(f"   Tx (unconfirmed): {tx_hash}")
+                return None
+        else:
+            log_error("[Batch Redeem] Relayer failed - no transaction hash returned")
+            return None
+
+    except Exception as e:
+        error_str = str(e)
+
+        # Check if error is due to quota exceeded (429)
+        if "429" in error_str or "quota exceeded" in error_str.lower():
+            log("   ⚠️  [Batch Redeem] Relayer quota exhausted, skipping batch")
+            return None
+
+        log_error(f"[Batch Redeem] Relayer error: {e} - skipping batch")
+        return None

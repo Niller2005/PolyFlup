@@ -4,7 +4,7 @@ import time
 import threading
 import requests
 from src.data.database import db_connection
-from src.trading.ctf_operations import redeem_winning_tokens
+from src.trading.ctf_operations import batch_redeem_winning_tokens
 from src.utils.logger import log, log_error, send_discord
 from src.config.settings import GAMMA_API_BASE
 
@@ -70,11 +70,13 @@ def _redeem_old_trades_task():
                             f"🔄 {prefix} Found {len(trades)} trades needing redemption..."
                         )
 
-                        redeemed = 0
-                        failed = 0
+                        # Collect all redemptions for batch processing
+                        redemption_batch = []
+                        trade_info = {}  # Map trade_id to (symbol, pnl)
                         skipped = 0
                         total_value = 0.0
 
+                        # First pass: collect all valid redemptions
                         for (
                             trade_id,
                             symbol,
@@ -100,13 +102,32 @@ def _redeem_old_trades_task():
                                     (condition_id, trade_id),
                                 )
 
-                                # Execute redemption
-                                redeem_tx_hash = redeem_winning_tokens(
-                                    trade_id, symbol, condition_id
+                                # Add to batch
+                                redemption_batch.append(
+                                    (trade_id, symbol, condition_id)
                                 )
+                                trade_info[trade_id] = (symbol, value)
 
-                                if redeem_tx_hash:
-                                    # Update database with redemption tx
+                            except Exception as e:
+                                log_error(f"{prefix} #{trade_id} Error preparing: {e}")
+                                skipped += 1
+                                continue
+
+                        # Execute batch redemption if we have any
+                        if redemption_batch:
+                            log(
+                                f"   📦 {prefix} Executing batch redemption for {len(redemption_batch)} trades"
+                            )
+
+                            redeem_tx_hash = batch_redeem_winning_tokens(
+                                redemption_batch
+                            )
+
+                            if redeem_tx_hash:
+                                # Update all trades in batch with the same tx hash
+                                redeemed = 0
+                                for trade_id in trade_info.keys():
+                                    symbol, value = trade_info[trade_id]
                                     c.execute(
                                         "UPDATE trades SET redeem_tx_hash = ? WHERE id = ?",
                                         (redeem_tx_hash, trade_id),
@@ -115,19 +136,21 @@ def _redeem_old_trades_task():
                                         f"   ✅ {prefix} [{symbol}] #{trade_id} redeemed (${value:+.2f})"
                                     )
                                     redeemed += 1
-                                else:
-                                    failed += 1
 
-                                # Rate limit
-                                time.sleep(2)
-
-                            except Exception as e:
-                                log_error(f"{prefix} #{trade_id} Error: {e}")
-                                failed += 1
-                                continue
+                                failed = 0
+                            else:
+                                # Batch failed - mark all as failed
+                                failed = len(redemption_batch)
+                                redeemed = 0
+                                log_error(
+                                    f"{prefix} Batch redemption failed for {failed} trades"
+                                )
+                        else:
+                            redeemed = 0
+                            failed = 0
 
                         # Report results
-                        if redeemed > 0 or failed > 0:
+                        if redeemed > 0 or failed > 0 or skipped > 0:
                             summary = f"💰 {prefix} Complete: {redeemed} redeemed"
                             if skipped > 0:
                                 summary += f", {skipped} skipped (expired)"
