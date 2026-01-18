@@ -280,6 +280,7 @@ def check_pre_settlement_exits():
                 # Market conditions change - we need fresh confidence for exit decision
                 fresh_confidence = None
                 fresh_bias = None
+                p_up = None
                 try:
                     from src.trading.strategy import calculate_confidence
                     from src.trading.orders import get_clob_client
@@ -296,10 +297,27 @@ def check_pre_settlement_exits():
                         calculate_confidence(symbol, up_token_id, client)
                     )
 
-                    # We'll apply this confidence later after determining actual winning side
-                    if fresh_confidence and fresh_confidence > 0:
+                    # For pre-settlement exits, PRICE is more reliable than signals
+                    # Use p_up (market mid-price) to calculate confidence directly
+                    # This avoids issues where signals disagree with clear price outcomes
+                    if p_up is not None:
+                        # Calculate price-based confidence (distance from 50%)
+                        if p_up > 0.5:
+                            price_confidence = (p_up - 0.5) * 2  # UP favored
+                            price_bias = "UP"
+                        elif p_up < 0.5:
+                            price_confidence = (0.5 - p_up) * 2  # DOWN favored
+                            price_bias = "DOWN"
+                        else:
+                            price_confidence = 0.0
+                            price_bias = "NEUTRAL"
+
+                        # Use price-based confidence for pre-settlement (more reliable near close)
+                        fresh_confidence = price_confidence
+                        fresh_bias = price_bias
+
                         log(
-                            f"   🔄 [{symbol}] #{trade_id} Fresh market data: {fresh_confidence:.1%} confidence, bias={fresh_bias}"
+                            f"   🔄 [{symbol}] #{trade_id} Fresh market: p_up={p_up:.3f} → {fresh_confidence:.1%} confidence, bias={fresh_bias}"
                         )
                 except Exception as e:
                     # Fall back to stored confidence if calculation fails
