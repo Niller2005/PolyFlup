@@ -24,10 +24,11 @@ def emergency_sell_position(
     size: float,
     reason: str,
     entry_order_id: Optional[str] = None,
+    entry_price: Optional[float] = None,
 ) -> bool:
     """
-    Emergency sell position using market order for immediate execution.
-    Falls back to progressive pricing FOK orders if market order fails.
+    Emergency sell position using progressive pricing strategy.
+    Uses orderbook bid prices when available, falls back to entry_price reference when not.
 
     Args:
         symbol: Trading symbol
@@ -35,6 +36,7 @@ def emergency_sell_position(
         size: Number of shares to sell
         reason: Reason for emergency exit
         entry_order_id: Entry order ID to look up any existing exit orders (optional)
+        entry_price: Entry fill price for price reference fallback (optional)
 
     Returns True if sell order placed successfully, False otherwise.
     """
@@ -312,9 +314,160 @@ def emergency_sell_position(
                     log(
                         f"   ⚠️  [{symbol}] Could not cancel {last_order_id[:10]}: {cancel_err}"
                     )
+        elif entry_price and entry_price > 0.01:
+            # FALLBACK STRATEGY: Use entry price as reference when orderbook unavailable
+            # Entry filled at X, so opposite side should have liquidity near complement price
+            # For hedged pairs: if entry @ $0.30, hedge @ $0.69 (sum = $0.99)
+            log(
+                f"   ⚠️  [{symbol}] Orderbook unavailable - using entry price ${entry_price:.2f} as reference"
+            )
+
+            from src.config.settings import (
+                EMERGENCY_SELL_WAIT_SHORT,
+                EMERGENCY_SELL_WAIT_MEDIUM,
+                EMERGENCY_SELL_WAIT_LONG,
+            )
+
+            # Calculate complement price (opposite side of the hedge)
+            # If selling entry: try near entry_price
+            # If selling hedge: try near (0.99 - entry_price)
+            # Start at entry_price and work down since we're selling
+            reference_price = min(0.99, max(0.01, entry_price))
+
+            attempts = [
+                (
+                    f"${reference_price:.2f} (entry ref, FOK)",
+                    reference_price,
+                    0,
+                    "FOK",
+                ),
+                (
+                    f"${reference_price - 0.01:.2f} (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
+                    max(0.01, reference_price - 0.01),
+                    EMERGENCY_SELL_WAIT_SHORT,
+                    "GTC",
+                ),
+                (
+                    f"${reference_price - 0.02:.2f} (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
+                    max(0.01, reference_price - 0.02),
+                    EMERGENCY_SELL_WAIT_SHORT,
+                    "GTC",
+                ),
+                (
+                    f"${reference_price - 0.05:.2f} (GTC {EMERGENCY_SELL_WAIT_MEDIUM}s)",
+                    max(0.01, reference_price - 0.05),
+                    EMERGENCY_SELL_WAIT_MEDIUM,
+                    "GTC",
+                ),
+                (
+                    f"${reference_price - 0.10:.2f} (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                    max(0.01, reference_price - 0.10),
+                    EMERGENCY_SELL_WAIT_LONG,
+                    "GTC",
+                ),
+                (
+                    f"$0.30 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                    0.30,
+                    EMERGENCY_SELL_WAIT_LONG,
+                    "GTC",
+                ),
+                (
+                    f"$0.20 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                    0.20,
+                    EMERGENCY_SELL_WAIT_LONG,
+                    "GTC",
+                ),
+                (
+                    f"$0.15 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                    0.15,
+                    EMERGENCY_SELL_WAIT_LONG,
+                    "GTC",
+                ),
+            ]
+
+            last_order_id = None
+
+            for attempt_name, attempt_price, wait_seconds, order_type in attempts:
+                # Cancel previous GTC order before placing new one
+                if last_order_id and order_type == "GTC":
+                    try:
+                        cancel_order(last_order_id)
+                        log(
+                            f"   🚫 [{symbol}] Cancelled previous attempt {last_order_id[:10]}"
+                        )
+                    except Exception as cancel_err:
+                        log(
+                            f"   ⚠️  [{symbol}] Could not cancel {last_order_id[:10]}: {cancel_err}"
+                        )
+
+                log(
+                    f"   🚨 [{symbol}] EMERGENCY SELL: Trying {size:.2f} shares at ${attempt_price:.2f} ({attempt_name})"
+                )
+
+                from src.trading.orders.limit import place_limit_order
+
+                result = place_limit_order(
+                    token_id=token_id,
+                    price=attempt_price,
+                    size=size,
+                    side=SELL,
+                    order_type=order_type,
+                )
+
+                if not result.get("success"):
+                    log(
+                        f"   ⚠️  [{symbol}] Order placement failed: {result.get('error', 'unknown')}"
+                    )
+                    continue
+
+                order_id = result.get("order_id", "unknown")
+                last_order_id = order_id
+
+                # FOK orders either fill immediately or fail - no need to wait
+                if order_type == "FOK":
+                    log(
+                        f"   ✅ [{symbol}] Emergency sell filled: {size:.2f} @ ${attempt_price:.2f} ({attempt_name}) (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
+                    )
+                    return True
+
+                # GTC orders need time to be taken - wait and check status
+                log(
+                    f"   ⏱️  [{symbol}] Waiting {wait_seconds}s for GTC order to fill..."
+                )
+
+                # Poll order status during wait period (check every second)
+                for elapsed in range(1, wait_seconds + 1):
+                    time.sleep(1)
+
+                    try:
+                        order_status = get_order(order_id)
+                        if order_status:
+                            filled_size = float(order_status.get("size_matched", 0))
+                            if filled_size >= (size - 0.01):
+                                log(
+                                    f"   ✅ [{symbol}] Emergency sell filled after {elapsed}s: {size:.2f} @ ${attempt_price:.2f} (ID: {order_id[:10]})"
+                                )
+                                return True
+                    except Exception as poll_err:
+                        log(f"   ⚠️  [{symbol}] Error checking order status: {poll_err}")
+
+                # Order didn't fill in time - will cancel and try next price
+                log(
+                    f"   ⏰ [{symbol}] Order at ${attempt_price:.2f} not filled after {wait_seconds}s"
+                )
+
+            # Cancel last attempt before final fallback
+            if last_order_id:
+                try:
+                    cancel_order(last_order_id)
+                    log(f"   🚫 [{symbol}] Cancelled last attempt {last_order_id[:10]}")
+                except Exception as cancel_err:
+                    log(
+                        f"   ⚠️  [{symbol}] Could not cancel {last_order_id[:10]}: {cancel_err}"
+                    )
         else:
             log(
-                f"   ⚠️  [{symbol}] Orderbook unavailable - skipping progressive pricing"
+                f"   ⚠️  [{symbol}] Orderbook unavailable and no entry price reference - going to final fallback"
             )
 
         # FINAL FALLBACK: If all attempts failed, place GTC order at conservative price
@@ -478,6 +631,7 @@ def place_entry_and_hedge_atomic(
                     size=entry_size,
                     reason="hedge without entry",
                     entry_order_id=hedge_order_id,
+                    entry_price=hedge_price,  # Use hedge price as reference
                 )
             return None, None
 
@@ -621,6 +775,7 @@ def place_entry_and_hedge_atomic(
                         size=entry_size,
                         reason="entry without hedge after retries",
                         entry_order_id=entry_order_id,
+                        entry_price=entry_price,  # Use entry price as reference
                     )
                 return None, None
 
@@ -744,6 +899,7 @@ def place_entry_and_hedge_atomic(
                         size=final_entry_filled_size,
                         reason="hedge timeout after entry fill",
                         entry_order_id=entry_order_id,
+                        entry_price=entry_price,  # Use entry price as reference
                     )
 
                     # If hedge partially filled, emergency sell those shares too
@@ -757,6 +913,7 @@ def place_entry_and_hedge_atomic(
                             size=final_hedge_filled_size,
                             reason="partial hedge fill cleanup",
                             entry_order_id=hedge_order_id,
+                            entry_price=hedge_price,  # Use hedge price as reference
                         )
 
                     # Cancel unfilled hedge
@@ -782,6 +939,7 @@ def place_entry_and_hedge_atomic(
                         size=final_hedge_filled_size,
                         reason="entry timeout after hedge fill",
                         entry_order_id=hedge_order_id,
+                        entry_price=hedge_price,  # Use hedge price as reference
                     )
 
                     # If entry partially filled, emergency sell those shares too
@@ -795,6 +953,7 @@ def place_entry_and_hedge_atomic(
                             size=final_entry_filled_size,
                             reason="partial entry fill cleanup",
                             entry_order_id=entry_order_id,
+                            entry_price=entry_price,  # Use entry price as reference
                         )
 
                     # Cancel unfilled entry
@@ -821,6 +980,7 @@ def place_entry_and_hedge_atomic(
                             size=final_entry_filled_size,
                             reason="partial entry fill cleanup",
                             entry_order_id=entry_order_id,
+                            entry_price=entry_price,  # Use entry price as reference
                         )
 
                     # Sell any partial hedge fills
@@ -834,6 +994,7 @@ def place_entry_and_hedge_atomic(
                             size=final_hedge_filled_size,
                             reason="partial hedge fill cleanup",
                             entry_order_id=hedge_order_id,
+                            entry_price=hedge_price,  # Use hedge price as reference
                         )
 
                     # Cancel entry

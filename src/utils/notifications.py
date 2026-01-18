@@ -517,12 +517,15 @@ def _handle_order_fill(payload: dict, timestamp: int) -> None:
                         up_id, down_id = get_token_ids(symbol)
                         if up_id and down_id:
                             hedge_token_id = down_id if trade_side == "UP" else up_id
+                            # Calculate hedge price as complement of entry price
+                            hedge_price = 0.99 - entry_price if entry_price else None
 
                             sell_success = emergency_sell_position(
                                 symbol,
                                 hedge_token_id,
                                 size,
                                 reason="hedge filled but entry not filled",
+                                entry_price=hedge_price,  # Use calculated hedge price
                             )
 
                             if sell_success:
@@ -816,13 +819,13 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                     # CRITICAL: Check if hedge order exists and has filled
                     # If entry cancelled but hedge filled, we have unhedged exposure
                     c.execute(
-                        "SELECT hedge_order_id, token_id, size FROM trades WHERE id = ?",
+                        "SELECT hedge_order_id, token_id, size, entry_price FROM trades WHERE id = ?",
                         (trade_id,),
                     )
                     hedge_check = c.fetchone()
 
                     if hedge_check:
-                        hedge_order_id, token_id, size = hedge_check
+                        hedge_order_id, token_id, size, entry_price = hedge_check
 
                         if hedge_order_id:
                             # Check if hedge order has filled
@@ -854,12 +857,19 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                                             hedge_token_id = (
                                                 down_id if side == "UP" else up_id
                                             )
+                                            # Calculate hedge price as complement
+                                            hedge_price = (
+                                                0.99 - entry_price
+                                                if entry_price
+                                                else None
+                                            )
 
                                             emergency_sell_position(
                                                 symbol,
                                                 hedge_token_id,
                                                 size,
                                                 reason="entry order cancelled after hedge filled",
+                                                entry_price=hedge_price,  # Use calculated hedge price
                                             )
 
                                         # Send Discord alert
@@ -946,6 +956,7 @@ def _handle_order_cancelled(payload: dict, timestamp: int) -> None:
                                         token_id,
                                         size,
                                         reason="hedge cancelled after entry filled",
+                                        entry_price=entry_price,  # Use entry price as reference
                                     )
 
                                     # Send Discord alert
