@@ -422,11 +422,12 @@ def redeem_recent_settled_trades():
     - Settled in last 30 minutes
 
     Transaction Budget:
+    - Uses BATCH redemption: 1 transaction for ALL trades (vs N individual transactions)
     - Unverified tier: 100 transactions/day
     - With 96 trades/day max (4 symbols × 4 windows/hour × 24 hours)
-    - This leaves 4 transactions for manual operations
+    - Batch redemption saves significant transaction quota
     """
-    from src.trading.ctf_operations import redeem_winning_tokens
+    from src.trading.ctf_operations import batch_redeem_winning_tokens
 
     with db_connection() as conn:
         c = conn.cursor()
@@ -452,9 +453,17 @@ def redeem_recent_settled_trades():
         log("")
         log(f"💰 Auto-redeeming {len(trades)} recently settled trade(s)")
 
+        # Collect all redemptions for batch processing
+        redemption_batch = []
+        trade_info = {}  # Map trade_id to (symbol, pnl)
+        skipped = 0
+        total_value = 0.0
+
+        # First pass: collect all valid redemptions
         for trade_id, symbol, slug, condition_id, pnl_usd in trades:
             try:
                 value = pnl_usd or 0.0
+                total_value += value
 
                 # Fetch condition_id from API if not in database
                 if not condition_id:
@@ -478,24 +487,44 @@ def redeem_recent_settled_trades():
                     log(
                         f"   ⏭️  [{symbol}] #{trade_id} Skipped (no condition_id, market may be expired)"
                     )
+                    skipped += 1
                     continue
 
-                # Execute redemption
-                log(f"   🎫 [{symbol}] #{trade_id} Redeeming (PnL: ${value:+.2f})...")
-                redeem_tx_hash = redeem_winning_tokens(trade_id, symbol, condition_id)
+                # Add to batch
+                redemption_batch.append((trade_id, symbol, condition_id))
+                trade_info[trade_id] = (symbol, value)
 
-                if redeem_tx_hash:
-                    # Update database with redemption tx
+            except Exception as e:
+                log_error(f"[{symbol}] #{trade_id} Error preparing redemption: {e}")
+                skipped += 1
+                continue
+
+        # Execute batch redemption if we have any
+        if redemption_batch:
+            log(
+                f"   📦 Executing batch redemption for {len(redemption_batch)} trade(s)"
+            )
+
+            redeem_tx_hash = batch_redeem_winning_tokens(redemption_batch)
+
+            if redeem_tx_hash:
+                # Update all trades in batch with the same tx hash
+                redeemed = 0
+                for trade_id in trade_info.keys():
+                    symbol, value = trade_info[trade_id]
                     c.execute(
                         "UPDATE trades SET redeem_tx_hash = ? WHERE id = ?",
                         (redeem_tx_hash, trade_id),
                     )
-                    log(
-                        f"   ✅ [{symbol}] #{trade_id} Redeemed! Tx: {redeem_tx_hash[:16]}..."
-                    )
-                else:
-                    log(f"   ⚠️  [{symbol}] #{trade_id} Redemption failed")
+                    log(f"   ✅ [{symbol}] #{trade_id} Redeemed! (${value:+.2f})")
+                    redeemed += 1
 
-            except Exception as e:
-                log_error(f"[{symbol}] #{trade_id} Redemption error: {e}")
-                continue
+                log(
+                    f"💰 Batch redemption complete: {redeemed} trade(s), Total: ${total_value:+.2f}"
+                )
+            else:
+                log_error(
+                    f"⚠️  Batch redemption failed for {len(redemption_batch)} trade(s)"
+                )
+        elif skipped > 0:
+            log(f"   ⏭️  All {skipped} trade(s) skipped (no condition_id)")
