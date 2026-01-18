@@ -1059,6 +1059,16 @@ def place_entry_and_hedge_atomic(
                         f"   🚨 [{symbol}] CRITICAL: Entry filled ({final_entry_filled_size:.2f}) but hedge timed out (filled {final_hedge_filled_size:.2f}/{entry_size:.1f})"
                     )
 
+                    # CRITICAL: Cancel unfilled hedge order IMMEDIATELY to prevent race condition
+                    # If we wait until after emergency sell (can take 60+ seconds), the hedge could fill during that time!
+                    try:
+                        cancel_order(hedge_order_id)
+                        log(
+                            f"   🚫 [{symbol}] {hedge_side} order cancelled IMMEDIATELY (prevent race condition)"
+                        )
+                    except Exception as e:
+                        log_error(f"[{symbol}] Error cancelling {hedge_side}: {e}")
+
                     # Emergency sell entry position
                     log(
                         f"   💥 [{symbol}] Emergency selling entry position ({final_entry_filled_size:.2f} shares)"
@@ -1086,18 +1096,25 @@ def place_entry_and_hedge_atomic(
                             entry_price=hedge_price,  # Use hedge price as reference
                         )
 
-                    # Cancel unfilled hedge
-                    try:
-                        cancel_order(hedge_order_id)
-                        log(f"   ✅ [{symbol}] {hedge_side} order cancelled")
-                    except Exception as e:
-                        log_error(f"[{symbol}] Error cancelling {hedge_side}: {e}")
+                    # Note: Hedge order already cancelled at the top of this block
 
                 elif final_hedge_filled and not final_entry_filled:
                     # Hedge filled but entry didn't (or partially filled)
                     log(
                         f"   🚨 [{symbol}] CRITICAL: {hedge_side} filled ({final_hedge_filled_size:.2f}) but {entry_side} timed out (filled {final_entry_filled_size:.2f}/{entry_size:.1f})"
                     )
+
+                    # CRITICAL: Cancel unfilled entry order IMMEDIATELY to prevent race condition
+                    # The entry order might be partially filled (e.g., 2/6 shares) or completely unfilled (0/6 shares)
+                    # Either way, we MUST cancel the remaining unfilled portion NOW before starting emergency sell
+                    # If we wait until after emergency sell (can take 60+ seconds), the entry could fill during that time!
+                    try:
+                        cancel_order(entry_order_id)
+                        log(
+                            f"   🚫 [{symbol}] {entry_side} order cancelled IMMEDIATELY (prevent race condition)"
+                        )
+                    except Exception as e:
+                        log_error(f"[{symbol}] Error cancelling {entry_side}: {e}")
 
                     # SMART DECISION: Check which position is more profitable
                     # CRITICAL: Can only hold ONE side (holding both = 100% loss on losing side)
@@ -1215,28 +1232,7 @@ def place_entry_and_hedge_atomic(
                                 entry_order_id=entry_order_id,
                                 entry_price=entry_price,
                             )
-                        # Cancel unfilled entry since we're selling both
-                        try:
-                            cancel_order(entry_order_id)
-                            log(f"   ✅ [{symbol}] {entry_side} order cancelled")
-                        except Exception as e:
-                            log_error(f"[{symbol}] Error cancelling {entry_side}: {e}")
-
-                    # If holding winning entry, keep the order open for more fills
-                    # Only cancel if we decided to sell both (neither winning)
-                    if not (
-                        EMERGENCY_SELL_HOLD_IF_WINNING
-                        and final_entry_filled_size > 0.01
-                        and entry_profit > min_profit
-                        and entry_profit > hedge_profit
-                    ):
-                        # Not holding entry as winning - safe to cancel was done above in else block
-                        pass
-                    else:
-                        # Holding winning entry - keep order open
-                        log(
-                            f"   📋 [{symbol}] Keeping {entry_side} order open for potential additional fills at ${entry_price:.2f}"
-                        )
+                        # Note: Entry order already cancelled at the top of this block
 
                 else:
                     # Neither filled or both partially filled - cancel both and check what to keep
