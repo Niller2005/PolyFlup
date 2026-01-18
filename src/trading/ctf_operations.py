@@ -284,8 +284,9 @@ def merge_hedged_position(
                     return None
             else:
                 log_error(
-                    f"[{symbol}] #{trade_id} Relayer merge failed, falling back to Web3"
+                    f"[{symbol}] #{trade_id} Relayer merge failed - no transaction hash returned"
                 )
+                return None
         except Exception as e:
             error_str = str(e)
 
@@ -294,111 +295,18 @@ def merge_hedged_position(
                 log(
                     f"   ⚠️  [{symbol}] #{trade_id} Relayer quota exhausted, skipping merge (position will settle normally)"
                 )
-                return None  # Don't fallback to Web3, just let it settle
-
-            log_error(
-                f"[{symbol}] #{trade_id} Relayer error: {e}, falling back to Web3"
-            )
-
-    # Fallback to manual Web3 transaction (requires ETH for gas)
-    try:
-        web3 = get_web3_client()
-
-        # IMPORTANT: For Web3 fallback, must use EOA address (from PROXY_PK)
-        # not the Safe wallet address (FUNDER_PROXY)
-        account = Account.from_key(PROXY_PK)
-        wallet_address = account.address
-
-        # Load CTF contract
-        ctf_contract = web3.eth.contract(
-            address=Web3.to_checksum_address(CTF_ADDRESS), abi=CTF_ABI
-        )
-
-        # Prepare merge transaction
-        # parentCollectionId = 0 (null) for Polymarket
-        # partition = [1, 2] means YES (1) and NO (2)
-        # amount = number of full sets to merge (in token's smallest unit)
-
-        tx = ctf_contract.functions.mergePositions(
-            Web3.to_checksum_address(USDC_ADDRESS),  # collateralToken
-            b"\x00" * 32,  # parentCollectionId (null)
-            bytes.fromhex(condition_id.replace("0x", "")),  # conditionId
-            [1, 2],  # partition (YES | NO)
-            amount,  # amount
-        )
-
-        # Build transaction
-        nonce = web3.eth.get_transaction_count(wallet_address)
-
-        # Get current gas price with 10% premium for faster confirmation
-        gas_price = int(web3.eth.gas_price * 1.1)
-
-        tx_params = {
-            "from": wallet_address,
-            "nonce": nonce,
-            "gas": 200000,  # Will be updated by estimation
-            "gasPrice": gas_price,
-        }
-
-        # Estimate gas
-        try:
-            gas_estimate = tx.estimate_gas(tx_params)
-            tx_params["gas"] = int(gas_estimate * 1.2)  # Add 20% buffer
-            log(
-                f"   ⛽ [{symbol}] Gas estimate: {tx_params['gas']} (${(tx_params['gas'] * gas_price / 1e18):.4f})"
-            )
-        except Exception as e:
-            error_str = str(e)
-
-            # Check if error indicates tokens don't exist yet (SafeMath overflow, execution reverted)
-            if (
-                "SafeMath" in error_str
-                or "execution reverted" in error_str
-                or "subtraction overflow" in error_str
-            ):
-                log(
-                    f"   ⚠️  [{symbol}] Tokens not yet indexed on-chain, skipping merge (will retry later or settle normally)"
-                )
-                return None  # Don't attempt merge if tokens don't exist
-
-            log_error(f"[{symbol}] Gas estimation failed: {e}")
-            # Use conservative default
-            tx_params["gas"] = 300000
-
-        # Build and sign transaction
-        built_tx = tx.build_transaction(tx_params)
-        signed_tx = account.sign_transaction(built_tx)
-
-        # Send transaction (use raw_transaction for web3.py >= 6.0)
-        tx_hash = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
-
-        log(f"🔄 [{symbol}] #{trade_id} MERGE TX submitted: {tx_hash.hex()}")
-
-        # Wait for confirmation (with timeout)
-        try:
-            tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-
-            if tx_receipt["status"] == 1:
-                gas_used = tx_receipt["gasUsed"]
-                gas_cost = gas_used * gas_price / 1e18
-                log(
-                    f"✅ [{symbol}] #{trade_id} MERGE SUCCESS: {amount / 1_000_000:.1f} USDC freed (Gas: ${gas_cost:.4f})"
-                )
-                return tx_hash.hex()
-            else:
-                log_error(f"[{symbol}] #{trade_id} MERGE FAILED: Transaction reverted")
                 return None
-        except Exception as e:
-            log_error(
-                f"[{symbol}] #{trade_id} Merge confirmation timeout or error: {e}"
-            )
-            # Transaction might still succeed, return hash for tracking
-            log(f"   ⚠️  [{symbol}] Transaction may still be pending: {tx_hash.hex()}")
-            return tx_hash.hex()
 
-    except Exception as e:
-        log_error(f"[{symbol}] #{trade_id} Merge error: {e}")
-        return None
+            log_error(
+                f"[{symbol}] #{trade_id} Relayer error: {e} - skipping merge (position will settle normally)"
+            )
+            return None
+
+    # No relayer client available
+    log(
+        f"   ⚠️  [{symbol}] #{trade_id} Relayer client unavailable, skipping merge (position will settle normally)"
+    )
+    return None
 
 
 def redeem_winning_tokens(
@@ -482,91 +390,24 @@ def redeem_winning_tokens(
                     return None
             else:
                 log_error(
-                    f"[{symbol}] #{trade_id} Relayer redeem failed, falling back to Web3"
+                    f"[{symbol}] #{trade_id} Relayer redeem failed - no transaction hash returned"
                 )
-        except Exception as e:
-            log_error(
-                f"[{symbol}] #{trade_id} Relayer error: {e}, falling back to Web3"
-            )
-
-    # Fallback to manual Web3 transaction (requires ETH for gas)
-    try:
-        web3 = get_web3_client()
-
-        # IMPORTANT: For Web3 fallback, must use EOA address (from PROXY_PK)
-        # not the Safe wallet address (FUNDER_PROXY)
-        account = Account.from_key(PROXY_PK)
-        wallet_address = account.address
-
-        # Load CTF contract
-        ctf_contract = web3.eth.contract(
-            address=Web3.to_checksum_address(CTF_ADDRESS), abi=CTF_ABI
-        )
-
-        # Prepare redeem transaction
-        # indexSets = [1, 2] means redeem both YES and NO positions
-        # Only winning tokens will have value
-
-        tx = ctf_contract.functions.redeemPositions(
-            Web3.to_checksum_address(USDC_ADDRESS),  # collateralToken
-            b"\x00" * 32,  # parentCollectionId (null)
-            bytes.fromhex(condition_id.replace("0x", "")),  # conditionId
-            [1, 2],  # indexSets (redeem both YES and NO)
-        )
-
-        # Build transaction
-        nonce = web3.eth.get_transaction_count(wallet_address)
-
-        # Get current gas price with 10% premium
-        gas_price = int(web3.eth.gas_price * 1.1)
-
-        tx_params = {
-            "from": wallet_address,
-            "nonce": nonce,
-            "gas": 200000,
-            "gasPrice": gas_price,
-        }
-
-        # Estimate gas
-        try:
-            gas_estimate = tx.estimate_gas(tx_params)
-            tx_params["gas"] = int(gas_estimate * 1.2)
-            log(
-                f"   ⛽ [{symbol}] Gas estimate: {tx_params['gas']} (${(tx_params['gas'] * gas_price / 1e18):.4f})"
-            )
-        except Exception as e:
-            log_error(f"[{symbol}] Gas estimation failed: {e}")
-            tx_params["gas"] = 300000
-
-        # Build and sign transaction
-        built_tx = tx.build_transaction(tx_params)
-        signed_tx = account.sign_transaction(built_tx)
-
-        # Send transaction (use raw_transaction for web3.py >= 6.0)
-        tx_hash = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
-
-        log(f"💰 [{symbol}] #{trade_id} REDEEM TX submitted: {tx_hash.hex()}")
-
-        # Wait for confirmation
-        try:
-            tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-
-            if tx_receipt["status"] == 1:
-                gas_used = tx_receipt["gasUsed"]
-                gas_cost = gas_used * gas_price / 1e18
-                log(f"✅ [{symbol}] #{trade_id} REDEEM SUCCESS (Gas: ${gas_cost:.4f})")
-                return tx_hash.hex()
-            else:
-                log_error(f"[{symbol}] #{trade_id} REDEEM FAILED: Transaction reverted")
                 return None
         except Exception as e:
-            log_error(
-                f"[{symbol}] #{trade_id} Redeem confirmation timeout or error: {e}"
-            )
-            # Transaction might still succeed, return hash for tracking
-            log(f"   ⚠️  [{symbol}] Transaction may still be pending: {tx_hash.hex()}")
-            return tx_hash.hex()
+            error_str = str(e)
 
-    except Exception as e:
-        log_error(f"[{symbol}] #{trade_id} Redeem error: {e}")
-        return None
+            # Check if error is due to quota exceeded (429)
+            if "429" in error_str or "quota exceeded" in error_str.lower():
+                log(
+                    f"   ⚠️  [{symbol}] #{trade_id} Relayer quota exhausted, skipping redemption"
+                )
+                return None
+
+            log_error(
+                f"[{symbol}] #{trade_id} Relayer error: {e} - skipping redemption"
+            )
+            return None
+
+    # No relayer client available
+    log(f"   ⚠️  [{symbol}] #{trade_id} Relayer client unavailable, skipping redemption")
+    return None
