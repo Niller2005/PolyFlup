@@ -268,6 +268,19 @@ def check_pre_settlement_exits():
 
                 losing_side = "DOWN" if winning_side == "UP" else "UP"
 
+                # Check if we actually have shares on losing side to sell FIRST
+                # (We might have already sold it during timeout handling)
+                from src.trading.orders import get_balance_allowance
+
+                balance_info = get_balance_allowance(losing_token_id)
+                losing_balance = balance_info["balance"] if balance_info else 0.0
+
+                if not losing_balance or losing_balance < 0.01:
+                    log(
+                        f"   ⏭️  [{symbol}] #{trade_id} No {losing_side} shares to sell (already liquidated)"
+                    )
+                    continue
+
                 # Calculate time remaining
                 window_end_dt = (
                     datetime.fromisoformat(window_end)
@@ -278,11 +291,43 @@ def check_pre_settlement_exits():
 
                 log(f"   💰 [{symbol}] #{trade_id} PRE-SETTLEMENT EXIT OPPORTUNITY")
 
+                # Initialize profit tracking variables
+                expected_profit = 0.0
+                expected_roi = 0.0
+
                 if is_hedged:
-                    log(
-                        f"   📊 [{symbol}] {hedge_status} | Winning {winning_side} @ ${winning_price:.2f} | "
-                        f"Losing {losing_side} @ ${losing_price:.2f} | {int(seconds_left)}s left"
+                    # Validate and log combined hedge price
+                    # entry_price = price of entry side, hedge_price = price of hedge side
+                    if not hedge_price or hedge_price < 0.01:
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} Missing hedge price data, skipping validation"
+                        )
+                        combined_entry = entry_price  # Fallback
+                    else:
+                        combined_entry = entry_price + hedge_price
+
+                    # Calculate expected profit from losing side exit
+                    losing_side_recovery = losing_balance * losing_price
+                    total_cost = size * combined_entry
+                    winning_payout = size * 1.00
+                    expected_profit = winning_payout + losing_side_recovery - total_cost
+                    expected_roi = (
+                        (expected_profit / total_cost * 100) if total_cost > 0 else 0
                     )
+
+                    log(
+                        f"   📊 [{symbol}] {hedge_status} | Combined entry: ${combined_entry:.2f}/pair | "
+                        f"Winning {winning_side} @ ${winning_price:.2f} | Losing {losing_side} @ ${losing_price:.2f} | {int(seconds_left)}s left"
+                    )
+                    log(
+                        f"   💵 [{symbol}] Expected: ${total_cost:.2f} cost + ${losing_side_recovery:.2f} recovery + ${winning_payout:.2f} payout = ${expected_profit:+.2f} profit ({expected_roi:+.1f}%)"
+                    )
+
+                    # Warn if combined entry was > $0.99 (shouldn't happen, but safety check)
+                    if combined_entry > 0.99:
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} WARNING: Combined entry ${combined_entry:.2f} > $0.99 (not a good hedge)"
+                        )
                 else:
                     log(
                         f"   📊 [{symbol}] {hedge_status} | Winning {winning_side} @ ${winning_price:.2f} ({confidence:.1%} conf) | "
@@ -293,33 +338,32 @@ def check_pre_settlement_exits():
                     f"   🎯 [{symbol}] {reason} - Selling losing {losing_side} side for profit recovery"
                 )
 
-                # Check if we actually have shares on losing side to sell
-                # (We might have already sold it during timeout handling)
-                from src.trading.orders import get_balance_allowance
-
-                balance_info = get_balance_allowance(losing_token_id)
-                losing_balance = balance_info["balance"] if balance_info else 0.0
-
-                if not losing_balance or losing_balance < 0.01:
-                    log(
-                        f"   ✅ [{symbol}] #{trade_id} No {losing_side} shares to sell (already liquidated)"
-                    )
-                    continue
-
                 # Execute progressive pricing exit
+                exit_reason = (
+                    f"pre-settlement exit (hedged, {int(seconds_left)}s left)"
+                    if is_hedged
+                    else f"pre-settlement exit ({confidence:.1%} confidence, {int(seconds_left)}s left)"
+                )
+
                 success = emergency_sell_position(
                     symbol=symbol,
                     token_id=losing_token_id,
                     size=losing_balance,
-                    reason=f"pre-settlement exit ({confidence:.1%} confidence, {int(seconds_left)}s left)",
+                    reason=exit_reason,
                     entry_price=losing_price,  # Use current price as reference
                 )
 
                 if success:
-                    log(
-                        f"   ✅ [{symbol}] #{trade_id} Pre-settlement exit complete | "
-                        f"Riding winning {winning_side} to settlement"
-                    )
+                    if is_hedged:
+                        log(
+                            f"   ✅ [{symbol}] #{trade_id} Pre-settlement exit complete | "
+                            f"Expected profit: ${expected_profit:+.2f} ({expected_roi:+.1f}%) after settlement"
+                        )
+                    else:
+                        log(
+                            f"   ✅ [{symbol}] #{trade_id} Pre-settlement exit complete | "
+                            f"Riding winning {winning_side} to settlement"
+                        )
                 else:
                     log_error(
                         f"[{symbol}] #{trade_id} Pre-settlement exit failed | "
