@@ -270,6 +270,31 @@ def check_pre_settlement_exits():
                 # Use bayesian confidence (more reliable for near-settlement predictions)
                 confidence = bayesian_conf if bayesian_conf else additive_conf
 
+                # IMPORTANT: Recalculate confidence based on CURRENT market conditions
+                # The stored confidence is from trade entry (10-14 min ago)
+                # Market conditions change - we need fresh confidence for exit decision
+                try:
+                    from src.trading.strategy import calculate_confidence
+                    from src.trading.orders import get_clob_client
+
+                    client = get_clob_client()
+                    fresh_confidence, bias, p_up, _, _, _, _ = calculate_confidence(
+                        symbol, winning_token_id, client
+                    )
+
+                    if fresh_confidence and fresh_confidence > 0:
+                        # Use fresh confidence if available
+                        old_conf = confidence
+                        confidence = fresh_confidence
+                        log(
+                            f"   🔄 [{symbol}] #{trade_id} Updated confidence: {old_conf:.1%} (entry) → {confidence:.1%} (current)"
+                        )
+                except Exception as e:
+                    # Fall back to stored confidence if calculation fails
+                    log(
+                        f"   ⚠️  [{symbol}] #{trade_id} Could not recalculate confidence: {e}, using stored {confidence:.1%}"
+                    )
+
                 # Log position details
                 hedge_label = "🛡️ HEDGED" if is_hedged else "⚠️  UNHEDGED"
                 conf_label = f"{confidence:.1%}" if confidence else "N/A"
