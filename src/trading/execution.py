@@ -625,7 +625,7 @@ def place_entry_and_hedge_atomic(
         final_combined = entry_price + hedge_price
 
         log(
-            f"   📊 [{symbol}] Both orders using MAKER (POST_ONLY) pricing: Entry ${entry_price:.2f} + Hedge ${hedge_price:.2f} (combined ${final_combined:.2f})"
+            f"   📊 [{symbol}] Both orders using MAKER (POST_ONLY) pricing: {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f} (combined ${final_combined:.2f})"
         )
 
         # Create batch order - both use POST_ONLY for maker rebates
@@ -663,10 +663,10 @@ def place_entry_and_hedge_atomic(
 
         # DEBUG: Log API responses to understand success/failure detection
         log(
-            f"   🐛 [{symbol}] DEBUG Entry result: success={entry_result.get('success')}, order_id={entry_result.get('order_id')}, error={entry_result.get('error')}"
+            f"   🐛 [{symbol}] DEBUG {entry_side} result: success={entry_result.get('success')}, order_id={entry_result.get('order_id')}, error={entry_result.get('error')}"
         )
         log(
-            f"   🐛 [{symbol}] DEBUG Hedge result: success={hedge_result.get('success')}, order_id={hedge_result.get('order_id')}, error={hedge_result.get('error')}"
+            f"   🐛 [{symbol}] DEBUG {hedge_side} result: success={hedge_result.get('success')}, order_id={hedge_result.get('order_id')}, error={hedge_result.get('error')}"
         )
 
         entry_success = entry_result.get("success")
@@ -678,27 +678,29 @@ def place_entry_and_hedge_atomic(
         # Case 1: Entry failed (e.g., POST_ONLY crossed book)
         if not entry_success and hedge_success:
             hedge_order_id = hedge_result.get("order_id")
-            log(f"   ❌ [{symbol}] Entry order failed: {entry_result.get('error')}")
+            log(
+                f"   ❌ [{symbol}] {entry_side} order failed: {entry_result.get('error')}"
+            )
             hedge_id_display = hedge_order_id[:10] if hedge_order_id else "unknown"
             log(
-                f"   ⚠️  [{symbol}] Hedge placed but entry failed - cancelling hedge {hedge_id_display}"
+                f"   ⚠️  [{symbol}] {hedge_side} placed but {entry_side} failed - cancelling {hedge_side} {hedge_id_display}"
             )
 
             if not hedge_order_id:
                 log_error(
-                    f"[{symbol}] Cannot cancel hedge - order ID not returned from API"
+                    f"[{symbol}] Cannot cancel {hedge_side} - order ID not returned from API"
                 )
                 return None, None
 
             try:
                 cancel_order(hedge_order_id)
-                log(f"   ✅ [{symbol}] Hedge order cancelled successfully")
+                log(f"   ✅ [{symbol}] {hedge_side} order cancelled successfully")
             except Exception as cancel_err:
                 log_error(
-                    f"[{symbol}] Failed to cancel hedge order {hedge_order_id[:10]}: {cancel_err}"
+                    f"[{symbol}] Failed to cancel {hedge_side} order {hedge_order_id[:10]}: {cancel_err}"
                 )
                 # Try to sell the hedge if it filled quickly
-                log(f"   💥 [{symbol}] Attempting emergency sell of hedge")
+                log(f"   💥 [{symbol}] Attempting emergency sell of {hedge_side}")
                 time.sleep(2)  # Wait for potential fill
                 hedge_token_id = hedge_result.get("token_id") or (
                     up_id if hedge_side == "UP" else down_id
@@ -716,12 +718,16 @@ def place_entry_and_hedge_atomic(
         # Case 2: Entry succeeded, hedge failed - RETRY HEDGE
         if entry_success and not hedge_success:
             entry_order_id = entry_result.get("order_id")
-            log(f"   ❌ [{symbol}] Hedge order failed: {hedge_result.get('error')}")
-            log(f"   🔄 [{symbol}] Entry succeeded - retrying hedge with fresh pricing")
+            log(
+                f"   ❌ [{symbol}] {hedge_side} order failed: {hedge_result.get('error')}"
+            )
+            log(
+                f"   🔄 [{symbol}] {entry_side} succeeded - retrying {hedge_side} with fresh pricing"
+            )
 
             if not entry_order_id:
                 log_error(
-                    f"[{symbol}] Cannot manage entry - order ID not returned from API"
+                    f"[{symbol}] Cannot manage {entry_side} - order ID not returned from API"
                 )
                 return None, None
 
@@ -730,7 +736,7 @@ def place_entry_and_hedge_atomic(
             hedge_placed = False
 
             for retry in range(1, MAX_HEDGE_RETRIES + 1):
-                log(f"   🔄 [{symbol}] Hedge retry {retry}/{MAX_HEDGE_RETRIES}")
+                log(f"   🔄 [{symbol}] {hedge_side} retry {retry}/{MAX_HEDGE_RETRIES}")
 
                 # Get fresh orderbook for hedge pricing
                 try:
@@ -824,28 +830,32 @@ def place_entry_and_hedge_atomic(
                                 if retry_results
                                 else "unknown"
                             )
-                            log(f"   ⚠️  [{symbol}] Hedge retry {retry} failed: {error}")
+                            log(
+                                f"   ⚠️  [{symbol}] {hedge_side} retry {retry} failed: {error}"
+                            )
                             time.sleep(1)  # Brief pause before next retry
                     else:
-                        log(f"   ⚠️  [{symbol}] Empty orderbook for hedge retry")
+                        log(f"   ⚠️  [{symbol}] Empty orderbook for {hedge_side} retry")
                         time.sleep(1)
                 except Exception as e:
-                    log_error(f"[{symbol}] Error during hedge retry {retry}: {e}")
+                    log_error(
+                        f"[{symbol}] Error during {hedge_side} retry {retry}: {e}"
+                    )
                     time.sleep(1)
 
             # If all retries failed, cancel entry and emergency sell if needed
             if not hedge_placed:
                 entry_id_display = entry_order_id[:10] if entry_order_id else "unknown"
                 log(
-                    f"   ❌ [{symbol}] All hedge retries failed - cancelling entry {entry_id_display}"
+                    f"   ❌ [{symbol}] All {hedge_side} retries failed - cancelling {entry_side} {entry_id_display}"
                 )
                 try:
                     cancel_order(entry_order_id)
-                    log(f"   ✅ [{symbol}] Entry order cancelled successfully")
+                    log(f"   ✅ [{symbol}] {entry_side} order cancelled successfully")
                 except Exception as cancel_err:
-                    log_error(f"[{symbol}] Failed to cancel entry: {cancel_err}")
+                    log_error(f"[{symbol}] Failed to cancel {entry_side}: {cancel_err}")
                     # Try to sell the entry if it filled quickly
-                    log(f"   💥 [{symbol}] Attempting emergency sell of entry")
+                    log(f"   💥 [{symbol}] Attempting emergency sell of {entry_side}")
                     time.sleep(2)
                     emergency_sell_position(
                         symbol=symbol,
@@ -997,25 +1007,25 @@ def place_entry_and_hedge_atomic(
                     # Cancel unfilled hedge
                     try:
                         cancel_order(hedge_order_id)
-                        log(f"   ✅ [{symbol}] Hedge order cancelled")
+                        log(f"   ✅ [{symbol}] {hedge_side} order cancelled")
                     except Exception as e:
-                        log_error(f"[{symbol}] Error cancelling hedge: {e}")
+                        log_error(f"[{symbol}] Error cancelling {hedge_side}: {e}")
 
                 elif final_hedge_filled and not final_entry_filled:
                     # Hedge filled but entry didn't (or partially filled)
                     log(
-                        f"   🚨 [{symbol}] CRITICAL: Hedge filled ({final_hedge_filled_size:.2f}) but entry timed out (filled {final_entry_filled_size:.2f}/{entry_size:.1f})"
+                        f"   🚨 [{symbol}] CRITICAL: {hedge_side} filled ({final_hedge_filled_size:.2f}) but {entry_side} timed out (filled {final_entry_filled_size:.2f}/{entry_size:.1f})"
                     )
 
                     # Emergency sell hedge position
                     log(
-                        f"   💥 [{symbol}] Emergency selling hedge position ({final_hedge_filled_size:.2f} shares)"
+                        f"   💥 [{symbol}] Emergency selling {hedge_side} position ({final_hedge_filled_size:.2f} shares)"
                     )
                     emergency_sell_position(
                         symbol=symbol,
                         token_id=hedge_token_id,
                         size=final_hedge_filled_size,
-                        reason="entry timeout after hedge fill",
+                        reason=f"{entry_side} timeout after {hedge_side} fill",
                         entry_order_id=hedge_order_id,
                         entry_price=hedge_price,  # Use hedge price as reference
                     )
@@ -1023,13 +1033,13 @@ def place_entry_and_hedge_atomic(
                     # If entry partially filled, emergency sell those shares too
                     if final_entry_filled_size > 0.01:
                         log(
-                            f"   💥 [{symbol}] Emergency selling partial entry position ({final_entry_filled_size:.2f} shares)"
+                            f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
                         )
                         emergency_sell_position(
                             symbol=symbol,
                             token_id=entry_token_id,
                             size=final_entry_filled_size,
-                            reason="partial entry fill cleanup",
+                            reason=f"partial {entry_side} fill cleanup",
                             entry_order_id=entry_order_id,
                             entry_price=entry_price,  # Use entry price as reference
                         )
@@ -1037,9 +1047,9 @@ def place_entry_and_hedge_atomic(
                     # Cancel unfilled entry
                     try:
                         cancel_order(entry_order_id)
-                        log(f"   ✅ [{symbol}] Entry order cancelled")
+                        log(f"   ✅ [{symbol}] {entry_side} order cancelled")
                     except Exception as e:
-                        log_error(f"[{symbol}] Error cancelling entry: {e}")
+                        log_error(f"[{symbol}] Error cancelling {entry_side}: {e}")
 
                 else:
                     # Neither filled or both partially filled - cancel both and sell any partials
@@ -1050,13 +1060,13 @@ def place_entry_and_hedge_atomic(
                     # Sell any partial entry fills
                     if final_entry_filled_size > 0.01:
                         log(
-                            f"   💥 [{symbol}] Emergency selling partial entry position ({final_entry_filled_size:.2f} shares)"
+                            f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
                         )
                         emergency_sell_position(
                             symbol=symbol,
                             token_id=entry_token_id,
                             size=final_entry_filled_size,
-                            reason="partial entry fill cleanup",
+                            reason=f"partial {entry_side} fill cleanup",
                             entry_order_id=entry_order_id,
                             entry_price=entry_price,  # Use entry price as reference
                         )
@@ -1064,13 +1074,13 @@ def place_entry_and_hedge_atomic(
                     # Sell any partial hedge fills
                     if final_hedge_filled_size > 0.01:
                         log(
-                            f"   💥 [{symbol}] Emergency selling partial hedge position ({final_hedge_filled_size:.2f} shares)"
+                            f"   💥 [{symbol}] Emergency selling partial {hedge_side} position ({final_hedge_filled_size:.2f} shares)"
                         )
                         emergency_sell_position(
                             symbol=symbol,
                             token_id=hedge_token_id,
                             size=final_hedge_filled_size,
-                            reason="partial hedge fill cleanup",
+                            reason=f"partial {hedge_side} fill cleanup",
                             entry_order_id=hedge_order_id,
                             entry_price=hedge_price,  # Use hedge price as reference
                         )
@@ -1078,16 +1088,16 @@ def place_entry_and_hedge_atomic(
                     # Cancel entry
                     try:
                         cancel_order(entry_order_id)
-                        log(f"   ✅ [{symbol}] Entry order cancelled")
+                        log(f"   ✅ [{symbol}] {entry_side} order cancelled")
                     except Exception as e:
-                        log_error(f"[{symbol}] Error cancelling entry: {e}")
+                        log_error(f"[{symbol}] Error cancelling {entry_side}: {e}")
 
                     # Cancel hedge
                     try:
                         cancel_order(hedge_order_id)
-                        log(f"   ✅ [{symbol}] Hedge order cancelled")
+                        log(f"   ✅ [{symbol}] {hedge_side} order cancelled")
                     except Exception as e:
-                        log_error(f"[{symbol}] Error cancelling hedge: {e}")
+                        log_error(f"[{symbol}] Error cancelling {hedge_side}: {e}")
 
             except Exception as timeout_err:
                 log_error(
