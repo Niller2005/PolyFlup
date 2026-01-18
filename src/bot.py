@@ -264,6 +264,11 @@ def main():
 
     start_background_redemption()
 
+    # Launch background task to monitor pre-settlement exit opportunities
+    from src.trading.pre_settlement_exit import start_pre_settlement_monitor
+
+    start_pre_settlement_monitor()
+
     last_position_check = time.time()
     last_order_check = time.time()
     last_verbose_log = time.time()

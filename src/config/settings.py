@@ -97,6 +97,21 @@ EMERGENCY_SELL_MIN_PROFIT_CENTS = float(
     os.getenv("EMERGENCY_SELL_MIN_PROFIT_CENTS", "5.0")
 )  # Consider "winning" if +5¢ or more
 
+# Pre-Settlement Exit Strategy for Unhedged Positions
+# Sell losing side of unhedged position near window close to extract additional value
+ENABLE_PRE_SETTLEMENT_EXIT = (
+    os.getenv("ENABLE_PRE_SETTLEMENT_EXIT", "YES").upper() == "YES"
+)  # Enable pre-settlement exit strategy
+PRE_SETTLEMENT_EXIT_SECONDS = int(
+    os.getenv("PRE_SETTLEMENT_EXIT_SECONDS", "45")
+)  # Exit losing side N seconds before window close (default 45s)
+PRE_SETTLEMENT_MIN_CONFIDENCE = float(
+    os.getenv("PRE_SETTLEMENT_MIN_CONFIDENCE", "0.70")
+)  # Minimum confidence to consider winning side "safe" (default 70%)
+PRE_SETTLEMENT_CHECK_INTERVAL = int(
+    os.getenv("PRE_SETTLEMENT_CHECK_INTERVAL", "5")
+)  # Check for pre-settlement exits every N seconds (default 5s)
+
 # Enhanced Balance Validation for API Reliability Issues
 ENABLE_ENHANCED_BALANCE_VALIDATION = (
     os.getenv("ENABLE_ENHANCED_BALANCE_VALIDATION", "YES").upper() == "YES"
