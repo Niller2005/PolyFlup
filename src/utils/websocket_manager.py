@@ -23,6 +23,9 @@ class WebSocketManager:
         self.prices: Dict[str, float] = {}  # token_id -> midpoint_price
         self.bids: Dict[str, float] = {}  # token_id -> best_bid
         self.asks: Dict[str, float] = {}  # token_id -> best_ask
+        self.price_timestamps: Dict[
+            str, float
+        ] = {}  # token_id -> last update timestamp
         self.token_to_symbol: Dict[str, str] = {}
         self.callbacks: Dict[str, List[Callable]] = {
             "price": [],
@@ -216,6 +219,7 @@ class WebSocketManager:
                         self.prices[str(asset_id)] = (float(b) + float(a)) / 2.0
                         self.bids[str(asset_id)] = float(b)
                         self.asks[str(asset_id)] = float(a)
+                        self.price_timestamps[str(asset_id)] = time.time()
                 elif event_type == "price_change":
                     for c in data.get("price_changes", []):
                         aid, b, a = (
@@ -227,6 +231,7 @@ class WebSocketManager:
                             self.prices[str(aid)] = (float(b) + float(a)) / 2.0
                             self.bids[str(aid)] = float(b)
                             self.asks[str(aid)] = float(a)
+                            self.price_timestamps[str(aid)] = time.time()
                             await self._trigger_price_callbacks(
                                 str(aid), self.prices[str(aid)]
                             )
@@ -234,6 +239,7 @@ class WebSocketManager:
                     p = data.get("price")
                     if p:
                         self.prices[str(asset_id)] = float(p)
+                        self.price_timestamps[str(asset_id)] = time.time()
 
                 new_p = self.prices.get(str(asset_id))
                 if new_p and event_type != "price_change":
@@ -288,6 +294,35 @@ class WebSocketManager:
     def get_price(self, token_id: str) -> Optional[float]:
         """Get the latest cached price for a token"""
         return self.prices.get(str(token_id))
+
+    def get_price_with_age(
+        self, token_id: str, max_age_seconds: float = None
+    ) -> tuple[Optional[float], Optional[float]]:
+        """
+        Get the latest cached price for a token with its age in seconds.
+
+        Args:
+            token_id: Token ID to query
+            max_age_seconds: If specified, return None if price is older than this
+
+        Returns:
+            (price, age_seconds) tuple, where age_seconds is None if no timestamp available
+        """
+        price = self.prices.get(str(token_id))
+        if not price:
+            return None, None
+
+        timestamp = self.price_timestamps.get(str(token_id))
+        if not timestamp:
+            return price, None
+
+        age_seconds = time.time() - timestamp
+
+        # If max_age specified and price is too old, return None
+        if max_age_seconds is not None and age_seconds > max_age_seconds:
+            return None, age_seconds
+
+        return price, age_seconds
 
     def get_bid_ask(self, token_id: str) -> tuple[Optional[float], Optional[float]]:
         """Get the latest cached bid and ask for a token"""

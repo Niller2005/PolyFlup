@@ -39,6 +39,8 @@ from src.config.settings import (
     PRE_SETTLEMENT_EXIT_SECONDS,
     PRE_SETTLEMENT_MIN_CONFIDENCE,
     PRE_SETTLEMENT_CHECK_INTERVAL,
+    PRE_SETTLEMENT_PRICE_MAX_AGE,
+    PRE_SETTLEMENT_CONFIDENCE_SCHEDULE,
 )
 from src.trading.execution import emergency_sell_position
 
@@ -83,6 +85,7 @@ def _check_position_safety(
     confidence: float,
     current_price: float,
     entry_price: float,
+    min_confidence: float = None,
 ) -> tuple[bool, str]:
     """
     Check if it's safe to sell losing side by verifying winning side is secure.
@@ -93,15 +96,19 @@ def _check_position_safety(
         confidence: Current confidence level for this market
         current_price: Current price of winning side
         entry_price: Entry price of winning side
+        min_confidence: Minimum required confidence (defaults to PRE_SETTLEMENT_MIN_CONFIDENCE)
 
     Returns:
         (is_safe, reason) tuple
     """
+    if min_confidence is None:
+        min_confidence = PRE_SETTLEMENT_MIN_CONFIDENCE
+
     # Check 1: Confidence threshold
-    if confidence < PRE_SETTLEMENT_MIN_CONFIDENCE:
+    if confidence < min_confidence:
         return (
             False,
-            f"confidence too low ({confidence:.1%} < {PRE_SETTLEMENT_MIN_CONFIDENCE:.1%})",
+            f"confidence too low ({confidence:.1%} < {min_confidence:.1%})",
         )
 
     # Check 2: Price should still be favorable
@@ -124,24 +131,37 @@ def _check_position_safety(
 
 def check_pre_settlement_exits():
     """
-    Background task to check for pre-settlement exit opportunities.
+    Background task to check for pre-settlement exit opportunities with progressive timing.
 
-    Runs periodically (every 5s) to find unhedged positions near window close
-    that can safely exit their losing side for additional profit recovery.
+    Progressive Strategy:
+    - T-180s (3min): Exit if 80%+ confidence (markets still active)
+    - T-120s (2min): Exit if 70%+ confidence (markets closing soon)
+    - T-60s (1min): Exit if 60%+ confidence (markets likely closed)
+    - T-45s: Exit regardless, use cached prices (last resort)
+
+    Uses price caching since markets close ~2-3 minutes before settlement.
     """
     if not ENABLE_PRE_SETTLEMENT_EXIT:
         return
 
     try:
         now = datetime.now(tz=ZoneInfo("UTC"))
-        exit_window_start = now + timedelta(seconds=PRE_SETTLEMENT_EXIT_SECONDS)
-        exit_window_end = now + timedelta(seconds=PRE_SETTLEMENT_EXIT_SECONDS + 10)
+
+        # Check positions in ALL progressive exit windows
+        # Find the earliest window (e.g., 180s) and latest (e.g., 45s)
+        earliest_window = max(PRE_SETTLEMENT_CONFIDENCE_SCHEDULE.keys())
+        latest_window = min(PRE_SETTLEMENT_CONFIDENCE_SCHEDULE.keys())
+
+        exit_window_start = now + timedelta(seconds=earliest_window)
+        exit_window_end = now + timedelta(
+            seconds=latest_window - 10
+        )  # Buffer to avoid missing
 
         with db_connection() as conn:
             c = conn.cursor()
 
-            # Find both hedged AND unhedged positions within exit window
-            # For unhedged: sell losing side if winning side has high confidence
+            # Find both hedged AND unhedged positions within ANY exit window
+            # For unhedged: sell losing side if winning side has sufficient confidence (progressive)
             # For hedged: ALWAYS sell losing side (we know one side will lose)
             c.execute(
                 """
@@ -154,7 +174,7 @@ def check_pre_settlement_exits():
                   AND datetime(window_end) BETWEEN datetime(?) AND datetime(?)
                 ORDER BY window_end ASC
                 """,
-                (exit_window_start.isoformat(), exit_window_end.isoformat()),
+                (exit_window_end.isoformat(), exit_window_start.isoformat()),
             )
 
             positions = c.fetchall()
@@ -182,6 +202,27 @@ def check_pre_settlement_exits():
                 if trade_id in _processed_trade_ids:
                     continue
 
+                # Calculate time remaining until window close
+                window_end_dt = (
+                    datetime.fromisoformat(window_end)
+                    if isinstance(window_end, str)
+                    else window_end
+                )
+                seconds_left = (window_end_dt - now).total_seconds()
+
+                # Determine required confidence based on time remaining
+                required_confidence = None
+                for time_threshold, conf_threshold in sorted(
+                    PRE_SETTLEMENT_CONFIDENCE_SCHEDULE.items(), reverse=True
+                ):
+                    if seconds_left <= time_threshold:
+                        required_confidence = conf_threshold
+                        break
+
+                # If we haven't reached any exit window yet, skip
+                if required_confidence is None:
+                    continue
+
                 # Mark as processed to avoid duplicate attempts
                 _processed_trade_ids.add(trade_id)
 
@@ -197,17 +238,30 @@ def check_pre_settlement_exits():
                         )
                         continue
 
-                    # Get current price of winning side
-                    winning_price = ws_manager.get_price(winning_token_id)
+                    # Get current price of winning side (with fallback to cached)
+                    winning_price, price_age = ws_manager.get_price_with_age(
+                        winning_token_id, max_age_seconds=PRE_SETTLEMENT_PRICE_MAX_AGE
+                    )
                     if not winning_price or winning_price < 0.01:
                         log(
-                            f"   ⚠️  [{symbol}] #{trade_id} Could not get current price for winning side"
+                            f"   ⚠️  [{symbol}] #{trade_id} Could not get current price for winning side (age: {price_age:.0f}s)"
                         )
                         continue
 
+                    # Log if using cached price
+                    if price_age and price_age > 60:
+                        log(
+                            f"   💾 [{symbol}] #{trade_id} Using cached price (age: {price_age:.0f}s)"
+                        )
+
                     # Check if it's safe to exit losing side (UNHEDGED only)
                     is_safe, reason = _check_position_safety(
-                        symbol, winning_side, confidence, winning_price, entry_price
+                        symbol,
+                        winning_side,
+                        confidence,
+                        winning_price,
+                        entry_price,
+                        min_confidence=required_confidence,
                     )
 
                     if not is_safe:
@@ -220,10 +274,21 @@ def check_pre_settlement_exits():
                 else:
                     # HEDGED position - always safe to exit losing side
                     # Determine which side is winning based on current prices
-                    winning_price = ws_manager.get_price(winning_token_id)
+                    winning_price, price_age = ws_manager.get_price_with_age(
+                        winning_token_id, max_age_seconds=PRE_SETTLEMENT_PRICE_MAX_AGE
+                    )
                     if not winning_price or winning_price < 0.01:
-                        log(f"   ⚠️  [{symbol}] #{trade_id} Could not get current price")
+                        age_str = f"{price_age:.0f}s" if price_age else "N/A"
+                        log(
+                            f"   ⚠️  [{symbol}] #{trade_id} Could not get current price (age: {age_str})"
+                        )
                         continue
+
+                    # Log if using cached price
+                    if price_age and price_age > 60:
+                        log(
+                            f"   💾 [{symbol}] #{trade_id} Using cached price (age: {price_age:.0f}s)"
+                        )
 
                     # For hedged positions, check which side is actually winning
                     # If entry side price > 0.50, entry side is winning
@@ -240,7 +305,12 @@ def check_pre_settlement_exits():
                         if not hedge_token_id:
                             continue
 
-                        hedge_current_price = ws_manager.get_price(hedge_token_id)
+                        hedge_current_price, hedge_price_age = (
+                            ws_manager.get_price_with_age(
+                                hedge_token_id,
+                                max_age_seconds=PRE_SETTLEMENT_PRICE_MAX_AGE,
+                            )
+                        )
                         if not hedge_current_price or hedge_current_price < 0.01:
                             continue
 
@@ -258,8 +328,10 @@ def check_pre_settlement_exits():
                 if not losing_token_id:
                     continue
 
-                # Get current price of losing side
-                losing_price = ws_manager.get_price(losing_token_id)
+                # Get current price of losing side (with fallback to cached)
+                losing_price, losing_price_age = ws_manager.get_price_with_age(
+                    losing_token_id, max_age_seconds=PRE_SETTLEMENT_PRICE_MAX_AGE
+                )
                 if not losing_price:
                     log(
                         f"   ⚠️  [{symbol}] #{trade_id} Could not get price for losing side"
@@ -289,7 +361,14 @@ def check_pre_settlement_exits():
                 )
                 seconds_left = (window_end_dt - now).total_seconds()
 
-                log(f"   💰 [{symbol}] #{trade_id} PRE-SETTLEMENT EXIT OPPORTUNITY")
+                # Log with progressive timing info
+                timing_info = f"T-{int(seconds_left)}s"
+                confidence_info = (
+                    f"req: {required_confidence:.0%}" if not is_hedged else "HEDGED"
+                )
+                log(
+                    f"   💰 [{symbol}] #{trade_id} PRE-SETTLEMENT EXIT OPPORTUNITY ({timing_info}, {confidence_info})"
+                )
 
                 # Initialize profit tracking variables
                 expected_profit = 0.0
@@ -377,15 +456,13 @@ def check_pre_settlement_exits():
 def _pre_settlement_task():
     """Background thread that periodically checks for pre-settlement exit opportunities"""
     log(
-        f"🎯 [Startup] Pre-settlement exit task started (check every {PRE_SETTLEMENT_CHECK_INTERVAL}s, "
-        f"exit {PRE_SETTLEMENT_EXIT_SECONDS}s before close)"
+        f"🎯 [Startup] Pre-settlement exit task started (check every {PRE_SETTLEMENT_CHECK_INTERVAL}s)"
     )
     log(
-        f"   💡 Strategy: Sell losing side of ALL positions (hedged + unhedged) for profit recovery"
+        f"   💡 Strategy: Progressive exit with cached prices (markets close ~2-3 min before settlement)"
     )
-    log(
-        f"   📊 Unhedged positions require {PRE_SETTLEMENT_MIN_CONFIDENCE:.0%} confidence | Hedged positions always exit"
-    )
+    log(f"   ⏰ Exit windows: T-180s (80%), T-120s (70%), T-60s (60%), T-45s (50%)")
+    log(f"   ✅ Pre-settlement exit monitoring enabled (hedged + unhedged positions)")
 
     while True:
         try:

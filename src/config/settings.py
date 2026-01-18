@@ -98,19 +98,32 @@ EMERGENCY_SELL_MIN_PROFIT_CENTS = float(
 )  # Consider "winning" if +5¢ or more
 
 # Pre-Settlement Exit Strategy for Unhedged Positions
-# Sell losing side of unhedged position near window close to extract additional value
+# Pre-Settlement Exit Strategy - Progressive timing with decreasing confidence requirements
+# Sell losing side of hedged/unhedged position before window close to extract additional value
 ENABLE_PRE_SETTLEMENT_EXIT = (
     os.getenv("ENABLE_PRE_SETTLEMENT_EXIT", "YES").upper() == "YES"
 )  # Enable pre-settlement exit strategy
 PRE_SETTLEMENT_EXIT_SECONDS = int(
-    os.getenv("PRE_SETTLEMENT_EXIT_SECONDS", "45")
-)  # Exit losing side N seconds before window close (default 45s)
+    os.getenv("PRE_SETTLEMENT_EXIT_SECONDS", "180")
+)  # Start checking N seconds before window close (default 180s = 3 min)
 PRE_SETTLEMENT_MIN_CONFIDENCE = float(
-    os.getenv("PRE_SETTLEMENT_MIN_CONFIDENCE", "0.70")
-)  # Minimum confidence to consider winning side "safe" (default 70%)
+    os.getenv("PRE_SETTLEMENT_MIN_CONFIDENCE", "0.80")
+)  # Minimum confidence at earliest exit window (default 80%)
 PRE_SETTLEMENT_CHECK_INTERVAL = int(
     os.getenv("PRE_SETTLEMENT_CHECK_INTERVAL", "5")
 )  # Check for pre-settlement exits every N seconds (default 5s)
+PRE_SETTLEMENT_PRICE_MAX_AGE = int(
+    os.getenv("PRE_SETTLEMENT_PRICE_MAX_AGE", "180")
+)  # Max age of cached prices in seconds (default 180s = 3 min)
+
+# Progressive confidence thresholds (time_before_close: min_confidence)
+# Markets close ~2-3 minutes before settlement, so we use progressive thresholds
+PRE_SETTLEMENT_CONFIDENCE_SCHEDULE = {
+    180: 0.80,  # T-3min: Very safe, require 80%+ confidence
+    120: 0.70,  # T-2min: Safe, require 70%+ confidence
+    60: 0.60,  # T-1min: Reasonable, require 60%+ confidence
+    45: 0.50,  # T-45s: Market likely closed, use cached prices, any confidence
+}
 
 # Enhanced Balance Validation for API Reliability Issues
 ENABLE_ENHANCED_BALANCE_VALIDATION = (
