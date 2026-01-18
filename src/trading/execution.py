@@ -1616,6 +1616,28 @@ def execute_trade(
         log(
             f"{emoji} [{symbol}] {entry_type}: {trade_params.get('core_summary', '')} | #{trade_id} {side} ${trade_params['bet_usd']:.2f} @ {actual_price:.4f} | ID: {order_id[:10] if order_id else 'N/A'}"
         )
+
+        # Subscribe to both entry and hedge tokens for real-time price updates
+        # This ensures pre-settlement exit has fresh prices available
+        try:
+            from src.utils.websocket_manager import ws_manager
+            from src.data.market_data import get_token_ids
+
+            up_id, down_id = get_token_ids(symbol)
+            tokens_to_subscribe = []
+            if up_id:
+                tokens_to_subscribe.append(up_id)
+            if down_id:
+                tokens_to_subscribe.append(down_id)
+
+            if tokens_to_subscribe:
+                ws_manager.subscribe_to_prices(
+                    tokens_to_subscribe,
+                    symbol_map={token_id: symbol for token_id in tokens_to_subscribe},
+                )
+        except Exception as sub_err:
+            log_error(f"[{symbol}] Error subscribing to WebSocket prices: {sub_err}")
+
         return trade_id
     except Exception as e:
         log_error(f"[{symbol}] Trade completion error: {e}")

@@ -31,6 +31,7 @@ import time
 import threading
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from typing import Optional, Tuple
 from src.data.db_connection import db_connection
 from src.utils.logger import log, log_error
 from src.utils.websocket_manager import ws_manager
@@ -46,6 +47,44 @@ from src.trading.execution import emergency_sell_position
 
 # Track already processed trades to avoid duplicate exits
 _processed_trade_ids = set()
+
+
+def _get_token_price_from_api(token_id: str, symbol: str) -> Optional[float]:
+    """
+    Fetch current midpoint price from CLOB API as fallback when WebSocket unavailable.
+    Uses the CLOB client's getMidpoint method.
+
+    Args:
+        token_id: Token ID to fetch price for
+        symbol: Trading symbol (for logging)
+
+    Returns:
+        Midpoint price as float, or None if request fails
+    """
+    try:
+        from src.trading.orders import client
+
+        # Call client.get_midpoint(token_id) which returns {"mid": "0.75"}
+        response = client.get_midpoint(token_id)
+
+        if response and "mid" in response:
+            mid_price = float(response["mid"])
+            if mid_price > 0:
+                return mid_price
+
+        return None
+
+    except Exception as e:
+        log_error(
+            f"[{symbol}] Error fetching midpoint from CLOB for token {token_id[:16]}...: {e}"
+        )
+        return None
+
+    except Exception as e:
+        log_error(
+            f"[{symbol}] Error fetching price from API for token {token_id[:16]}...: {e}"
+        )
+        return None
 
 
 def _get_losing_side_token_id(symbol: str, winning_side: str, slug: str):
@@ -182,6 +221,11 @@ def check_pre_settlement_exits():
             if not positions:
                 return
 
+            # Log summary of positions being checked
+            log(
+                f"🔍 Pre-settlement check: {len(positions)} position(s) in exit window ({int(earliest_window)}s-{int(latest_window)}s before close)"
+            )
+
             for pos in positions:
                 (
                     trade_id,
@@ -229,6 +273,13 @@ def check_pre_settlement_exits():
                 # Use bayesian confidence (more reliable for near-settlement predictions)
                 confidence = bayesian_conf if bayesian_conf else additive_conf
 
+                # Log position details
+                hedge_label = "🛡️ HEDGED" if is_hedged else "⚠️  UNHEDGED"
+                conf_label = f"{confidence:.1%}" if confidence else "N/A"
+                log(
+                    f"   📊 [{symbol}] #{trade_id} {hedge_label} | {winning_side} @ ${entry_price:.2f} | Confidence: {conf_label} | T-{int(seconds_left)}s"
+                )
+
                 # For hedged positions, we don't need confidence check
                 # We KNOW one side will lose, so always try to exit the losing side
                 if not is_hedged:
@@ -238,15 +289,29 @@ def check_pre_settlement_exits():
                         )
                         continue
 
-                    # Get current price of winning side (with fallback to cached)
+                    # Get current price of winning side (with fallback to cached, then API)
                     winning_price, price_age = ws_manager.get_price_with_age(
                         winning_token_id, max_age_seconds=PRE_SETTLEMENT_PRICE_MAX_AGE
                     )
+
+                    # If WebSocket/cache unavailable, try API fallback
                     if not winning_price or winning_price < 0.01:
                         log(
-                            f"   ⚠️  [{symbol}] #{trade_id} Could not get current price for winning side (age: {price_age:.0f}s)"
+                            f"   🔄 [{symbol}] #{trade_id} No cached price, fetching from API..."
                         )
-                        continue
+                        winning_price = _get_token_price_from_api(
+                            winning_token_id, symbol
+                        )
+                        if winning_price:
+                            price_age = 0  # Fresh from API
+                            log(
+                                f"   ✅ [{symbol}] #{trade_id} Got fresh price from API: ${winning_price:.2f}"
+                            )
+                        else:
+                            log(
+                                f"   ⚠️  [{symbol}] #{trade_id} Could not get price from cache or API"
+                            )
+                            continue
 
                     # Log if using cached price
                     if price_age and price_age > 60:
@@ -277,12 +342,26 @@ def check_pre_settlement_exits():
                     winning_price, price_age = ws_manager.get_price_with_age(
                         winning_token_id, max_age_seconds=PRE_SETTLEMENT_PRICE_MAX_AGE
                     )
+
+                    # If WebSocket/cache unavailable, try API fallback
                     if not winning_price or winning_price < 0.01:
-                        age_str = f"{price_age:.0f}s" if price_age else "N/A"
                         log(
-                            f"   ⚠️  [{symbol}] #{trade_id} Could not get current price (age: {age_str})"
+                            f"   🔄 [{symbol}] #{trade_id} No cached price, fetching from API..."
                         )
-                        continue
+                        winning_price = _get_token_price_from_api(
+                            winning_token_id, symbol
+                        )
+                        if winning_price:
+                            price_age = 0  # Fresh from API
+                            log(
+                                f"   ✅ [{symbol}] #{trade_id} Got fresh price from API: ${winning_price:.2f}"
+                            )
+                        else:
+                            age_str = f"{price_age:.0f}s" if price_age else "N/A"
+                            log(
+                                f"   ⚠️  [{symbol}] #{trade_id} Could not get price from cache or API (age: {age_str})"
+                            )
+                            continue
 
                     # Log if using cached price
                     if price_age and price_age > 60:
@@ -296,6 +375,9 @@ def check_pre_settlement_exits():
                     if winning_price > 0.50:
                         # Entry side winning, winning_side and winning_token_id are correct
                         reason = f"Hedged position, {winning_side} @ ${winning_price:.2f} > $0.50"
+                        log(
+                            f"      ✅ [{symbol}] Entry side {winning_side} winning @ ${winning_price:.2f}"
+                        )
                     else:
                         # Hedge side winning! Need to swap which side we consider "winning"
                         # Get hedge token_id
@@ -311,8 +393,25 @@ def check_pre_settlement_exits():
                                 max_age_seconds=PRE_SETTLEMENT_PRICE_MAX_AGE,
                             )
                         )
+
+                        # If WebSocket/cache unavailable, try API fallback
                         if not hedge_current_price or hedge_current_price < 0.01:
-                            continue
+                            log(
+                                f"   🔄 [{symbol}] #{trade_id} No cached hedge price, fetching from API..."
+                            )
+                            hedge_current_price = _get_token_price_from_api(
+                                hedge_token_id, symbol
+                            )
+                            if hedge_current_price:
+                                hedge_price_age = 0  # Fresh from API
+                                log(
+                                    f"   ✅ [{symbol}] #{trade_id} Got fresh hedge price from API: ${hedge_current_price:.2f}"
+                                )
+                            else:
+                                log(
+                                    f"   ⚠️  [{symbol}] #{trade_id} Could not get hedge price from cache or API"
+                                )
+                                continue
 
                         # Swap: hedge is now winning side
                         winning_token_id = hedge_token_id
@@ -320,6 +419,9 @@ def check_pre_settlement_exits():
                         winning_price = hedge_current_price
                         entry_price = hedge_price if hedge_price else 0.50
                         reason = f"Hedged position, {winning_side} @ ${winning_price:.2f} > $0.50"
+                        log(
+                            f"      ✅ [{symbol}] Hedge side {winning_side} winning @ ${winning_price:.2f}"
+                        )
 
                     hedge_status = "🛡️ HEDGED"
 
@@ -352,6 +454,13 @@ def check_pre_settlement_exits():
                         f"   ⏭️  [{symbol}] #{trade_id} No {losing_side} shares to sell (already liquidated)"
                     )
                     continue
+
+                # Log combined price for hedged positions
+                if is_hedged:
+                    combined_price = winning_price + losing_price
+                    log(
+                        f"      📊 [{symbol}] Combined: ${combined_price:.2f} | {winning_side} @ ${winning_price:.2f} | {losing_side} @ ${losing_price:.2f}"
+                    )
 
                 # Calculate time remaining
                 window_end_dt = (
