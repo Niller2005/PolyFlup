@@ -125,6 +125,7 @@ def _check_position_safety(
     current_price: float,
     entry_price: float,
     min_confidence: float = None,
+    is_hedged: bool = False,
 ) -> tuple[bool, str]:
     """
     Check if it's safe to sell losing side by verifying winning side is secure.
@@ -136,6 +137,7 @@ def _check_position_safety(
         current_price: Current price of winning side
         entry_price: Entry price of winning side
         min_confidence: Minimum required confidence (defaults to PRE_SETTLEMENT_MIN_CONFIDENCE)
+        is_hedged: Whether this is a hedged position (both sides held)
 
     Returns:
         (is_safe, reason) tuple
@@ -150,22 +152,25 @@ def _check_position_safety(
             f"confidence too low ({confidence:.1%} < {min_confidence:.1%})",
         )
 
-    # Check 2: Price should still be favorable
-    # For UP side: current price should be significantly above entry
-    # For DOWN side: current price should be significantly below entry
-    price_change = current_price - entry_price
+    # Check 2: Price movement check (ONLY for unhedged positions)
+    # For hedged positions, we KNOW one side loses - skip price deterioration check
+    if not is_hedged:
+        # For UP side: current price should be significantly above entry
+        # For DOWN side: current price should be significantly below entry
+        price_change = current_price - entry_price
 
-    if winning_side == "UP":
-        # UP position should have maintained or increased value
-        if price_change < -0.05:  # More than 5¢ worse
-            return False, f"UP price dropped ${abs(price_change):.2f} from entry"
-    else:  # DOWN
-        # DOWN position should have maintained or increased value (price went down)
-        if price_change > 0.05:  # More than 5¢ worse
-            return False, f"DOWN price rose ${price_change:.2f} from entry"
+        if winning_side == "UP":
+            # UP position should have maintained or increased value
+            if price_change < -0.05:  # More than 5¢ worse
+                return False, f"UP price dropped ${abs(price_change):.2f} from entry"
+        else:  # DOWN
+            # DOWN position should have maintained or increased value (price went down)
+            if price_change > 0.05:  # More than 5¢ worse
+                return False, f"DOWN price rose ${price_change:.2f} from entry"
 
     # All checks passed
-    return True, f"Safe: {confidence:.1%} confidence, price favorable"
+    price_change = current_price - entry_price
+    return True, f"Safe: {confidence:.1%} confidence, price change ${price_change:+.2f}"
 
 
 def check_pre_settlement_exits():
@@ -365,6 +370,7 @@ def check_pre_settlement_exits():
                         winning_price,
                         entry_price,
                         min_confidence=required_confidence,
+                        is_hedged=False,
                     )
 
                     if not is_safe:
@@ -483,6 +489,7 @@ def check_pre_settlement_exits():
                         winning_price,
                         entry_price,
                         min_confidence=required_confidence,
+                        is_hedged=True,
                     )
 
                     if not is_safe:
