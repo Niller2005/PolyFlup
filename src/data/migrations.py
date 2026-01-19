@@ -228,6 +228,27 @@ def migration_010_add_redeem_tx_hash_column(conn: Any) -> None:
         log("    ✓ redeem_tx_hash column already exists")
 
 
+def migration_011_add_hedge_exit_tracking_columns(conn: Any) -> None:
+    """Add hedge exit price tracking for accurate P&L on hedged positions"""
+    c = conn.cursor()
+
+    c.execute("PRAGMA table_info(trades)")
+    columns = [row[1] for row in c.fetchall()]
+
+    new_columns = [
+        ("hedge_exit_price", "REAL"),
+        ("hedge_exited_early", "BOOLEAN DEFAULT 0"),
+    ]
+
+    for col_name, col_type in new_columns:
+        if col_name not in columns:
+            log(f"  - Adding {col_name} column...")
+            c.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
+            log(f"    ✓ {col_name} added")
+        else:
+            log(f"    ✓ {col_name} already exists")
+
+
 # Migration registry: version -> migration function
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
@@ -267,6 +288,11 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
         10,
         "Add redeem transaction hash column for post-resolution redemption",
         migration_010_add_redeem_tx_hash_column,
+    ),
+    (
+        11,
+        "Add hedge exit tracking columns for accurate P&L",
+        migration_011_add_hedge_exit_tracking_columns,
     ),
 ]
 

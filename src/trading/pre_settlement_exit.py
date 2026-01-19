@@ -211,7 +211,7 @@ def check_pre_settlement_exits():
                 """
                 SELECT id, symbol, slug, token_id, side, entry_price, size, 
                        window_end, bayesian_confidence, additive_confidence, is_hedged,
-                       hedge_order_price
+                       hedge_order_price, order_id, hedge_order_id
                 FROM trades
                 WHERE settled = 0 
                   AND exited_early = 0
@@ -245,6 +245,8 @@ def check_pre_settlement_exits():
                     additive_conf,
                     is_hedged,
                     hedge_price,
+                    entry_order_id,
+                    hedge_order_id,
                 ) = pos
 
                 # Skip if already processed
@@ -677,11 +679,19 @@ def check_pre_settlement_exits():
                     else f"pre-settlement exit ({confidence:.1%} confidence, {int(seconds_left)}s left)"
                 )
 
+                # Determine which order_id to pass for exit price tracking
+                # If losing_side == winning_side (original entry side), we're selling entry
+                # If losing_side != winning_side, we're selling the hedge
+                order_id_for_exit = (
+                    entry_order_id if losing_side == winning_side else hedge_order_id
+                )
+
                 success = emergency_sell_position(
                     symbol=symbol,
                     token_id=losing_token_id,
                     size=losing_balance,
                     reason=exit_reason,
+                    entry_order_id=order_id_for_exit,
                     entry_price=losing_price,  # Use current price as reference
                 )
 

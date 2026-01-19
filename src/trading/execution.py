@@ -14,6 +14,7 @@ from src.trading.orders import (
     place_limit_order,
     BUY,
     SELL,
+    MIN_ORDER_SIZE,
 )
 from src.data.market_data import get_token_ids
 
@@ -26,7 +27,7 @@ def _record_exit_price(
     Used when emergency selling a position (pre-settlement or partial fill cleanup).
 
     Args:
-        entry_order_id: The order_id of the entry trade
+        entry_order_id: The order_id or hedge_order_id of the trade being sold
         exit_price: The actual price the position was sold at
         symbol: Trading symbol (for logging)
     """
@@ -38,17 +39,42 @@ def _record_exit_price(
 
         with db_connection() as conn:
             c = conn.cursor()
-            # Update the trade's exit price and mark as exited early
-            c.execute(
-                "UPDATE trades SET exit_price = ?, exited_early = 1 WHERE order_id = ?",
-                (exit_price, entry_order_id),
-            )
 
-            # Log success if a row was updated
-            if c.rowcount > 0:
+            # Check if this is an entry order or hedge order
+            c.execute(
+                "SELECT id, order_id, hedge_order_id FROM trades WHERE order_id = ? OR hedge_order_id = ?",
+                (entry_order_id, entry_order_id),
+            )
+            result = c.fetchone()
+
+            if not result:
                 log(
-                    f"   💾 [{symbol}] Recorded exit price ${exit_price:.2f} in database"
+                    f"   ⚠️  [{symbol}] No trade found for order_id {entry_order_id[:10]}..."
                 )
+                return
+
+            trade_id, order_id, hedge_order_id = result
+
+            # Determine if this is entry or hedge exit
+            if entry_order_id == order_id:
+                # Exiting entry side
+                c.execute(
+                    "UPDATE trades SET exit_price = ?, exited_early = 1 WHERE id = ?",
+                    (exit_price, trade_id),
+                )
+                log(
+                    f"   💾 [{symbol}] #{trade_id} Recorded ENTRY exit price ${exit_price:.2f}"
+                )
+            elif entry_order_id == hedge_order_id:
+                # Exiting hedge side
+                c.execute(
+                    "UPDATE trades SET hedge_exit_price = ?, hedge_exited_early = 1 WHERE id = ?",
+                    (exit_price, trade_id),
+                )
+                log(
+                    f"   💾 [{symbol}] #{trade_id} Recorded HEDGE exit price ${exit_price:.2f}"
+                )
+
     except Exception as e:
         log_error(f"[{symbol}] Failed to record exit price: {e}")
 
@@ -1169,17 +1195,26 @@ def place_entry_and_hedge_atomic(
                         )
                         # Keep hedge, sell entry
                         if final_entry_filled_size > 0.01:
-                            log(
-                                f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
-                            )
-                            emergency_sell_position(
-                                symbol=symbol,
-                                token_id=entry_token_id,
-                                size=final_entry_filled_size,
-                                reason=f"holding winning {hedge_side}, liquidating {entry_side}",
-                                entry_order_id=entry_order_id,
-                                entry_price=entry_price,
-                            )
+                            if final_entry_filled_size < MIN_ORDER_SIZE:
+                                log_error(
+                                    f"   ⚠️  [{symbol}] Partial {entry_side} fill ({final_entry_filled_size:.2f} shares) is below minimum order size ({MIN_ORDER_SIZE})"
+                                )
+                                log_error(
+                                    f"   🔒 [{symbol}] Cannot emergency sell - HOLDING {hedge_side}, keeping orphaned {entry_side}"
+                                )
+                                # Partial entry too small to sell, but hedge is winning so keep it
+                            else:
+                                log(
+                                    f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
+                                )
+                                emergency_sell_position(
+                                    symbol=symbol,
+                                    token_id=entry_token_id,
+                                    size=final_entry_filled_size,
+                                    reason=f"holding winning {hedge_side}, liquidating {entry_side}",
+                                    entry_order_id=entry_order_id,
+                                    entry_price=entry_price,
+                                )
                     elif (
                         EMERGENCY_SELL_HOLD_IF_WINNING
                         and final_entry_filled_size > 0.01
@@ -1221,17 +1256,26 @@ def place_entry_and_hedge_atomic(
                         )
                         # Sell entry if partially filled
                         if final_entry_filled_size > 0.01:
-                            log(
-                                f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
-                            )
-                            emergency_sell_position(
-                                symbol=symbol,
-                                token_id=entry_token_id,
-                                size=final_entry_filled_size,
-                                reason=f"partial {entry_side} fill cleanup",
-                                entry_order_id=entry_order_id,
-                                entry_price=entry_price,
-                            )
+                            if final_entry_filled_size < MIN_ORDER_SIZE:
+                                log_error(
+                                    f"   ⚠️  [{symbol}] Partial {entry_side} fill ({final_entry_filled_size:.2f} shares) is below minimum order size ({MIN_ORDER_SIZE})"
+                                )
+                                log_error(
+                                    f"   🔒 [{symbol}] Cannot emergency sell - position ORPHANED (too small to sell)"
+                                )
+                                # TODO: Mark this trade in DB as orphaned/partial for tracking
+                            else:
+                                log(
+                                    f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
+                                )
+                                emergency_sell_position(
+                                    symbol=symbol,
+                                    token_id=entry_token_id,
+                                    size=final_entry_filled_size,
+                                    reason=f"partial {entry_side} fill cleanup",
+                                    entry_order_id=entry_order_id,
+                                    entry_price=entry_price,
+                                )
                         # Note: Entry order already cancelled at the top of this block
 
                 else:
@@ -1290,17 +1334,25 @@ def place_entry_and_hedge_atomic(
                             f"   🎯 [{symbol}] {entry_side} is MORE PROFITABLE (+${entry_profit:.2f}) - HOLDING {entry_side}, selling {hedge_side}"
                         )
                         if final_hedge_filled_size > 0.01:
-                            log(
-                                f"   💥 [{symbol}] Emergency selling partial {hedge_side} position ({final_hedge_filled_size:.2f} shares)"
-                            )
-                            emergency_sell_position(
-                                symbol=symbol,
-                                token_id=hedge_token_id,
-                                size=final_hedge_filled_size,
-                                reason=f"holding winning {entry_side}, liquidating {hedge_side}",
-                                entry_order_id=hedge_order_id,
-                                entry_price=hedge_price,
-                            )
+                            if final_hedge_filled_size < MIN_ORDER_SIZE:
+                                log_error(
+                                    f"   ⚠️  [{symbol}] Partial {hedge_side} fill ({final_hedge_filled_size:.2f} shares) is below minimum order size ({MIN_ORDER_SIZE})"
+                                )
+                                log_error(
+                                    f"   🔒 [{symbol}] Cannot emergency sell - HOLDING {entry_side}, keeping orphaned {hedge_side}"
+                                )
+                            else:
+                                log(
+                                    f"   💥 [{symbol}] Emergency selling partial {hedge_side} position ({final_hedge_filled_size:.2f} shares)"
+                                )
+                                emergency_sell_position(
+                                    symbol=symbol,
+                                    token_id=hedge_token_id,
+                                    size=final_hedge_filled_size,
+                                    reason=f"holding winning {entry_side}, liquidating {hedge_side}",
+                                    entry_order_id=hedge_order_id,
+                                    entry_price=hedge_price,
+                                )
                     elif (
                         EMERGENCY_SELL_HOLD_IF_WINNING
                         and final_hedge_filled_size > 0.01
@@ -1312,17 +1364,25 @@ def place_entry_and_hedge_atomic(
                             f"   🎯 [{symbol}] {hedge_side} is MORE PROFITABLE (+${hedge_profit:.2f}) - HOLDING {hedge_side}, selling {entry_side}"
                         )
                         if final_entry_filled_size > 0.01:
-                            log(
-                                f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
-                            )
-                            emergency_sell_position(
-                                symbol=symbol,
-                                token_id=entry_token_id,
-                                size=final_entry_filled_size,
-                                reason=f"holding winning {hedge_side}, liquidating {entry_side}",
-                                entry_order_id=entry_order_id,
-                                entry_price=entry_price,
-                            )
+                            if final_entry_filled_size < MIN_ORDER_SIZE:
+                                log_error(
+                                    f"   ⚠️  [{symbol}] Partial {entry_side} fill ({final_entry_filled_size:.2f} shares) is below minimum order size ({MIN_ORDER_SIZE})"
+                                )
+                                log_error(
+                                    f"   🔒 [{symbol}] Cannot emergency sell - HOLDING {hedge_side}, keeping orphaned {entry_side}"
+                                )
+                            else:
+                                log(
+                                    f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
+                                )
+                                emergency_sell_position(
+                                    symbol=symbol,
+                                    token_id=entry_token_id,
+                                    size=final_entry_filled_size,
+                                    reason=f"holding winning {hedge_side}, liquidating {entry_side}",
+                                    entry_order_id=entry_order_id,
+                                    entry_price=entry_price,
+                                )
                     else:
                         # Neither is clearly winning, or both similar - SELL BOTH
                         log(
@@ -1330,31 +1390,47 @@ def place_entry_and_hedge_atomic(
                         )
                         # Sell any partial entry fills
                         if final_entry_filled_size > 0.01:
-                            log(
-                                f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
-                            )
-                            emergency_sell_position(
-                                symbol=symbol,
-                                token_id=entry_token_id,
-                                size=final_entry_filled_size,
-                                reason=f"partial {entry_side} fill cleanup",
-                                entry_order_id=entry_order_id,
-                                entry_price=entry_price,
-                            )
+                            if final_entry_filled_size < MIN_ORDER_SIZE:
+                                log_error(
+                                    f"   ⚠️  [{symbol}] Partial {entry_side} fill ({final_entry_filled_size:.2f} shares) is below minimum order size ({MIN_ORDER_SIZE})"
+                                )
+                                log_error(
+                                    f"   🔒 [{symbol}] Cannot emergency sell {entry_side} - position ORPHANED"
+                                )
+                            else:
+                                log(
+                                    f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"
+                                )
+                                emergency_sell_position(
+                                    symbol=symbol,
+                                    token_id=entry_token_id,
+                                    size=final_entry_filled_size,
+                                    reason=f"partial {entry_side} fill cleanup",
+                                    entry_order_id=entry_order_id,
+                                    entry_price=entry_price,
+                                )
 
                         # Sell any partial hedge fills
                         if final_hedge_filled_size > 0.01:
-                            log(
-                                f"   💥 [{symbol}] Emergency selling partial {hedge_side} position ({final_hedge_filled_size:.2f} shares)"
-                            )
-                            emergency_sell_position(
-                                symbol=symbol,
-                                token_id=hedge_token_id,
-                                size=final_hedge_filled_size,
-                                reason=f"partial {hedge_side} fill cleanup",
-                                entry_order_id=hedge_order_id,
-                                entry_price=hedge_price,
-                            )
+                            if final_hedge_filled_size < MIN_ORDER_SIZE:
+                                log_error(
+                                    f"   ⚠️  [{symbol}] Partial {hedge_side} fill ({final_hedge_filled_size:.2f} shares) is below minimum order size ({MIN_ORDER_SIZE})"
+                                )
+                                log_error(
+                                    f"   🔒 [{symbol}] Cannot emergency sell {hedge_side} - position ORPHANED"
+                                )
+                            else:
+                                log(
+                                    f"   💥 [{symbol}] Emergency selling partial {hedge_side} position ({final_hedge_filled_size:.2f} shares)"
+                                )
+                                emergency_sell_position(
+                                    symbol=symbol,
+                                    token_id=hedge_token_id,
+                                    size=final_hedge_filled_size,
+                                    reason=f"partial {hedge_side} fill cleanup",
+                                    entry_order_id=hedge_order_id,
+                                    entry_price=hedge_price,
+                                )
 
                         # Cancel both orders since we're selling both sides
                         try:

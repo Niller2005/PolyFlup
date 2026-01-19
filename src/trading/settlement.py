@@ -274,13 +274,20 @@ def check_and_settle_trades():
 
                 # Check if position was exited early with recorded exit price
                 c.execute(
-                    "SELECT exit_price, exited_early FROM trades WHERE id = ?",
+                    "SELECT exit_price, exited_early, is_hedged, hedge_order_price, hedge_exit_price, hedge_exited_early FROM trades WHERE id = ?",
                     (trade_id,),
                 )
                 exit_check = c.fetchone()
 
                 if exit_check:
-                    recorded_exit_price, exited_early_flag = exit_check
+                    (
+                        recorded_exit_price,
+                        exited_early_flag,
+                        is_hedged,
+                        hedge_price,
+                        hedge_exit_price,
+                        hedge_exited_early,
+                    ) = exit_check
 
                     # Use recorded exit price if available and position was exited early
                     if exited_early_flag and recorded_exit_price is not None:
@@ -289,8 +296,51 @@ def check_and_settle_trades():
                             f"   💰 [{symbol}] #{trade_id} Using early exit price ${exit_value:.2f} (resolution: ${final_price:.2f})"
                         )
 
-                pnl_usd = (exit_value * size) - bet_usd
-                roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
+                    # For hedged positions, calculate P&L differently
+                    if is_hedged and hedge_price:
+                        # Hedged position P&L calculation
+                        # Entry side value
+                        if exited_early_flag and recorded_exit_price is not None:
+                            entry_return = size * recorded_exit_price
+                        else:
+                            entry_return = size * final_price
+
+                        # Hedge side value
+                        if hedge_exited_early and hedge_exit_price is not None:
+                            # Hedge was sold early (pre-settlement exit)
+                            hedge_return = size * hedge_exit_price
+                            hedge_resolution = size * (
+                                1.0 - final_price
+                            )  # What hedge would have been worth
+                            log(
+                                f"   💰 [{symbol}] #{trade_id} Hedge exited early @ ${hedge_exit_price:.2f} (resolution would be: ${1.0 - final_price:.2f})"
+                            )
+                        else:
+                            # Hedge held to resolution
+                            hedge_return = size * (1.0 - final_price)
+
+                        # Total return
+                        total_return = entry_return + hedge_return
+
+                        # Total cost
+                        entry_cost = size * entry_price
+                        hedge_cost = size * hedge_price
+                        total_cost = entry_cost + hedge_cost
+
+                        pnl_usd = total_return - total_cost
+                        roi_pct = (pnl_usd / total_cost) * 100 if total_cost > 0 else 0
+
+                        log(
+                            f"   📊 [{symbol}] #{trade_id} HEDGED P&L: Return=${total_return:.2f} (entry=${entry_return:.2f} + hedge=${hedge_return:.2f}) - Cost=${total_cost:.2f} (entry=${entry_cost:.2f} + hedge=${hedge_cost:.2f}) = ${pnl_usd:+.2f}"
+                        )
+                    else:
+                        # Unhedged position - original calculation
+                        pnl_usd = (exit_value * size) - bet_usd
+                        roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
+                else:
+                    # Fallback if no exit check data
+                    pnl_usd = (exit_value * size) - bet_usd
+                    roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
                 # NEW: Redeem winning tokens for unmerged/unexited positions
                 # Check if position needs redemption (not merged, not exited early)
