@@ -36,14 +36,20 @@ def sync_orders_with_exchange():
                 if o_id:
                     orders_map[str(o_id)] = o
 
+            # Query unsettled positions with their entry orders
             c.execute(
-                """SELECT id, symbol, order_id, order_status
-                   FROM trades WHERE settled = 0 AND order_id IS NOT NULL"""
+                """SELECT p.id, w.symbol, o.order_id, o.order_status
+                   FROM positions p
+                   JOIN windows w ON p.window_id = w.id
+                   JOIN orders o ON o.position_id = p.id
+                   WHERE p.settled = 0 
+                     AND o.order_id IS NOT NULL 
+                     AND o.order_type = 'ENTRY'"""
             )
-            db_trades = c.fetchall()
+            db_positions = c.fetchall()
 
             updated_count = 0
-            for trade_id, symbol, order_id, current_status in db_trades:
+            for position_id, symbol, order_id, current_status in db_positions:
                 if order_id and order_id in orders_map:
                     o = orders_map[order_id]
                     status = o.get("status", "").upper()
@@ -53,11 +59,12 @@ def sync_orders_with_exchange():
 
                     if current_status != status:
                         log(
-                            f"   📊 [{symbol}] #{trade_id} Order {order_id[:10]}: {current_status} -> {status} | Matched: {size_matched:.2f}"
+                            f"   📊 [{symbol}] #{position_id} Order {order_id[:10]}: {current_status} -> {status} | Matched: {size_matched:.2f}"
                         )
+                        # Update order status in orders table
                         c.execute(
-                            "UPDATE trades SET order_status = ? WHERE id = ?",
-                            (status, trade_id),
+                            "UPDATE orders SET order_status = ? WHERE order_id = ?",
+                            (status, order_id),
                         )
                         updated_count += 1
 
@@ -94,14 +101,17 @@ def sync_positions_with_exchange(user_address: str):
             c = conn.cursor()
             now = datetime.now(tz=ZoneInfo("UTC"))
 
-            # 2. Get all open trades from DB
+            # Get all open positions from DB (using normalized schema)
             c.execute(
-                "SELECT id, symbol, side, size, token_id, entry_price FROM trades WHERE settled = 0"
+                """SELECT p.id, w.symbol, p.side, p.size, w.token_id, p.entry_price
+                   FROM positions p
+                   JOIN windows w ON p.window_id = w.id
+                   WHERE p.settled = 0"""
             )
-            db_trades = c.fetchall()
+            db_positions = c.fetchall()
 
-            # Get all traded token IDs from DB to avoid re-adopting settled ones
-            c.execute("SELECT DISTINCT token_id FROM trades")
+            # Get all tracked token IDs from windows to avoid re-adopting settled ones
+            c.execute("SELECT DISTINCT token_id FROM windows")
             all_tracked_token_ids = set()
             for (tid,) in c.fetchall():
                 if tid:
@@ -110,7 +120,7 @@ def sync_positions_with_exchange(user_address: str):
             # Track which exchange positions were matched to DB trades (for open ones)
             matched_exchange_ids = set()
 
-            for trade_id, symbol, side, db_size, token_id, db_entry in db_trades:
+            for position_id, symbol, side, db_size, token_id, db_entry in db_positions:
                 tid_str = normalize_token_id(token_id)
 
                 # Check match in position_map
@@ -129,72 +139,87 @@ def sync_positions_with_exchange(user_address: str):
                         # Prevent syncing active positions to near-zero due to API timing issues
                         if db_size >= 5.0 and actual_size < 0.1:
                             log(
-                                f"   ⚠️  [{symbol}] #{trade_id} Rejecting sync: Active position ({db_size:.2f}) "
+                                f"   ⚠️  [{symbol}] #{position_id} Rejecting sync: Active position ({db_size:.2f}) "
                                 f"would sync to near-zero ({actual_size:.4f}). Likely API timing issue."
                             )
                         else:
                             log(
-                                f"   📊 [{symbol}] #{trade_id} Sync: Size mismatch {db_size:.2f} -> {actual_size:.2f}"
+                                f"   📊 [{symbol}] #{position_id} Sync: Size mismatch {db_size:.2f} -> {actual_size:.2f}"
                             )
 
                             # Check if position grew (scale-in filled) and needs additional hedge
                             if actual_size > db_size:
                                 size_increase = actual_size - db_size
 
-                                # Check if we have a hedge order for this position
+                                # Check if we have a hedge for this position
                                 c.execute(
-                                    "SELECT hedge_order_id, is_hedged FROM trades WHERE id = ?",
-                                    (trade_id,),
+                                    "SELECT is_hedged FROM positions WHERE id = ?",
+                                    (position_id,),
                                 )
                                 hedge_row = c.fetchone()
 
-                                if hedge_row and hedge_row[0] and not hedge_row[1]:
+                                # Check if there's a pending hedge order
+                                c.execute(
+                                    "SELECT order_id FROM orders WHERE position_id = ? AND order_type = 'HEDGE' AND order_status IN ('OPEN', 'PENDING') LIMIT 1",
+                                    (position_id,),
+                                )
+                                hedge_order_row = c.fetchone()
+
+                                if hedge_order_row and hedge_row and not hedge_row[0]:
                                     # Hedge was placed but not fully filled yet
                                     log(
-                                        f"   🔍 [{symbol}] #{trade_id} Position grew by {size_increase:.2f} shares. Checking hedge status..."
+                                        f"   🔍 [{symbol}] #{position_id} Position grew by {size_increase:.2f} shares. Checking hedge status..."
                                     )
 
-                                    # Need to check if hedge needs to be increased
-                                    # This will be handled by the monitoring loop
+                                    # Update position size and bet_usd
+                                    # Note: We don't have a specific "HEDGE_SIZE_MISMATCH" status in normalized schema
+                                    # Just update the size and let monitoring handle it
                                     c.execute(
-                                        "UPDATE trades SET size = ?, bet_usd = ? * ?, order_status = 'HEDGE_SIZE_MISMATCH' WHERE id = ?",
+                                        "UPDATE positions SET size = ?, bet_usd = ? * ? WHERE id = ?",
                                         (
                                             actual_size,
                                             actual_size,
                                             actual_price,
-                                            trade_id,
+                                            position_id,
                                         ),
                                     )
                                 else:
                                     # Normal size update
                                     c.execute(
-                                        "UPDATE trades SET size = ?, bet_usd = ? * ? WHERE id = ?",
+                                        "UPDATE positions SET size = ?, bet_usd = ? * ? WHERE id = ?",
                                         (
                                             actual_size,
                                             actual_size,
                                             actual_price,
-                                            trade_id,
+                                            position_id,
                                         ),
                                     )
                             else:
                                 # Position decreased or normal update
                                 c.execute(
-                                    "UPDATE trades SET size = ?, bet_usd = ? * ? WHERE id = ?",
-                                    (actual_size, actual_size, actual_price, trade_id),
+                                    "UPDATE positions SET size = ?, bet_usd = ? * ? WHERE id = ?",
+                                    (
+                                        actual_size,
+                                        actual_size,
+                                        actual_price,
+                                        position_id,
+                                    ),
                                 )
 
                     # Check for entry price mismatch
                     if abs(actual_price - db_entry) > 0.0001:
                         log(
-                            f"   📊 [{symbol}] #{trade_id} Sync: Price mismatch ${db_entry:.4f} -> ${actual_price:.4f}"
+                            f"   📊 [{symbol}] #{position_id} Sync: Price mismatch ${db_entry:.4f} -> ${actual_price:.4f}"
                         )
                         c.execute(
-                            "UPDATE trades SET entry_price = ?, bet_usd = ? * ? WHERE id = ?",
-                            (actual_price, actual_size, actual_price, trade_id),
+                            "UPDATE positions SET entry_price = ?, bet_usd = ? * ? WHERE id = ?",
+                            (actual_price, actual_size, actual_price, position_id),
                         )
                 else:
-                    # Trade is open in DB but not on exchange
-                    c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+                    # Position is open in DB but not on exchange
+                    c.execute(
+                        "SELECT timestamp FROM positions WHERE id = ?", (position_id,)
+                    )
                     ts_row = c.fetchone()
                     if ts_row:
                         try:
@@ -205,11 +230,22 @@ def sync_positions_with_exchange(user_address: str):
 
                         if age_mins > 2.0:
                             log(
-                                f"   ⚠️  [{symbol}] #{trade_id} exists in DB but not on exchange (size 0). Marking as settled/unfilled."
+                                f"   ⚠️  [{symbol}] #{position_id} exists in DB but not on exchange (size 0). Marking as settled/unfilled."
                             )
+                            # Use settle_position helper for consistency
+                            from src.data.normalized_db import settle_position
+
+                            settle_position(
+                                c,
+                                position_id,
+                                exit_price=0.0,
+                                pnl_usd=0.0,
+                                roi_pct=0.0,
+                            )
+                            # Update final_outcome to indicate sync issue
                             c.execute(
-                                "UPDATE trades SET settled = 1, final_outcome = 'SYNC_MISSING', pnl_usd = 0.0, roi_pct = 0.0 WHERE id = ?",
-                                (trade_id,),
+                                "UPDATE positions SET final_outcome = 'SYNC_MISSING' WHERE id = ?",
+                                (position_id,),
                             )
 
             # 3. Check for untracked positions
@@ -258,13 +294,16 @@ def sync_positions_with_exchange(user_address: str):
                         # Skip adopting them to prevent treating hedge side as new position
                         opposite_side = "DOWN" if side == "UP" else "UP"
                         c.execute(
-                            "SELECT id FROM trades WHERE slug = ? AND side = ? AND is_hedged = 1 AND settled = 0 LIMIT 1",
+                            """SELECT p.id FROM positions p
+                               JOIN windows w ON p.window_id = w.id
+                               WHERE w.slug = ? AND p.side = ? AND p.is_hedged = 1 AND p.settled = 0 
+                               LIMIT 1""",
                             (slug, opposite_side),
                         )
                         hedge_match = c.fetchone()
                         if hedge_match:
                             log(
-                                f"   ℹ Skipping hedge position: {symbol} ({side}) is hedge for trade #{hedge_match[0]}"
+                                f"   ℹ Skipping hedge position: {symbol} ({side}) is hedge for position #{hedge_match[0]}"
                             )
                             # Add to tracked IDs to prevent future adoption attempts
                             all_tracked_token_ids.add(t_id_str)
@@ -287,27 +326,36 @@ def sync_positions_with_exchange(user_address: str):
                             f"   📥 Adopting untracked position: {symbol} ({side}) {size} shares @ ${avg_price}"
                         )
 
-                        c.execute(
-                            """INSERT INTO trades (
-                                symbol, slug, token_id, side, entry_price, size, bet_usd, 
-                                timestamp, window_start, window_end, settled, order_status, final_outcome
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                            (
-                                symbol,
-                                slug,
-                                t_id_str,
-                                side,
-                                avg_price,
-                                size,
-                                size * avg_price,
-                                now.isoformat(),
-                                now.isoformat(),
-                                (now + timedelta(minutes=15)).isoformat(),
-                                0,
-                                "FILLED",
-                                "ADOPTED",
-                            ),
+                        # Adopt position using normalized schema
+                        from src.data.normalized_db import (
+                            get_or_create_window,
+                            create_position,
                         )
+
+                        # Create window for adopted position
+                        window_id = get_or_create_window(
+                            c,
+                            symbol=symbol,
+                            slug=slug,
+                            token_id=t_id_str,
+                            window_start=now.isoformat(),
+                            window_end=(now + timedelta(minutes=15)).isoformat(),
+                        )
+
+                        # Create position
+                        create_position(
+                            c,
+                            window_id=window_id,
+                            side=side,
+                            entry_price=avg_price,
+                            size=size,
+                            bet_usd=size * avg_price,
+                            confidence_additive=0.0,
+                            confidence_bayesian=0.0,
+                            final_outcome="ADOPTED",
+                        )
+
+                        log(f"   ✅ Successfully adopted position for {symbol}")
                     except Exception as e:
                         log(f"   ❌ Failed to adopt position: {e}")
 
@@ -337,9 +385,16 @@ def recover_open_positions():
     with db_connection() as conn:
         c = conn.cursor()
         now = datetime.now(tz=ZoneInfo("UTC"))
+
+        # Query open positions using normalized schema
         c.execute(
-            """SELECT id, symbol, side, entry_price, size, bet_usd, window_end, order_status, timestamp, token_id
-                   FROM trades WHERE settled = 0 AND exited_early = 0 AND datetime(window_end) > datetime(?)""",
+            """SELECT p.id, w.symbol, p.side, p.entry_price, p.size, p.bet_usd, 
+                      w.window_end, w.token_id
+               FROM positions p
+               JOIN windows w ON p.window_id = w.id
+               WHERE p.settled = 0 
+                 AND p.exited_early = 0 
+                 AND datetime(w.window_end) > datetime(?)""",
             (now.isoformat(),),
         )
         open_positions = c.fetchall()
@@ -352,17 +407,30 @@ def recover_open_positions():
     log(f"🔄 RECOVERING {len(open_positions)} OPEN POSITIONS FROM DATABASE")
     log("=" * 90)
     tokens_to_subscribe = []
-    for t_id, sym, side, entry, size, bet, w_end, status, ts, tok in open_positions:
+
+    for position_id, sym, side, entry, size, bet, w_end, tok in open_positions:
         try:
             w_end_dt = datetime.fromisoformat(w_end)
             t_left = (w_end_dt - now).total_seconds() / 60.0
+
+            # Get order status from orders table
+            with db_connection() as conn:
+                c = conn.cursor()
+                c.execute(
+                    "SELECT order_status FROM orders WHERE position_id = ? AND order_type = 'ENTRY' LIMIT 1",
+                    (position_id,),
+                )
+                order_row = c.fetchone()
+                status = order_row[0] if order_row else "UNKNOWN"
+
             log(
-                f"  [{sym}] Trade #{t_id} {side}: ${bet:.2f} @ ${entry:.4f} | Status: {status} | {t_left:.0f}m left"
+                f"  [{sym}] Position #{position_id} {side}: ${bet:.2f} @ ${entry:.4f} | Status: {status} | {t_left:.0f}m left"
             )
             if tok:
                 tokens_to_subscribe.append(tok)
         except Exception as e:
-            log(f"  ❌ Error recovering trade #{t_id}: {e}")
+            log(f"  ❌ Error recovering position #{position_id}: {e}")
+
     if tokens_to_subscribe:
         ws_manager.subscribe_to_prices(tokens_to_subscribe)
     log("=" * 90)

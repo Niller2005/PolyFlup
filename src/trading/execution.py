@@ -1,6 +1,8 @@
 """Trade execution utilities"""
 
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Optional, Dict, Any
 from src.utils.logger import log, log_error, send_discord
 from src.data.database import save_trade
@@ -36,43 +38,50 @@ def _record_exit_price(
 
     try:
         from src.data.db_connection import db_connection
+        from src.data.normalized_db import get_position_by_order_id, settle_position
 
         with db_connection() as conn:
             c = conn.cursor()
 
-            # Check if this is an entry order or hedge order
-            c.execute(
-                "SELECT id, order_id, hedge_order_id FROM trades WHERE order_id = ? OR hedge_order_id = ?",
-                (entry_order_id, entry_order_id),
-            )
-            result = c.fetchone()
+            # Find position by entry or hedge order ID
+            position = get_position_by_order_id(c, entry_order_id, order_type="ENTRY")
+            if not position:
+                position = get_position_by_order_id(
+                    c, entry_order_id, order_type="HEDGE"
+                )
 
-            if not result:
+            if not position:
                 log(
-                    f"   ⚠️  [{symbol}] No trade found for order_id {entry_order_id[:10]}..."
+                    f"   ⚠️  [{symbol}] No position found for order_id {entry_order_id[:10]}..."
                 )
                 return
 
-            trade_id, order_id, hedge_order_id = result
+            position_id = position["id"]
 
-            # Determine if this is entry or hedge exit
-            if entry_order_id == order_id:
+            # Check which order type this is
+            c.execute(
+                "SELECT order_type FROM orders WHERE order_id = ? AND position_id = ?",
+                (entry_order_id, position_id),
+            )
+            order_row = c.fetchone()
+
+            if order_row and order_row[0] == "ENTRY":
                 # Exiting entry side
                 c.execute(
-                    "UPDATE trades SET exit_price = ?, exited_early = 1 WHERE id = ?",
-                    (exit_price, trade_id),
+                    "UPDATE positions SET exit_price = ?, exited_early = 1 WHERE id = ?",
+                    (exit_price, position_id),
                 )
                 log(
-                    f"   💾 [{symbol}] #{trade_id} Recorded ENTRY exit price ${exit_price:.2f}"
+                    f"   💾 [{symbol}] #{position_id} Recorded ENTRY exit price ${exit_price:.2f}"
                 )
-            elif entry_order_id == hedge_order_id:
+            elif order_row and order_row[0] == "HEDGE":
                 # Exiting hedge side
                 c.execute(
-                    "UPDATE trades SET hedge_exit_price = ?, hedge_exited_early = 1 WHERE id = ?",
-                    (exit_price, trade_id),
+                    "UPDATE positions SET hedge_exit_price = ?, hedge_exited_early = 1 WHERE id = ?",
+                    (exit_price, position_id),
                 )
                 log(
-                    f"   💾 [{symbol}] #{trade_id} Recorded HEDGE exit price ${exit_price:.2f}"
+                    f"   💾 [{symbol}] #{position_id} Recorded HEDGE exit price ${exit_price:.2f}"
                 )
 
     except Exception as e:
@@ -208,7 +217,7 @@ def emergency_sell_position(
                     )
 
         # CRITICAL: Cancel any existing exit order first to free up shares
-        # Look up trade by entry_order_id since trade might be saved to DB between
+        # Look up position by entry_order_id since position might be saved to DB between
         # atomic pair placement and emergency sell (WebSocket can trigger exit plan)
         if entry_order_id:
             try:
@@ -216,26 +225,37 @@ def emergency_sell_position(
 
                 with db_connection() as conn:
                     c = conn.cursor()
+
+                    # Find position and check for limit sell order
                     c.execute(
-                        "SELECT id, limit_sell_order_id FROM trades WHERE order_id = ? AND settled = 0",
+                        """
+                        SELECT p.id, o_limit.order_id
+                        FROM orders o_entry
+                        JOIN positions p ON o_entry.position_id = p.id
+                        LEFT JOIN orders o_limit ON o_limit.position_id = p.id AND o_limit.order_type = 'LIMIT_SELL'
+                        WHERE o_entry.order_id = ? AND o_entry.order_type = 'ENTRY' AND p.settled = 0
+                    """,
                         (entry_order_id,),
                     )
                     row = c.fetchone()
 
                     if row and row[1]:
-                        trade_id = row[0]
+                        position_id = row[0]
                         exit_order_id = row[1]
                         log(
-                            f"   🚫 [{symbol}] Found existing exit order {exit_order_id[:10]} for trade #{trade_id} - cancelling to free shares"
+                            f"   🚫 [{symbol}] Found existing exit order {exit_order_id[:10]} for position #{position_id} - cancelling to free shares"
                         )
 
                         cancel_result = cancel_order(exit_order_id)
                         if cancel_result:
                             log(f"   ✅ [{symbol}] Exit order cancelled successfully")
-                            # Clear the exit order from database
+                            # Update the limit sell order status in orders table
                             c.execute(
-                                "UPDATE trades SET limit_sell_order_id = NULL WHERE id = ?",
-                                (trade_id,),
+                                "UPDATE orders SET order_status = 'CANCELLED', cancelled_at = ? WHERE order_id = ?",
+                                (
+                                    datetime.now(tz=ZoneInfo("UTC")).isoformat(),
+                                    exit_order_id,
+                                ),
                             )
                         else:
                             log(
@@ -1669,9 +1689,15 @@ def execute_trade(
                 # ONLY mark as hedged if BOTH entry AND hedge are filled
                 if entry_filled and hedge_filled and not entry_cancelled:
                     if cursor:
+                        # Update position hedge status
                         cursor.execute(
-                            "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ?, is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
-                            (hedge_order_id, hedge_price, trade_id),
+                            "UPDATE positions SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
+                            (trade_id,),
+                        )
+                        # Update hedge order
+                        cursor.execute(
+                            "UPDATE orders SET order_status = 'FILLED', price = ? WHERE order_id = ? AND position_id = ?",
+                            (hedge_price, hedge_order_id, trade_id),
                         )
                         log(
                             f"   ✅ [{symbol}] #{trade_id} Hedge verified filled - position fully hedged"
@@ -1681,19 +1707,25 @@ def execute_trade(
 
                         with db_connection() as conn:
                             c = conn.cursor()
+                            # Update position hedge status
                             c.execute(
-                                "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ?, is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
-                                (hedge_order_id, hedge_price, trade_id),
+                                "UPDATE positions SET is_hedged = 1, order_status = 'HEDGED' WHERE id = ?",
+                                (trade_id,),
+                            )
+                            # Update hedge order
+                            c.execute(
+                                "UPDATE orders SET order_status = 'FILLED', price = ? WHERE order_id = ? AND position_id = ?",
+                                (hedge_price, hedge_order_id, trade_id),
                             )
                             log(
                                 f"   ✅ [{symbol}] #{trade_id} Hedge verified filled - position fully hedged"
                             )
                 else:
-                    # At least one order is not filled/cancelled - save hedge_order_id and hedge_price but don't mark as hedged
+                    # At least one order is not filled/cancelled - save hedge_order info but don't mark as hedged
                     if cursor:
                         cursor.execute(
-                            "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ? WHERE id = ?",
-                            (hedge_order_id, hedge_price, trade_id),
+                            "UPDATE orders SET price = ? WHERE order_id = ? AND position_id = ?",
+                            (hedge_price, hedge_order_id, trade_id),
                         )
                     else:
                         from src.data.db_connection import db_connection
@@ -1701,8 +1733,8 @@ def execute_trade(
                         with db_connection() as conn:
                             c = conn.cursor()
                             c.execute(
-                                "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ? WHERE id = ?",
-                                (hedge_order_id, hedge_price, trade_id),
+                                "UPDATE orders SET price = ? WHERE order_id = ? AND position_id = ?",
+                                (hedge_price, hedge_order_id, trade_id),
                             )
 
                     # Log specific reason why not hedged
@@ -1720,11 +1752,11 @@ def execute_trade(
                         )
             except Exception as verify_err:
                 log_error(f"[{symbol}] Error verifying hedge after save: {verify_err}")
-                # Still save hedge_order_id and hedge_price even if verification failed
+                # Still save hedge_order info even if verification failed
                 if cursor:
                     cursor.execute(
-                        "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ? WHERE id = ?",
-                        (hedge_order_id, hedge_price, trade_id),
+                        "UPDATE orders SET price = ? WHERE order_id = ? AND position_id = ?",
+                        (hedge_price, hedge_order_id, trade_id),
                     )
                 else:
                     from src.data.db_connection import db_connection
@@ -1732,8 +1764,8 @@ def execute_trade(
                     with db_connection() as conn:
                         c = conn.cursor()
                         c.execute(
-                            "UPDATE trades SET hedge_order_id = ?, hedge_order_price = ? WHERE id = ?",
-                            (hedge_order_id, hedge_price, trade_id),
+                            "UPDATE orders SET price = ? WHERE order_id = ? AND position_id = ?",
+                            (hedge_price, hedge_order_id, trade_id),
                         )
 
         emoji = trade_params.get("emoji", "🚀")

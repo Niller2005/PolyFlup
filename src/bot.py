@@ -92,31 +92,32 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
     if trade_id:
         # Check if this was a hedged reversal and mark the original trade
         from src.data.db_connection import db_connection
+        from src.data.normalized_db import get_position_by_id, trigger_reversal
 
         with db_connection() as conn:
             c = conn.cursor()
-            c.execute(
-                "SELECT is_reversal, side, window_start FROM trades WHERE id = ?",
-                (trade_id,),
-            )
-            row = c.fetchone()
-            if row and row[0]:
-                is_reversal = row[0]
-                side = row[1]
-                window_start = row[2]
 
-                now_iso = datetime.now(tz=ZoneInfo("UTC")).isoformat()
+            # Get position details using normalized schema
+            position = get_position_by_id(c, trade_id)
+
+            if position and position.get("is_reversal"):
+                # This was a reversal position - find and mark the original position
                 c.execute(
-                    "UPDATE trades SET reversal_triggered = 1, reversal_triggered_at = ? WHERE symbol = ? AND window_start = ? AND side != ? AND settled = 0",
-                    (
-                        now_iso,
-                        symbol,
-                        window_start,
-                        side,
-                    ),
+                    """
+                    SELECT p.id
+                    FROM positions p
+                    JOIN windows w ON p.window_id = w.id
+                    WHERE w.symbol = ? AND w.window_start = ? AND p.side != ? AND p.settled = 0
+                """,
+                    (symbol, position["window_start"], position["side"]),
                 )
-                if c.rowcount > 0:
-                    log(f"   🛡️  [{symbol}] Original trade marked as reversal_triggered")
+
+                original_position = c.fetchone()
+                if original_position:
+                    trigger_reversal(c, original_position[0])
+                    log(
+                        f"   🛡️  [{symbol}] Original position marked as reversal_triggered"
+                    )
 
     return 1 if trade_id else 0
 
