@@ -96,6 +96,9 @@ EMERGENCY_SELL_PRICE_TOLERANCE_PCT = float(
 EMERGENCY_SELL_MIN_PROFIT_CENTS = float(
     os.getenv("EMERGENCY_SELL_MIN_PROFIT_CENTS", "5.0")
 )  # Consider "winning" if +5¢ or more
+EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD = float(
+    os.getenv("EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD", "0.70")
+)  # Hold unhedged position if confidence >= this threshold (default 70%)
 
 # Pre-Settlement Exit Strategy for Unhedged Positions
 # Pre-Settlement Exit Strategy - Progressive timing with decreasing confidence requirements

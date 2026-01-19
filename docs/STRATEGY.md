@@ -390,6 +390,202 @@ Instead of a fixed timer, the scale-in window is dynamically determined by the t
 
 ---
 
+## Atomic Hedging Execution
+
+### Overview
+
+PolyFlup uses an **atomic hedging strategy** where every trade consists of a simultaneous entry+hedge pair. This eliminates unhedged positions and ensures a guaranteed profit structure when both orders fill.
+
+### Why Atomic Hedging?
+
+Traditional single-side entries expose the bot to directional risk. By placing both sides simultaneously:
+- **Guaranteed profit structure**: Entry + Hedge ≤ $0.99 ensures profit regardless of outcome
+- **No unhedged positions**: Eliminates the risk of holding a single-side position
+- **Immediate hedging**: No delay between entry and hedge placement
+
+### Execution Flow
+
+1. **Signal Calculation**: Strategy generates confidence and bias (UP/DOWN)
+2. **Price Determination**: 
+   - **Entry side**: Uses best bid (MAKER pricing)
+   - **Hedge side**: Calculated to ensure combined price ≤ `COMBINED_PRICE_THRESHOLD` (default $0.99)
+3. **Batch Order Placement**: Both orders submitted simultaneously via batch API
+   - **POST_ONLY by default**: Orders join the book to earn maker rebates (0.15%)
+   - **Smart fallback**: After 3 POST_ONLY failures, switches to GTC (accepts 1.54% taker fees)
+4. **Fill Monitoring**: Polls order status every 5 seconds for up to 120 seconds
+5. **Outcome Handling**:
+   - **Both fill**: Trade recorded, profit structure locked in
+   - **One fills**: Emergency liquidation triggered (see below)
+   - **Neither fills**: Both orders cancelled immediately
+
+### POST_ONLY → GTC Fallback
+
+The bot tracks POST_ONLY failures per symbol:
+- **First 3 attempts**: Uses POST_ONLY orders (maker rebates)
+- **After 3 failures**: Switches to GTC orders (taker fees)
+- **Reset on success**: Counter resets to 0 after successful atomic placement
+
+This prevents repeated crossing errors while preserving the opportunity to earn maker rebates when market conditions allow.
+
+### Combined Price Threshold
+
+The bot enforces a strict profitability check:
+```
+entry_price + hedge_price ≤ COMBINED_PRICE_THRESHOLD (default $0.99)
+```
+
+Example:
+- Entry: BUY UP @ $0.52
+- Hedge: BUY DOWN @ $0.46
+- Combined: $0.98 ≤ $0.99 ✅
+- Guaranteed profit: $0.01 per share (1¢ edge)
+
+If the combined price exceeds the threshold, the trade is rejected.
+
+---
+
+## Pre-Settlement Exit Strategy
+
+### Overview
+
+Between T-180s and T-45s before market resolution, the bot evaluates positions and may exit the **losing side early** while keeping the winning side for full resolution profit.
+
+### Trigger Conditions
+
+1. **Time window**: 180-45 seconds before resolution
+2. **Confidence threshold**: Strategy signals show > 80% confidence on one side
+3. **Position exists**: Have both sides of a hedged pair
+
+### Decision Logic
+
+```
+IF confidence_up > 80%:
+    SELL DOWN position (losing side)
+    HOLD UP position (winning side)
+ELIF confidence_down > 80%:
+    SELL UP position (losing side)
+    HOLD DOWN position (winning side)
+ELSE:
+    HOLD both sides (wait for resolution)
+```
+
+### Benefits
+
+- **Maximize profit**: Winning side resolves at $1.00
+- **Lock in gains**: Losing side sold before resolution (recovers some value)
+- **Confidence-driven**: Only exits when strategy strongly favors one side
+
+### Configuration
+
+```env
+ENABLE_PRE_SETTLEMENT_EXIT=YES       # Enable/disable feature
+PRE_SETTLEMENT_MIN_CONFIDENCE=0.80   # Min confidence to trigger
+PRE_SETTLEMENT_EXIT_SECONDS=180      # Start checking at T-180s
+PRE_SETTLEMENT_CHECK_INTERVAL=30     # Check every 30s
+```
+
+---
+
+## Time-Aware Emergency Liquidation
+
+### Overview
+
+When atomic pairs partially fill or timeout, the bot must liquidate the filled side. The liquidation strategy adapts based on **time remaining** in the 15-minute window.
+
+### Liquidation Modes
+
+#### PATIENT Mode (>600s remaining)
+- **Goal**: Maximize recovery
+- **Pricing**: Small price drops (1¢ steps)
+- **Wait times**: Long waits (10-20s) between attempts
+- **Use case**: Plenty of time to find a buyer
+
+#### BALANCED Mode (300-600s remaining)
+- **Goal**: Balance recovery and urgency
+- **Pricing**: Moderate drops (2-5¢ steps)
+- **Wait times**: Balanced waits (6-10s)
+- **Use case**: Moderate time pressure
+
+#### AGGRESSIVE Mode (<300s remaining)
+- **Goal**: Ensure liquidation
+- **Pricing**: Rapid drops (5-10¢ steps)
+- **Wait times**: Short waits (5-10s)
+- **Use case**: Race against expiry
+
+### Progressive Pricing Example
+
+**PATIENT** (>600s):
+```
+1. bid - $0.01 (wait 10s)
+2. bid - $0.02 (wait 10s)
+3. bid - $0.05 (wait 10s)
+4. bid - $0.10 (wait 10s)
+...
+```
+
+**BALANCED** (300-600s):
+```
+1. bid - $0.02 (wait 8s)
+2. bid - $0.05 (wait 8s)
+3. bid - $0.10 (wait 8s)
+...
+```
+
+**AGGRESSIVE** (<300s):
+```
+1. bid - $0.05 (wait 5s)
+2. bid - $0.10 (wait 5s)
+3. $0.30 (wait 5s)
+4. $0.20 (wait 5s)
+...
+```
+
+### Configuration
+
+```env
+EMERGENCY_SELL_ENABLE_PROGRESSIVE=YES # Enable time-aware pricing
+EMERGENCY_SELL_WAIT_SHORT=5          # Wait time for aggressive mode
+EMERGENCY_SELL_WAIT_MEDIUM=8         # Wait time for balanced mode
+EMERGENCY_SELL_WAIT_LONG=10          # Wait time for patient mode
+EMERGENCY_SELL_FALLBACK_PRICE=0.10   # Final fallback price
+```
+
+---
+
+## MIN_ORDER_SIZE Smart Hold Logic
+
+### The Problem
+
+Polymarket enforces a minimum order size of **5.0 shares**. Positions smaller than this cannot be sold on the exchange.
+
+### The Solution
+
+The bot checks if small positions are **winning or losing**:
+
+#### If Winning (current_price > entry_price)
+- **Action**: HOLD through resolution
+- **Rationale**: Let it resolve at $1.00 for profit
+- **Status**: Marked as "HOLD_MIN_SIZE_WINNING"
+
+#### If Losing (current_price ≤ entry_price)
+- **Action**: ORPHAN the position
+- **Rationale**: Can't sell, accept small loss
+- **Status**: Marked as "ORPHANED_MIN_SIZE"
+
+### Example
+
+```
+Position: 4.5 shares UP @ $0.60 entry
+Current price: $0.75
+
+Since 4.5 < 5.0 (MIN_ORDER_SIZE):
+  Check if winning: $0.75 > $0.60 ✅
+  Action: HOLD through resolution
+  Expected profit: 4.5 × ($1.00 - $0.60) = $1.80
+```
+
+---
+
 ## Configuration
 
 All features can be toggled in `.env`:

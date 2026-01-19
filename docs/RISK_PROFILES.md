@@ -15,10 +15,11 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `CONFIDENCE_SCALING_FACTOR` | 3.0 | Moderate scaling (max 3x base bet) |
 | `MAX_SIZE` | 100.0 | Cap position size at 100 shares (use `NONE` for no cap) |
 | `MAX_SIZE_MODE` | CAP | Cap at MAX_SIZE (use `MAXIMIZE` to use higher of balance% or MAX_SIZE) |
-| `STOP_LOSS_PRICE` | 0.40 | Conservative stop loss trigger |
-| `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
-| `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
-| `SCALE_IN_MULTIPLIER` | 1.0 | Add 100% more (2.0x total position) |
+| `STOP_LOSS_PRICE` | 0.40 | Conservative emergency sell threshold |
+| `ENABLE_PRE_SETTLEMENT_EXIT` | YES | Exit losing side early with high confidence |
+| `PRE_SETTLEMENT_MIN_CONFIDENCE` | 0.85 | Higher threshold for pre-settlement exits |
+| `COMBINED_PRICE_THRESHOLD` | 0.985 | Stricter combined price for atomic pairs |
+| `SCALE_IN_MULTIPLIER` | 1.0 | Disabled (not used with atomic hedging) |
 
 **Expected Results:**
 - Lower volatility
@@ -39,10 +40,11 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `CONFIDENCE_SCALING_FACTOR` | 5.0 | Standard scaling (max 5x base bet) |
 | `MAX_SIZE` | 500.0 | Cap position size at 500 shares (use `NONE` for no cap) |
 | `MAX_SIZE_MODE` | CAP | Cap at MAX_SIZE (use `MAXIMIZE` to use higher of balance% or MAX_SIZE) |
-| `STOP_LOSS_PRICE` | 0.30 | Standard stop loss trigger ($0.30) |
-| `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
-| `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
-| `SCALE_IN_MULTIPLIER` | 1.5 | Scale in by 150% (2.5x total) |
+| `STOP_LOSS_PRICE` | 0.30 | Standard emergency sell threshold |
+| `ENABLE_PRE_SETTLEMENT_EXIT` | YES | Exit losing side early with high confidence |
+| `PRE_SETTLEMENT_MIN_CONFIDENCE` | 0.80 | Standard threshold for pre-settlement exits |
+| `COMBINED_PRICE_THRESHOLD` | 0.99 | Standard combined price for atomic pairs |
+| `SCALE_IN_MULTIPLIER` | 1.5 | Disabled (not used with atomic hedging) |
 
 **Expected Results:**
 - Moderate volatility
@@ -63,10 +65,11 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `CONFIDENCE_SCALING_FACTOR` | 7.0 | Aggressive scaling (max 7x base bet) |
 | `MAX_SIZE` | 1000.0 | Cap position size at 1000 shares (use `NONE` for no cap) |
 | `MAX_SIZE_MODE` | CAP | Cap at MAX_SIZE (use `MAXIMIZE` to use higher of balance% or MAX_SIZE) |
-| `STOP_LOSS_PRICE` | 0.20 | Wider stop loss to avoid noise |
-| `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
-| `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
-| `SCALE_IN_MULTIPLIER` | 2.0 | Double position size on scale-in (3x total) |
+| `STOP_LOSS_PRICE` | 0.20 | Wider emergency sell threshold |
+| `ENABLE_PRE_SETTLEMENT_EXIT` | YES | Exit losing side early with high confidence |
+| `PRE_SETTLEMENT_MIN_CONFIDENCE` | 0.75 | Lower threshold for more exits |
+| `COMBINED_PRICE_THRESHOLD` | 0.99 | Standard combined price for atomic pairs |
+| `SCALE_IN_MULTIPLIER` | 2.0 | Disabled (not used with atomic hedging) |
 
 **Expected Results:**
 - Higher volatility
@@ -87,10 +90,11 @@ Choose the risk profile that matches your trading style and account size. Each p
 | `CONFIDENCE_SCALING_FACTOR` | 10.0 | Extreme scaling (max 10x base bet) |
 | `MAX_SIZE` | 2000.0 | Cap position size at 2000 shares (use `NONE` for no cap) |
 | `MAX_SIZE_MODE` | CAP | Cap at MAX_SIZE (use `MAXIMIZE` to use higher of balance% or MAX_SIZE) |
-| `STOP_LOSS_PRICE` | 0.10 | Very wide stop loss |
-| `ENABLE_EXIT_PLAN` | YES | Aggressive profit-taking with limit orders |
-| `EXIT_PRICE_TARGET` | 0.99 | Exit at 99 cents for near-guaranteed profit |
-| `SCALE_IN_MULTIPLIER` | 2.5 | Scale in by 250% (3.5x total) |
+| `STOP_LOSS_PRICE` | 0.10 | Very wide emergency sell threshold |
+| `ENABLE_PRE_SETTLEMENT_EXIT` | YES | Exit losing side early with high confidence |
+| `PRE_SETTLEMENT_MIN_CONFIDENCE` | 0.70 | Lower threshold for aggressive exits |
+| `COMBINED_PRICE_THRESHOLD` | 0.995 | Relaxed combined price for more opportunities |
+| `SCALE_IN_MULTIPLIER` | 2.5 | Disabled (not used with atomic hedging) |
 
 **Expected Results:**
 - Extreme volatility
@@ -125,31 +129,32 @@ Choose the risk profile that matches your trading style and account size. Each p
 
 ## 📊 Key Features Across All Profiles
 
-### Exit Plan (Aggressive Profit Taking)
-All profiles include **Exit Plan** by default:
-- After position ages (default 60 seconds), places limit sell order at EXIT_PRICE_TARGET (99 cents)
-- Near-guaranteed profitable exit if market reaches 99 cents before expiry
-- Order is automatically updated if position size increases (scale-in)
-- Can be disabled with `ENABLE_EXIT_PLAN=NO` to only use market resolution
+### Atomic Hedging Strategy
+All profiles use **Atomic Hedging** by default:
+- Places simultaneous entry+hedge pairs via batch API
+- Combined price threshold ensures guaranteed profit structure
+- POST_ONLY orders for maker rebates (0.15%), GTC fallback after 3 failures
+- 120-second fill timeout with immediate cancellation
+- No unhedged positions
 
-### Midpoint Stop Loss
-All profiles use a **Midpoint-based Stop Loss** for superior reliability:
-- Primary trigger is the fair-value midpoint price (e.g., $0.30)
-- Prevents being stopped out by temporary spread volatility
-- Includes dynamic "headroom" protection for low-priced entries
-- Integrates with **Hedged Reversal** to clear losers when trends flip
+### Pre-Settlement Exit Strategy
+All profiles include **Pre-Settlement Exit** by default:
+- Evaluates positions T-180s to T-45s before resolution
+- Sells losing side early if confidence exceeds threshold
+- Keeps winning side for full resolution profit
+- Confidence threshold varies by profile (70-85%)
 
-### Dynamic Position Sizing
-All profiles use **Confidence-Based Sizing**:
-- Base bet size increases with signal strength
-- Higher edge = larger position (up to 5x base in Balanced)
-- Automatically scales back on weaker signals
+### Time-Aware Emergency Liquidation
+All profiles use **Progressive Emergency Pricing**:
+- **PATIENT** (>600s): Small drops, long waits - maximize recovery
+- **BALANCED** (300-600s): Moderate drops, balanced waits
+- **AGGRESSIVE** (<300s): Rapid drops, short waits - ensure liquidation
 
-### Dynamic Scale-In
-All profiles utilize an intelligent scale-in mechanism for winners:
-- **Dynamic Timing**: Scales in when between 7.5 (baseline) and 12 minutes remain, depending on confidence.
-- **Winner-Focus**: Only adds to positions that are already in profit.
-- **Configurable Multiplier**: Adjusts the size of the secondary entry (1.0x to 2.5x).
+### Smart MIN_ORDER_SIZE Handling
+All profiles enforce **Intelligent Small Position Management**:
+- Positions < 5.0 shares cannot be sold (exchange minimum)
+- If winning: HOLD through resolution (let it profit)
+- If losing: ORPHAN (accept small loss, avoid failed sells)
 
 ### Portfolio Risk Management
 All profiles enforce **Maximum Portfolio Exposure**:

@@ -10,13 +10,14 @@ The backend is modularized into packages:
 - `src.trading.orders`: Order management (limit, market, batch, positions).
 - `src.data.market_data`: Data fetching (polymarket, binance, indicators, price validation).
 - `src.trading`: Centralized execution logic (`execution.py`, `logic.py`, `strategy.py`).
-- `src.trading.position_manager`: Position lifecycle management (entry, exit, scale-in, stop-loss, reconciliation).
+- `src.trading.execution`: Atomic hedging execution (batch placement, fill monitoring, emergency liquidation).
+- `src.trading.pre_settlement_exit`: Pre-settlement exit strategy (confidence-based early exit).
 
-### Standard Trade Execution
+### Standard Trade Execution (Atomic Hedging)
 ```python
-from src.trading import execute_trade
-# Execute a trade with full tracking and notifications
-trade_id = execute_trade(trade_params, is_reversal=False)
+from src.trading.execution import execute_atomic_trade
+# Execute an atomic entry+hedge pair with full tracking
+trade_id = execute_atomic_trade(symbol, entry_side, entry_price, hedge_price, size)
 ```
 
 ### Imports
@@ -151,38 +152,61 @@ trade_id = execute_trade(trade_params, is_reversal=False)
 - Maintain backward compatibility where possible
 - Document all improvements in release tags
 
-### Balance Validation & Position Sync (v0.4.4+)
-- **Enhanced Balance Validation**: Symbol-specific tolerance for API reliability issues (XRP, etc.)
-  - Default: 0.8 reliability weight, 0.2 position trust factor, 5-minute grace period
-  - XRP: 0.3 reliability weight (lower trust), 0.3 position trust, 15-minute grace period
-- **Real-Time Exit Order Validation**: 1-second cycle size validation to catch mismatches immediately
-- **Rounding Threshold**: Use 0.05 share threshold for exit order repair to prevent infinite loops
-- **Bi-Directional Healing**: Sync database size with actual wallet balance when discrepancies detected
-  - Sync if balance > DB size + 0.0001 (immediate, no cooldown)
-  - Sync if age > 60s AND scale-in age > 60s AND |balance - size| > 0.0001
-- **Grace Period Logic**: 
-  - 60-second grace period after buy/scale-in before balance validation
-  - 10-minute grace period for zero balance before ghost trade settlement (increased from 5m)
-- **API Retry Strategy**: Exponential backoff with symbol-specific retry counts
-  - Default: 2 retries with 1.0s delay
-  - XRP: 3 retries with 2.0s delay
-  - Crypto markets: +1 extra retry with 1.5x delay multiplier
-- **Geographic Restrictions**: Detect and skip retries for geo-blocked APIs
-- **Database as Source of Truth**: For exit orders, always trust database position size over balance API
+### Atomic Hedging Execution (v0.6.0+)
+- **Atomic Pair Placement**: Entry + Hedge submitted simultaneously via batch API
+  - Both orders placed together to guarantee profit structure
+  - Combined price must be ≤ COMBINED_PRICE_THRESHOLD (default 0.99)
+  - POST_ONLY by default to earn maker rebates (0.15%)
+  - GTC fallback after 3 POST_ONLY failures (accepts 1.54% taker fees)
+- **Fill Monitoring**: 120-second timeout with 5-second polling
+  - Both must fill for success
+  - If one fills, other times out → Emergency liquidation
+  - If neither fills → Cancel both, retry
+- **POST_ONLY Failure Tracking**: Per-symbol counter tracks crossing failures
+  - Incremented on POST_ONLY crossing error
+  - Reset to 0 on successful atomic placement
+  - Switch to GTC when counter ≥ MAX_POST_ONLY_ATTEMPTS (3)
+- **Emergency Liquidation**: Time-aware progressive pricing
+  - PATIENT (>600s): Small drops (1¢), long waits (10-20s)
+  - BALANCED (300-600s): Moderate drops (2-5¢), medium waits (6-10s)
+  - AGGRESSIVE (<300s): Rapid drops (5-10¢), short waits (5-10s)
+  - MIN_ORDER_SIZE check: Hold if winning & <5.0 shares, orphan if losing
+- **Pre-Settlement Exit**: Evaluate positions T-180s to T-45s
+  - Calculate confidence using strategy signals
+  - If confidence > 80% on one side: Sell losing side
+  - Keep winning side for full resolution profit ($1.00)
 
-### Position Monitoring & Reporting (v0.4.3+)
-- **Clean Position Reports**: Aligned format with directional emojis (📈 UP winning, 📉 DOWN winning)
-- **Status Indicators**: Visual indicators for exit plan status (⏰ active, ⏳ pending, ⏭️ skipped)
+### Position Monitoring & Reporting (v0.6.0+)
+- **Atomic Pair Display**: Show both sides of hedge together
+- **Position Status**: Track entry, hedge, and resolution separately
 - **Trade ID Display**: Show trade ID for all positions in monitoring output
 - **Spam Reduction**: Removed debug logging spam for cleaner production logs
-- **Min Size Handling**: Silent skip for positions below MIN_SIZE (5.0 shares) with status display
+- **Min Size Handling**: Silent hold for winning positions below MIN_SIZE (5.0 shares), orphan if losing
 
-### Notification Processing (v0.4.3+)
-- **Multi-Field Order ID Extraction**: Robust parsing with fallback to multiple field names
-- **Concise Logging**: Streamlined notification processing logs with symbol and price info
-- **Batch Processing**: Efficient handling of multiple notifications at once
+### MIN_ORDER_SIZE Smart Hold Logic (v0.6.0+)
+- **Exchange Minimum**: Polymarket enforces 5.0 share minimum for limit orders
+- **Smart Decision**:
+  ```python
+  if size < MIN_ORDER_SIZE:
+      current_price = get_current_price()
+      if current_price > entry_price:  # WINNING
+          log("🎯 HOLDING through resolution - too small to sell but profitable")
+          return True  # Let it resolve for profit
+      else:  # LOSING
+          log("🔒 Position ORPHANED - too small to sell, will lose on resolution")
+          return False  # Accept small loss
+  ```
+- **Example**: 3.77 shares @ $0.31 entry, current $0.50 → HOLD (profit $0.72)
 
 ## Version History
+
+### v0.6.0 (Jan 2026)
+- **Atomic Hedging Strategy**: Complete overhaul to simultaneous entry+hedge pairs via batch API
+- **POST_ONLY → GTC Fallback**: Smart switching after 3 POST_ONLY crossing failures (Bug #10 fix)
+- **Time-Aware Emergency Liquidation**: PATIENT/BALANCED/AGGRESSIVE modes based on time remaining
+- **MIN_ORDER_SIZE Smart Hold**: Hold winning positions <5.0 shares, orphan losing ones
+- **Pre-Settlement Exit**: Confidence-based early exit of losing side (T-180s to T-45s)
+- **Deprecated**: Exit plan, stop loss, scale-in, hedged reversal (replaced by atomic hedging)
 
 ### v0.5.0 (Jan 2026)
 - **Bayesian Confidence Calculation**: Implemented statistically principled probability calculation using log-odds and likelihood ratios
@@ -203,13 +227,3 @@ trade_id = execute_trade(trade_params, is_reversal=False)
 - **Professional Display**: Removed debug spam and redundant logging for cleaner trading logs
 - **Visual Clarity**: Perfect alignment with trade IDs, position sizes, and PnL percentages
 - **Unified Format**: Consolidated position monitoring with consistent visual indicators
-
-### v0.4.2 (Jan 2026)
-- **Confidence Algorithm Fixes**: Eliminated false 100% signals with proper capping and validation
-- **Scale-in Order Race Condition Prevention**: Implemented order fill confirmation before cancellation
-- **Synchronization Locks**: Added comprehensive thread safety across all trading operations
-- **Reconciliation System**: Built order tracking reconciliation to prevent ghost trades
-- **Smart Exit Pricing**: Implemented 0.999 exit pricing for improved winning trade fills
-- **Enhanced Audit Trail**: Comprehensive logging for scale-in orders and position management
-- **Notification System**: Fixed unknown order ID extraction with robust multi-field parsing
-- **Exit Plan Self-Healing**: Improved balance validation consistency and grace period logic

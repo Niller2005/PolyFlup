@@ -7,6 +7,65 @@ and this project uses semantic versioning.
 
 ---
 
+## [Unreleased]
+
+### In Progress
+- Documentation updates for atomic hedging strategy (v0.6.0)
+
+---
+
+## [0.6.0] - 2026-01-19
+
+### Added
+- **🎯 Atomic Hedging Strategy**: Complete overhaul to simultaneous entry+hedge pairs
+  - Batch API placement with combined price threshold (≤ $0.99)
+  - POST_ONLY orders by default for maker rebates (0.15%)
+  - Smart GTC fallback after 3 POST_ONLY failures (accepts 1.54% taker fees)
+  - 120-second fill timeout with immediate cancellation of unfilled orders
+  - Eliminates all unhedged positions
+- **⏰ Pre-Settlement Exit Strategy**: Evaluates positions T-180s to T-45s before resolution
+  - Sells losing side early if confidence > 80% on one side
+  - Keeps winning side for full resolution profit
+  - Uses same strategy signals as entry logic
+- **🚨 Time-Aware Emergency Liquidation**: Adapts pricing based on time remaining
+  - **PATIENT** (>600s): Small price drops (1¢), long waits (10-20s) - maximize recovery
+  - **BALANCED** (300-600s): Moderate drops (2-5¢), balanced waits (6-10s)
+  - **AGGRESSIVE** (<300s): Rapid drops (5-10¢), short waits (5-10s) - ensure liquidation
+- **🔬 Smart MIN_ORDER_SIZE Handling**: Positions < 5.0 shares held if winning, orphaned if losing
+
+### Changed
+- **Execution Flow**: All trades now atomic pairs (entry+hedge simultaneously)
+- **Risk Management**: Shifted from stop-loss to guaranteed profit structure
+- **Configuration**: Removed deprecated exit plan, stop loss, and scale-in settings
+- **Terminology**: "Trade" = atomic pair (UP + DOWN hedge), not single side
+
+### Deprecated
+- `ENABLE_EXIT_PLAN`: No longer primary strategy (atomic hedging replaces it)
+- `EXIT_PRICE_TARGET`: Replaced by `COMBINED_PRICE_THRESHOLD`
+- `EXIT_MIN_POSITION_AGE`: Not used with atomic hedging
+- `ENABLE_STOP_LOSS`: Emergency liquidation replaces traditional stop loss
+- `STOP_LOSS_PRICE`: Now used as emergency sell threshold
+- `ENABLE_HEDGED_REVERSAL`: All trades are hedged by default
+- `ENABLE_SCALE_IN`: Not compatible with atomic hedging strategy
+- `SCALE_IN_*`: Scale-in settings deprecated
+- `UNFILLED_TIMEOUT_SECONDS`: Replaced by `HEDGE_FILL_TIMEOUT_SECONDS`
+- `CANCEL_UNFILLED_ORDERS`: Automatic with atomic hedging
+
+### Technical Details
+- **POST_ONLY Tracking**: Per-symbol counter tracks failures, resets on success
+- **Batch API**: Atomic placement ensures both orders submitted together
+- **Fill Monitoring**: Polls every 5s for up to 120s
+- **Emergency Liquidation**: Progressive pricing based on time remaining
+- **Pre-Settlement**: Confidence-driven exit logic at optimal timing window
+
+### Documentation
+- Updated `README.md` with atomic hedging as primary feature
+- Updated `docs/STRATEGY.md` with execution flow sections
+- Updated `docs/RISK_PROFILES.md` with atomic hedging parameters
+- Cleaned up `.env.example` removing deprecated settings
+
+---
+
 ## [0.5.0] - 2026-01-12
 
 ### Added

@@ -36,37 +36,36 @@ The migration system tracks versions in the `schema_version` table.
 ### Schema Overview
 Main table: `trades`
 - Core Fields: `id`, `timestamp`, `symbol`, `side`, `entry_price`, `size`, `bet_usd`, `edge`
-- Order Tracking: `order_id`, `order_status`, `limit_sell_order_id`, `scale_in_order_id`
-- Position Management: `scaled_in`, `is_reversal`, `target_price`, `reversal_triggered`, `reversal_triggered_at`
+- Order Tracking: `order_id`, `order_status` (entry and hedge orders tracked separately)
 - Settlement: `settled`, `settled_at`, `exited_early`, `final_outcome`, `exit_price`, `pnl_usd`, `roi_pct`
-- Timing: `window_start`, `window_end`, `last_scale_in_at`
+- Timing: `window_start`, `window_end`
 - Market Data: `slug`, `token_id`, `p_yes`, `best_bid`, `best_ask`, `imbalance`, `funding_bias`
 - Bayesian Comparison (v0.5.0+): `additive_confidence`, `additive_bias`, `bayesian_confidence`, `bayesian_bias`, `market_prior_p_up`
+- Atomic Hedging (v0.6.0+): Each side of atomic pair stored as separate trade row with linked `trade_id` for P&L tracking
 
 ### Key Database Patterns
 
-#### Position Queries
+#### Position Queries (Atomic Hedging)
 ```python
-# Get open positions with all relevant data
+# Get open positions (both entry and hedge sides)
 c.execute("""
     SELECT id, symbol, token_id, side, entry_price, size, bet_usd, 
-           limit_sell_order_id, scale_in_order_id, scaled_in, edge, 
-           last_scale_in_at, window_end
+           edge, window_end, order_id, order_status
     FROM trades 
     WHERE settled = 0 AND exited_early = 0 
     AND datetime(window_end) > datetime(?)
 """, (now.isoformat(),))
 ```
 
-#### Trade Updates
+#### Trade Updates (Emergency Liquidation)
 ```python
-# Update position size after scale-in
+# Update position after emergency sell
 c.execute("""
     UPDATE trades 
-    SET size = ?, bet_usd = ? * entry_price, 
-        scaled_in = 1, last_scale_in_at = ?
+    SET exited_early = 1, exit_price = ?, 
+        pnl_usd = ?, roi_pct = ?, settled_at = ?
     WHERE id = ?
-""", (new_size, new_size, now.isoformat(), trade_id))
+""", (exit_price, pnl_usd, roi_pct, now.isoformat(), trade_id))
 ```
 
 #### Settlement

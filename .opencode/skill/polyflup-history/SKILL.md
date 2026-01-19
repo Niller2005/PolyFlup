@@ -5,6 +5,28 @@ description: Chronological log of system improvements and session summaries for 
 
 ## Session Improvements Summary
 
+### 2026-01-19 (v0.6.0 Release - Atomic Hedging Overhaul)
+- **Atomic Hedging Strategy**: Complete overhaul to simultaneous entry+hedge pairs via batch API
+  - Batch placement with combined price threshold (≤ $0.99) guarantees profit structure
+  - POST_ONLY orders by default to earn maker rebates (0.15%)
+  - Smart GTC fallback after 3 POST_ONLY crossing failures (Bug #10 fix)
+  - 120-second fill timeout with immediate cancellation of unfilled orders
+  - Eliminates all unhedged positions
+- **Time-Aware Emergency Liquidation**: Progressive pricing based on time remaining
+  - PATIENT mode (>600s): Small drops (1¢), long waits (10-20s) - maximize recovery
+  - BALANCED mode (300-600s): Moderate drops (2-5¢), medium waits (6-10s)
+  - AGGRESSIVE mode (<300s): Rapid drops (5-10¢), short waits (5-10s) - ensure liquidation
+- **MIN_ORDER_SIZE Smart Hold Logic**: Positions <5.0 shares held if winning, orphaned if losing
+  - Exchange minimum is 5.0 shares, bot adapts intelligently
+  - Example: 3.77 shares @ $0.31 entry, current $0.50 → HOLD (profit $0.72)
+- **Pre-Settlement Exit Strategy**: Confidence-based early exit of losing side (T-180s to T-45s)
+  - Uses same strategy signals as entry logic
+  - Sells losing side if confidence > 80% on one side
+  - Keeps winning side for full $1.00 resolution profit
+- **Deprecated Features**: Exit plan, stop loss, scale-in, hedged reversal (replaced by atomic hedging)
+- **Deployment**: Committed bf6ba91 to production
+- **Documentation**: Updated all docs, skills, and configuration files for atomic hedging
+
 ### 2026-01-12 (v0.5.0 Release)
 - **Bayesian Confidence Calculation**: Implemented alternative confidence calculation using proper Bayesian evidence accumulation with log-odds and likelihood ratios
 - **Dual Calculation System**: Both additive and Bayesian methods calculated simultaneously for comprehensive A/B testing capabilities

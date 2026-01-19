@@ -53,13 +53,20 @@ cd ui && npm run dev    # Start dashboard development server
 2. **Deadlock Prevention**: Pass active cursors when calling write functions from within an existing transaction.
 3. **Logging**: Start log lines with relevant emojis (🚀, ✅, ❌, 👀) and include `[SYMBOL]` context.
 4. **Precision**: Use `0.0001` threshold for share balance comparisons.
-5. **Min Size**: Enforce 5.0 share minimum for all limit orders.
-6. **Fees**: Taker fees apply to 15m crypto markets (BUY=Tokens, SELL=USDC). Prefer Maker orders to avoid fees and earn rebates.
+5. **Min Size**: Enforce 5.0 share minimum for all limit orders. Hold winning positions <5.0 shares, orphan losing ones.
+6. **Fees**: Maker rebates (0.15%) for POST_ONLY orders, taker fees (1.54%) for GTC orders. Bot uses POST_ONLY by default, switches to GTC after 3 crossing failures.
+7. **Atomic Hedging**: All trades are entry+hedge pairs placed simultaneously. Combined price must be ≤ $0.99 to guarantee profit.
 
-## Glossary
+## Glossary (v0.6.0+)
 
-- **Orders**: Buy/sell orders to enter/modify/exit a position. These are submitted to the exchange and can be open (unfilled) or closed (filled).
-- **Position**: The net exposure from all filled orders on a given side during a trading window. Represents the actual shares held.
+- **Atomic Hedging**: Simultaneous entry+hedge pair placement via batch API (primary risk management).
+- **Trade**: An atomic pair consisting of entry side + hedge side (both UP and DOWN).
+- **Combined Price Threshold**: Maximum allowed sum of entry + hedge prices (default $0.99).
+- **Emergency Liquidation**: Time-aware progressive pricing to recover value from partial fills.
+- **Pre-Settlement Exit**: Confidence-based early exit of losing side (T-180s to T-45s before resolution).
+- **POST_ONLY**: Order type that only adds liquidity (earns maker rebates, fails if crossing).
+- **GTC**: Order type that fills immediately as taker (pays taker fees).
+- **Orphaned Position**: Position <5.0 shares that cannot be sold due to exchange minimum.
 
 ## Sync Functions
 

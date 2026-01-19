@@ -866,6 +866,7 @@ def place_entry_and_hedge_atomic(
     entry_price: float,
     entry_size: float,
     window_end: Optional[str] = None,
+    confidence: Optional[float] = None,
 ) -> tuple[Optional[dict], Optional[dict], Optional[float]]:
     """
     Place entry and hedge orders simultaneously using batch order API.
@@ -873,6 +874,7 @@ def place_entry_and_hedge_atomic(
 
     Args:
         window_end: Window end time (ISO format) for time-aware emergency sell pricing
+        confidence: Original signal confidence (0.0-1.0) for deciding whether to hold unhedged position
 
     Returns:
         (entry_result, hedge_result, hedge_price) - Results are dicts with success, order_id, status; hedge_price is the calculated price
@@ -1463,37 +1465,64 @@ def place_entry_and_hedge_atomic(
                             )
                     else:
                         # Neither side is clearly winning OR both equally profitable
-                        # Liquidate everything to minimize risk
-                        log(
-                            f"   💥 [{symbol}] No clear winner - emergency selling ALL positions"
-                        )
-                        log(
-                            f"   💥 [{symbol}] Emergency selling entry position ({final_entry_filled_size:.2f} shares)"
-                        )
-                        emergency_sell_position(
-                            symbol=symbol,
-                            token_id=entry_token_id,
-                            size=final_entry_filled_size,
-                            reason="hedge timeout after entry fill",
-                            entry_order_id=entry_order_id,
-                            entry_price=entry_price,
-                            window_end=window_end,
+                        # SPECIAL CASE: If hedge filled 0.0 shares (complete timeout) and we have high confidence,
+                        # HOLD the entry position - our signal says it's likely to win
+                        from src.config.settings import (
+                            EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD,
                         )
 
-                        # If hedge partially filled, emergency sell those shares too
-                        if final_hedge_filled_size > 0.01:
+                        if (
+                            final_hedge_filled_size <= 0.01
+                            and confidence is not None
+                            and confidence >= EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD
+                        ):
+                            # High confidence trade with complete hedge failure
+                            # Trust the signal and HOLD entry position
                             log(
-                                f"   💥 [{symbol}] Emergency selling partial hedge position ({final_hedge_filled_size:.2f} shares)"
+                                f"   🎯 [{symbol}] HIGH CONFIDENCE ({confidence:.1%}) - HOLDING {entry_side} despite hedge timeout"
+                            )
+                            log(
+                                f"   💎 [{symbol}] Trusting signal: {entry_side} @ ${entry_price:.2f} expected to win"
+                            )
+                            # Don't emergency sell - keep position through resolution
+                            # This is a calculated risk based on strong signal confidence
+                        else:
+                            # Low/medium confidence or partial hedge fill - liquidate to minimize risk
+                            if confidence is not None:
+                                log(
+                                    f"   💥 [{symbol}] Confidence too low ({confidence:.1%}) - emergency selling ALL positions"
+                                )
+                            else:
+                                log(
+                                    f"   💥 [{symbol}] No clear winner - emergency selling ALL positions"
+                                )
+                            log(
+                                f"   💥 [{symbol}] Emergency selling entry position ({final_entry_filled_size:.2f} shares)"
                             )
                             emergency_sell_position(
                                 symbol=symbol,
-                                token_id=hedge_token_id,
-                                size=final_hedge_filled_size,
-                                reason="partial hedge fill cleanup",
-                                entry_order_id=hedge_order_id,
-                                entry_price=hedge_price,
+                                token_id=entry_token_id,
+                                size=final_entry_filled_size,
+                                reason="hedge timeout after entry fill",
+                                entry_order_id=entry_order_id,
+                                entry_price=entry_price,
                                 window_end=window_end,
                             )
+
+                            # If hedge partially filled, emergency sell those shares too
+                            if final_hedge_filled_size > 0.01:
+                                log(
+                                    f"   💥 [{symbol}] Emergency selling partial hedge position ({final_hedge_filled_size:.2f} shares)"
+                                )
+                                emergency_sell_position(
+                                    symbol=symbol,
+                                    token_id=hedge_token_id,
+                                    size=final_hedge_filled_size,
+                                    reason="partial hedge fill cleanup",
+                                    entry_order_id=hedge_order_id,
+                                    entry_price=hedge_price,
+                                    window_end=window_end,
+                                )
 
                     # Note: Hedge order already cancelled at the top of this block
 
@@ -1930,7 +1959,13 @@ def execute_trade(
 
     if not is_reversal:
         entry_result, hedge_result, hedge_price = place_entry_and_hedge_atomic(
-            symbol, token_id, side, price, size, trade_params.get("window_end")
+            symbol,
+            token_id,
+            side,
+            price,
+            size,
+            trade_params.get("window_end"),
+            trade_params.get("confidence"),
         )
 
         if not entry_result or not entry_result.get("success"):

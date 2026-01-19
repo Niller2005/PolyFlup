@@ -21,23 +21,37 @@ Automated trading bot for **15-minute crypto prediction markets** on Polymarket.
 > 📖 For detailed strategy logic and signal breakdowns, see [docs/STRATEGY.md](docs/STRATEGY.md)
 
 ### 🛡️ Risk Management
-- **Confidence-Based Sizing**: Position size scales with signal strength (configurable multiplier)
-- **Exit Plan**: Places limit sell orders at 99 cents for near-guaranteed profitable exits
-- **🛑 Midpoint Stop Loss**: Primary safety net triggers at $0.30 midpoint price (configurable)
-- **🔄 Hedged Reversal**: Supports holding both sides during trend flips, clearing losers via stop loss
-- **📈 Dynamic Scale-In**: Adds to winning positions with confidence-weighted timing (up to 12m early for high-conviction trades)
+- **🎯 Atomic Hedging Strategy**: Places simultaneous entry+hedge pairs using batch API for guaranteed profit structure
+  - **POST_ONLY orders by default** to earn maker rebates (0.15%)
+  - **Combined price threshold** ≤ $0.99 ensures profitability on complete fills
+  - **Smart fallback**: Switches to GTC orders after 3 POST_ONLY failures (accepts 1.54% taker fees)
+  - **120-second fill timeout** with immediate cancellation of unfilled orders
+  - **No unhedged positions** - all trades are atomic pairs
+- **⏰ Pre-Settlement Exit**: Evaluates positions T-180s to T-45s before resolution
+  - Sells losing side early if confidence > 80% on one side
+  - Keeps winning side for full resolution profit
+- **🚨 Time-Aware Emergency Liquidation**: Adapts pricing based on time remaining
+  - **PATIENT (>600s)**: Small price drops (1¢), long waits (10-20s) - maximize recovery
+  - **BALANCED (300-600s)**: Moderate drops (2-5¢), balanced waits (6-10s)
+  - **AGGRESSIVE (<300s)**: Rapid drops (5-10¢), short waits (5-10s) - ensure liquidation
+- **🔬 Smart MIN_ORDER_SIZE Handling**: Positions < 5.0 shares held if winning, orphaned if losing
 - **⚡ Real-Time Monitoring**: 1-second position checking cycle with WebSocket-powered price updates
 - **🛡️ Balance Cross-Validation**: Symbol-specific validation with fallback to position data for API reliability issues
 - **📊 Settlement Auditing**: Automated P&L verification against exchange data (logs discrepancies > $0.10)
 
 ### 🚀 Recent Improvements (Jan 2026)
+- **🎯 Atomic Hedging Strategy** (v0.6.0): Complete overhaul to simultaneous entry+hedge pairs
+  - Batch API placement with combined price threshold (≤ $0.99)
+  - POST_ONLY orders for maker rebates, GTC fallback after 3 failures
+  - 120-second fill timeout with immediate cancellation
+  - Time-aware emergency liquidation (PATIENT/BALANCED/AGGRESSIVE)
+  - Smart MIN_ORDER_SIZE handling (hold if winning, orphan if losing)
+  - Pre-settlement exit strategy (T-180s to T-45s)
 - **Bayesian Confidence Calculation** (v0.5.0): New probabilistic method using log-likelihood accumulation with market priors. Both additive and Bayesian methods calculated for A/B testing. Toggle via `BAYESIAN_CONFIDENCE` setting. Compare performance with `compare_bayesian_additive.py`.
 - **Enhanced Position Reports** (v0.4.3): Clean, aligned format with directional emojis (📈📉) and status indicators showing position health at a glance
 - **Real-Time WebSocket Integration**: Near-instant P&L and order fill updates via Polymarket's User Channel (fills/cancels) and Market Channel (midpoint prices)
 - **Batch API Optimization**: Fetch midpoints for all positions in a single call, drastically reducing API overhead
-- **Enhanced Scale-In Logic**: Confidence-weighted dynamic timing allows high-conviction winners to be scaled as early as 12 minutes before expiry
 - **Enhanced Balance Validation**: Symbol-specific tolerance for API reliability issues (especially XRP), with cross-validation between balance and position data
-- **Reward Optimization**: Exit plans automatically adjust prices to ensure they earn liquidity rewards via `check_scoring` API
 - **Intelligent Position Sync**: Startup logic detects and "adopts" untracked exchange positions for automated management
 - **Settlement Auditing**: Automated verification of local P&L against official `closed-positions` API data
 - **Modular Backend**: Fully refactored `src/trading/orders` and `src/data/market_data` for better maintainability
@@ -93,27 +107,22 @@ ENABLE_DIVERGENCE=YES                # Cross-exchange mismatch detection (20% we
 ENABLE_VWM=YES                       # Volume-weighted momentum (10% weight)
 MOMENTUM_LOOKBACK_MINUTES=15         # Momentum analysis window
 
-# Risk Management
-ENABLE_STOP_LOSS=YES                 # Global stop loss switch
-STOP_LOSS_PRICE=0.30                 # Midpoint stop loss trigger ($0.30)
-ENABLE_TAKE_PROFIT=NO                # Let winners run
-ENABLE_HEDGED_REVERSAL=YES           # Hold both sides during trend flip
+# Atomic Hedging Configuration
+COMBINED_PRICE_THRESHOLD=0.99        # Max combined price for entry+hedge (99¢)
+HEDGE_FILL_TIMEOUT_SECONDS=120       # Timeout for both orders to fill
+HEDGE_POLL_INTERVAL_SECONDS=5        # Check fill status interval
 
-# Exit Plan (Aggressive Profit Taking)
-ENABLE_EXIT_PLAN=YES                 # Place limit sell orders at target price
-EXIT_PRICE_TARGET=0.99               # Target exit price (99 cents)
-EXIT_MIN_POSITION_AGE=60             # Wait 60s before placing exit order
-ENABLE_REWARD_OPTIMIZATION=YES       # Optimize exit orders for liquidity rewards
+# Emergency Liquidation Timing
+EMERGENCY_SELL_ENABLE_PROGRESSIVE=YES # Enable time-aware pricing
+EMERGENCY_SELL_WAIT_SHORT=5          # Wait time for aggressive mode (<300s)
+EMERGENCY_SELL_WAIT_MEDIUM=8         # Wait time for balanced mode (300-600s)
+EMERGENCY_SELL_WAIT_LONG=10          # Wait time for patient mode (>600s)
 
-# Position Scaling
-ENABLE_SCALE_IN=YES                  # Add to winners near expiry
-SCALE_IN_MIN_PRICE=0.60              # Min price to scale (60%)
-SCALE_IN_MAX_PRICE=0.90              # Max price to scale (90%)
-SCALE_IN_TIME_LEFT=450               # Default scale-in at ≤7.5m (Dynamic up to 12m)
-SCALE_IN_MULTIPLIER=1.5              # Add 150% more (2.5x total position)
-
-# Order Management
-UNFILLED_TIMEOUT_SECONDS=300         # Cancel stale orders after 5 minutes
+# Pre-Settlement Exit Strategy
+ENABLE_PRE_SETTLEMENT_EXIT=YES       # Exit losing side before resolution
+PRE_SETTLEMENT_MIN_CONFIDENCE=0.80   # Min confidence to trigger early exit
+PRE_SETTLEMENT_EXIT_SECONDS=180      # Start checking at T-180s
+PRE_SETTLEMENT_CHECK_INTERVAL=30     # Check every 30s
 ```
 
 > 💡 **Need a different risk profile?** Check [docs/RISK_PROFILES.md](docs/RISK_PROFILES.md) for Conservative, Aggressive, and Ultra Aggressive configurations.

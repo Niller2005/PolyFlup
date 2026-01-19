@@ -1,6 +1,6 @@
 # Position Flow Lifecycle
 
-This document explains the complete lifecycle of a trading position in PolyFlup, from initial entry to final exit. It covers all position management modules, their triggers, decision flows, and the hedged reversal strategy.
+This document explains the complete lifecycle of a trading position in PolyFlup, from initial entry to final exit. With the **v0.6.0 atomic hedging strategy**, all trades are now simultaneous entry+hedge pairs.
 
 ---
 
@@ -10,299 +10,324 @@ This document explains the complete lifecycle of a trading position in PolyFlup,
 2. [Position Lifecycle Stages](#position-lifecycle-stages)
 3. [Module Breakdown](#module-breakdown)
 4. [Decision Flow Diagram](#decision-flow-diagram)
-5. [Hedged Reversal Strategy](#hedged-reversal-strategy)
-6. [Balance Syncing & Repair](#balance-syncing--repair)
-7. [Exit Outcomes](#exit-outcomes)
+5. [Atomic Hedging Strategy](#atomic-hedging-strategy)
+6. [Emergency Liquidation](#emergency-liquidation)
+7. [Pre-Settlement Exit](#pre-settlement-exit)
+8. [Exit Outcomes](#exit-outcomes)
 
 ---
 
 ## Overview
 
-PolyFlup uses a modular position management system that runs on a **1-second monitoring cycle**. Each position progresses through a series of stages with automated checks for:
-
-- **Entry**: Initial trade placement when conditions are met
-- **Monitoring**: Continuous evaluation of position health
-- **Adjustments**: Scale-in (add to position) or reversal (opposite side hedge)
-- **Exit**: Profitable exit via limit orders or stop loss
+PolyFlup uses an **atomic hedging strategy** where every trade consists of a simultaneous entry+hedge pair. This eliminates unhedged positions and ensures a guaranteed profit structure.
 
 ### Architecture
 
-The position manager is organized into specialized modules:
+The execution system is organized into specialized modules:
 
 ```
-src/trading/position_manager/
-├── entry.py       # First entry logic
-├── monitor.py     # Main monitoring loop (1s cycle)
-├── stop_loss.py   # Stop loss enforcement
-├── reversal.py    # Opposite side hedging
-├── scale.py       # Scale-in management
-└── exit.py        # Exit plan placement & repair
+src/trading/
+├── execution.py           # Atomic pair placement & emergency liquidation
+├── pre_settlement_exit.py # Pre-settlement exit logic (T-180s to T-45s)
+└── strategy.py            # Signal calculation & confidence scoring
 ```
 
 ---
 
 ## Position Lifecycle Stages
 
-### Stage 1: Entry (`execute_first_entry()`)
+### Stage 1: Signal Generation (`calculate_confidence_and_bias()`)
 
-**File**: `src/trading/position_manager/entry.py`
+**File**: `src/trading/strategy.py`
 
-**Purpose**: Places the initial position when trading conditions are favorable.
+**Purpose**: Analyzes market conditions to determine trade direction and confidence.
 
 **Flow**:
-1. Called from `bot.py` during entry evaluation cycles
-2. Calls `_prepare_trade_params()` to check all filters:
-   - Signal confidence threshold (`MIN_EDGE`)
-   - Position spacing rules
-   - Available balance
-   - Market conditions
-3. If valid parameters returned, executes trade via `execute_trade()`
-4. Trade is recorded in database with initial state:
-   - `order_status = "PENDING"` or `"OPEN"`
-   - `settled = 0`
-   - `exited_early = 0`
+1. Fetches Polymarket order book data
+2. Fetches Binance market data (momentum, order flow, divergence, VWM)
+3. Calculates confidence using additive or Bayesian method
+4. Determines bias (UP or DOWN)
+
+**Output**:
+- `confidence`: 0.0 to 1.0 score
+- `bias`: "UP", "DOWN", or "NEUTRAL"
+- `signal_components`: Breakdown of all signals
+
+---
+
+### Stage 2: Atomic Pair Placement (`place_atomic_entry_and_hedge()`)
+
+**File**: `src/trading/execution.py`
+
+**Purpose**: Places simultaneous entry+hedge orders using batch API.
+
+**Flow**:
+1. **Price Calculation**:
+   - Entry side: Uses best bid (MAKER pricing)
+   - Hedge side: Calculated to ensure combined ≤ $0.99
+   - Example: Entry UP @ $0.52 + Hedge DOWN @ $0.46 = $0.98 (1¢ edge)
+
+2. **Order Type Selection**:
+   - **First 3 attempts**: POST_ONLY (maker rebates)
+   - **After 3 failures**: GTC (taker fees)
+
+3. **Batch Submission**:
+   - Both orders submitted simultaneously via batch API
+   - Prevents race conditions and guarantees atomic placement
+
+4. **Fill Monitoring** (120-second timeout):
+   - Polls every 5 seconds
+   - Tracks fill status for both orders
+
+5. **Outcome Handling**:
+   - **Both fill**: Trade recorded, profit structure locked in ✅
+   - **One fills**: Emergency liquidation triggered ⚠️
+   - **Neither fills**: Both orders cancelled immediately ❌
 
 **Example**:
 ```
-🚀 [BTC] Entry triggered: UP @ $0.52, confidence=0.65, size=100.00
-✅ [BTC] Trade #1234 BUY UP @ $0.52 filled (100 shares)
+🎯 [BTC] Placing atomic pair: UP @ $0.52 + DOWN @ $0.46 (combined $0.98, 1.0¢ edge)
+   📊 [BTC] Both orders using MAKER (POST_ONLY) pricing
+   ⏱️  [BTC] Monitoring fills for 120s (polling every 5s)...
+   ✅ [BTC] Both orders filled! Atomic pair complete.
 ```
 
 ---
 
-### Stage 2: Monitoring (`check_open_positions()`)
+### Stage 3: Fill Monitoring & Outcome Handling
 
-**File**: `src/trading/position_manager/monitor.py`
+**File**: `src/trading/execution.py`
 
-**Purpose**: Runs every 1 second to evaluate all open positions and trigger appropriate actions.
+**Purpose**: Continuously monitors order fills and handles partial fills or timeouts.
 
-**Frequency**: 1-second cycle (real-time monitoring with WebSocket price updates)
+**Possible Outcomes**:
 
-**Sequence of Checks** (per position, in order):
-1. **Stop Loss Check** (`_check_stop_loss()`) → May trigger reversal
-2. **Scale-In Check** (`_check_scale_in()`) → Add to winning position
-3. **Exit Plan Check** (`_check_exit_plan()`) → Place/manage limit sell
+#### Outcome A: Both Orders Fill (Success)
+- Trade recorded in database
+- Profit structure locked in: Combined price ≤ $0.99
+- No further action needed (position held through resolution)
 
-**Optimizations**:
-- **WebSocket price feeds**: Real-time midpoint prices via Market Channel subscriptions
-- **Batch price fetching**: All token prices fetched in single API call when WebSocket unavailable
-- **Batch scoring**: Checks order scoring in batch for multiple positions
-- **Lock mechanism**: Prevents concurrent monitoring cycles
-- **Notification batching**: WebSocket updates for fills, cancels, and P&L changes
+#### Outcome B: Entry Fills, Hedge Unfilled (Emergency)
+- Entry position exposed
+- **Immediate action**: Cancel hedge order
+- **Emergency liquidation**: Sell entry side (see Stage 4)
+
+#### Outcome C: Hedge Fills, Entry Unfilled (Emergency)
+- Hedge position exposed
+- **Immediate action**: Cancel entry order
+- **Emergency liquidation**: Sell hedge side (see Stage 4)
+
+#### Outcome D: Neither Order Fills (Timeout)
+- **Immediate action**: Cancel both orders
+- No positions held, no risk
+- POST_ONLY failure counter incremented (switch to GTC after 3 failures)
+
+---
+
+### Stage 4: Emergency Liquidation (If Needed)
+
+**File**: `src/trading/execution.py`
+**Function**: `emergency_sell_position()`
+
+**Purpose**: Liquidates filled side when atomic pair fails to complete.
+
+**Time-Aware Pricing Strategy**:
+
+1. **PATIENT Mode** (>600s remaining):
+   - Small price drops (1¢ steps)
+   - Long waits (10-20s)
+   - Goal: Maximize recovery
+
+2. **BALANCED Mode** (300-600s remaining):
+   - Moderate drops (2-5¢ steps)
+   - Balanced waits (6-10s)
+   - Goal: Balance recovery and urgency
+
+3. **AGGRESSIVE Mode** (<300s remaining):
+   - Rapid drops (5-10¢ steps)
+   - Short waits (5-10s)
+   - Goal: Ensure liquidation before expiry
+
+**Special Cases**:
+- **MIN_ORDER_SIZE (5.0 shares)**: If position < 5.0 shares
+  - Check if winning (current_price > entry_price)
+  - If winning: HOLD through resolution
+  - If losing: ORPHAN (accept small loss)
+
+**Example**:
+```
+⚠️  [BTC] Emergency sell triggered: UP position filled but DOWN hedge unfilled
+🕒 [BTC] 450s remaining → BALANCED mode
+💰 [BTC] Progressive pricing: bid - $0.02 (wait 8s)
+✅ [BTC] Emergency sell complete @ $0.48 (recovered 92% of entry cost)
+```
+
+---
+
+### Stage 5: Pre-Settlement Exit (Optional)
+
+**File**: `src/trading/pre_settlement_exit.py`
+**Function**: `pre_settlement_monitor()`
+
+**Purpose**: Evaluates positions T-180s to T-45s before resolution and exits losing side early.
+
+**Trigger Conditions**:
+1. **Time window**: 180-45 seconds before resolution
+2. **Confidence threshold**: Strategy signals > 80% confidence on one side
+3. **Position exists**: Have both sides of a hedged pair
+
+**Decision Logic**:
+```
+IF confidence_up > 80%:
+    SELL DOWN position (losing side)
+    HOLD UP position (winning side)
+ELIF confidence_down > 80%:
+    SELL UP position (losing side)
+    HOLD DOWN position (winning side)
+ELSE:
+    HOLD both sides (wait for resolution)
+```
+
+**Example**:
+```
+🎯 [BTC] Pre-settlement check (T-120s): Confidence UP 85%
+💰 [BTC] Selling losing side (DOWN) @ $0.25
+✅ [BTC] Keeping winning side (UP) for resolution @ $1.00
+```
 
 ---
 
 ## Module Breakdown
 
-### Entry Management (`entry.py`)
+### Signal Calculation (`strategy.py`)
 
-**Function**: `execute_first_entry(symbol, balance, verbose)`
+**Function**: `calculate_confidence_and_bias(symbol, balance, verbose)`
 
-**When Called**:
-- From `bot.py` during entry evaluation cycles (every 30-60 seconds)
+**Purpose**: Analyzes market conditions to generate trading signals.
+
+**Inputs**:
+- `symbol`: Market symbol (BTC, ETH, XRP, SOL)
+- `balance`: Available USDC balance
+- `verbose`: Logging level
+
+**Outputs**:
+- `confidence`: 0.0 to 1.0 score
+- `bias`: "UP", "DOWN", or "NEUTRAL"
+- `signal_components`: Breakdown of all signals
+
+**Signal Sources**:
+1. **Price Momentum** (30%): Binance velocity, acceleration, RSI
+2. **Polymarket Momentum** (20%): Internal price action
+3. **Order Flow** (20%): Buy/sell pressure from Binance
+4. **Cross-Exchange Divergence** (20%): Polymarket vs Binance mismatch
+5. **Volume-Weighted Momentum** (10%): VWAP analysis
+
+---
+
+### Atomic Pair Placement (`execution.py`)
+
+**Function**: `place_atomic_entry_and_hedge(...)`
+
+**Key Parameters**:
+- `symbol`: Market symbol
+- `side`: Entry side ("UP" or "DOWN")
+- `confidence`: Signal confidence (0.0-1.0)
+- `size`: Position size in shares
+- `verbose`: Logging level
 
 **Key Logic**:
+
 ```python
-trade_params = _prepare_trade_params(symbol, balance, verbose)
-if trade_params:
-    return execute_trade(trade_params, is_reversal=False)
-```
+# 1. Calculate prices
+entry_price = best_bid  # MAKER pricing
+max_hedge_price = COMBINED_PRICE_THRESHOLD - entry_price
+hedge_price = min(best_hedge_bid, max_hedge_price)
 
-**Output**:
-- Returns `trade_id` if trade executed
-- Returns `None` if conditions not met
+# 2. Check profitability
+combined_price = entry_price + hedge_price
+if combined_price > COMBINED_PRICE_THRESHOLD:
+    reject_trade()  # Not profitable
+
+# 3. Select order type
+use_post_only = failures[symbol] < MAX_POST_ONLY_ATTEMPTS
+
+# 4. Submit batch order
+batch_order = [
+    {"side": entry_side, "price": entry_price, "post_only": use_post_only},
+    {"side": hedge_side, "price": hedge_price, "post_only": use_post_only}
+]
+
+# 5. Monitor fills
+for t in range(0, HEDGE_FILL_TIMEOUT_SECONDS, HEDGE_POLL_INTERVAL_SECONDS):
+    check_fill_status()
+    if both_filled:
+        return SUCCESS
+    
+# 6. Handle outcome
+if timeout:
+    cancel_both_orders()
+elif one_filled:
+    emergency_sell_position()
+```
 
 ---
 
-### Stop Loss Management (`stop_loss.py`)
+### Emergency Liquidation (`execution.py`)
 
-**Function**: `_check_stop_loss(...)`
+**Function**: `emergency_sell_position(...)`
 
-**When Called**:
-- Every monitoring cycle (1s) for each open position
-- **Priority 1** in the monitoring sequence
+**Purpose**: Liquidates filled side when atomic pair fails to complete.
 
-**Trigger Condition**:
+**Time-Aware Pricing**:
+
+| Time Remaining | Mode | Price Drops | Wait Times | Goal |
+|----------------|------|-------------|------------|------|
+| >600s | PATIENT | 1¢ steps | 10-20s | Maximize recovery |
+| 300-600s | BALANCED | 2-5¢ steps | 6-10s | Balance recovery/urgency |
+| <300s | AGGRESSIVE | 5-10¢ steps | 5-10s | Ensure liquidation |
+
+**Progressive Pricing Example** (PATIENT mode):
+1. Sell at bid - $0.01 (wait 10s)
+2. Sell at bid - $0.02 (wait 10s)
+3. Sell at bid - $0.05 (wait 10s)
+4. Sell at bid - $0.10 (wait 10s)
+5. Continue until filled or timeout
+
+**MIN_ORDER_SIZE Handling**:
 ```python
-dynamic_trigger = min(STOP_LOSS_PRICE, entry_price - 0.10)
-if current_price <= dynamic_trigger:
-    # Stop loss check triggered
-```
-
-**Default Config**:
-- `STOP_LOSS_PRICE = 0.30` ($0.30 floor)
-- Minimum headroom: $0.10 below entry price
-- Example: Entry at $0.60 → trigger at $0.30 (min of 0.30, 0.60-0.10=0.50)
-
-**Triple Check Logic** (for hedged reversals):
-
-1. **Immediate Floor** (no cooldown):
-   - If `current_price <= $0.15` → execute stop loss immediately
-
-2. **Time Cooldown** (after reversal):
-   - Must wait **120 seconds** after reversal before stopping out
-   - Logs every 60s to show progress
-
-3. **Strategy Confirmation**:
-   - Checks if strategy now favors opposite side with `confidence > 30%`
-   - Only stops loss if strategy flip is confirmed
-
-**Special Cases**:
-- **Spot price check**: If midpoint is low but spot price is winning side, holds position
-- **Age check**: Positions must be at least 30s old to avoid noise
-- **Enhanced balance sync**: Uses cross-validation between balance API and position data (symbol-specific tolerance)
-- **XRP handling**: Special validation for XRP positions with lower API trust factor
-
-**Example**:
-```
-🛑 [BTC] #1234 CRITICAL FLOOR hit ($0.14). Executing immediate stop loss.
+if size < MIN_ORDER_SIZE:  # 5.0 shares
+    if current_price > entry_price:
+        # Winning: HOLD through resolution
+        mark_as_hold_min_size()
+    else:
+        # Losing: ORPHAN position
+        mark_as_orphaned()
 ```
 
 ---
 
-### Reversal Management (`reversal.py`)
+### Pre-Settlement Exit (`pre_settlement_exit.py`)
 
-**Functions**:
-- `check_and_trigger_reversal()` - Main entry point
-- `_trigger_price_based_reversal()` - Executes reversal trade
+**Function**: `pre_settlement_monitor()`
 
-**When Called**:
-- From `_check_stop_loss()` when price drops below trigger
-- Only if `ENABLE_REVERSAL = YES`
+**Purpose**: Continuously monitors positions and exits losing side early when confident.
 
-**Trigger Condition**:
-```python
-if current_price <= min(STOP_LOSS_PRICE, entry_price - 0.10):
-    if not reversal_triggered:
-        _trigger_price_based_reversal()
-```
+**Execution Flow**:
+1. Runs in background thread (starts on bot startup)
+2. Checks every `PRE_SETTLEMENT_CHECK_INTERVAL` seconds (default 30s)
+3. For each position in time window (T-180s to T-45s):
+   - Fetches latest strategy signals
+   - Calculates confidence for both sides
+   - If confidence > threshold on one side:
+     - Sells losing side
+     - Keeps winning side for resolution
 
-**Reversal Logic**:
-1. **Determine opposite side**:
-   - Original: UP → Reversal: DOWN
-   - Original: DOWN → Reversal: UP
-
-2. **Check for existing position**:
-   - If already have opposite side in this window, link as hedge instead
-
-3. **Calculate reversal price**:
-   - Buying DOWN: `1.0 - UP_best_ask`
-   - Buying UP: `UP_best_bid`
-
-4. **Position sizing**:
-   - If strategy agrees with reversal: uses strategy's confidence
-   - If strategy disagrees: uses default 40% confidence
-
-5. **Execute trade** as reversal (`is_reversal=True`)
-
-6. **Mark original trade**:
-   - `reversal_triggered = 1`
-   - `reversal_triggered_at = current_time`
-
-**Example**:
-```
-🔄 [BTC] #1234 UP midpoint $0.28 <= $0.30 trigger. INITIATING REVERSAL.
-⚔️ Reversal trade #1235 opened for BTC DOWN
-```
-
----
-
-### Scale-In Management (`scale.py`)
-
-**Function**: `_check_scale_in(...)`
-
-**When Called**:
-- Every monitoring cycle (1s) after stop loss check
-- **Priority 2** in the monitoring sequence
-
-**Conditions Required**:
-1. `ENABLE_SCALE_IN = YES`
-2. Position is already filled (`buy_status in ["FILLED", "MATCHED"]`)
-3. Not already scaled in (`scaled_in = 0`)
-4. Price in valid range (`SCALE_IN_MIN_PRICE` to `SCALE_IN_MAX_PRICE`)
-5. **Winning side** on spot price
-6. **Time window** (dynamic based on confidence)
-
-**Default Config**:
-- `SCALE_IN_MIN_PRICE = 0.50`
-- `SCALE_IN_MAX_PRICE = 0.75`
-- `SCALE_IN_TIME_LEFT = 450` (7.5 minutes)
-- `SCALE_IN_MULTIPLIER = 1.5` (adds 50% of original size)
-
-**Dynamic Timing**:
-| Confidence | Price | Scale-in Window |
-|------------|-------|-----------------|
-| ≥ 90%      | ≥ $0.80 | Up to 12 min (720s) |
-| ≥ 80%      | ≥ $0.70 | Up to 9 min (540s) |
-| ≥ 70%      | ≥ $0.65 | Up to 7 min (420s) |
-| Default    | ≥ $0.60 | 7.5 min (450s) |
-
-**Order Type**: **MAKER** (limit) order
-- Joins the bid to avoid taker fees
-- Earns rebates if filled as maker
-- Uses WebSocket bid price for best pricing
-
-**Winner Check**:
-- UP position: spot price ≥ target price
-- DOWN position: spot price ≤ target price
-
-**Example**:
-```
-📈 [BTC] Trade #1234 UP | 📈 SCALE IN triggered (Maker Order): size=150.00, price=$0.75, 420s left
-📈 [BTC] Trade #1234 UP | ✅ SCALE IN order filled: 150.00 shares @ $0.7500
-```
-
----
-
-### Exit Plan Management (`exit.py`)
-
-**Function**: `_check_exit_plan(...)`
-
-**When Called**:
-- Every monitoring cycle (1s) for each position
-- **Priority 3** in the monitoring sequence (always runs)
-
-**Purpose**:
-- Place limit sell orders at `EXIT_PRICE_TARGET` (default $0.95)
-- Manage existing exit orders
-- Repair size mismatches after scale-in
-- Adopt orphaned orders from exchange
-
-**Key Features**:
-
-#### 1. Order Placement
-- Places when no existing order in database
-- No minimum position age (places immediately after fill)
-- Cooldown: 10s between placement attempts
-- **Reward optimization**: Automatically adjusts price via `check_scoring` API to earn liquidity rewards (if enabled)
-
-#### 2. Balance Syncing (Bi-Directional Healing with Enhanced Validation)
-- **Sync if balance > size + 0.0001**: Always sync immediately (we bought more)
-- **Periodic sync**: If `age > 60s` and `scale_in_age > 60s`, sync any discrepancies
-- **Cross-validation**: Validates balance API against position data from Data API
-- **Symbol-specific tolerance**: XRP and other unreliable symbols use position data as fallback
-- **Grace period**: Waits 15 minutes (configurable) before settling zero-balance positions
-
-#### 3. Order Adoption
-- Checks exchange for existing SELL orders before placing new one
-- If found, adopts order into database (prevents duplicates)
-
-#### 4. Size Repair
-- Compares exit plan size to current position size
-- If mismatch detected:
-  1. Cancels existing order
-  2. Places new order with correct size
-- Accounts for scale-in changes automatically
-
-#### 5. Minimum Size Handling
-- Enforces `MIN_SIZE = 5.0` shares
-- If size < MIN_SIZE but balance ≥ MIN_SIZE, bumps to MIN_SIZE
-- If both size and balance < MIN_SIZE, skips and retries next cycle
-
-**Example**:
-```
-🔧 [BTC] #1234 Syncing size to match balance: 100.00 -> 250.00
-🔧 [BTC] #1234 Exit plan size repaired: 100.00 -> 250.00
+**Configuration**:
+```env
+ENABLE_PRE_SETTLEMENT_EXIT=YES
+PRE_SETTLEMENT_MIN_CONFIDENCE=0.80
+PRE_SETTLEMENT_EXIT_SECONDS=180
+PRE_SETTLEMENT_CHECK_INTERVAL=30
 ```
 
 ---
@@ -311,232 +336,443 @@ if current_price <= min(STOP_LOSS_PRICE, entry_price - 0.10):
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Position Entry                              │
-│              execute_first_entry()                              │
-│                   ↓                                             │
-│              Trade Placed                                        │
-│                   ↓                                             │
-│         [1-Second Monitoring Cycle]                             │
-│                   ↓                                             │
-┌─────────────────────────────────────────────────────────────────┐
-│  1. STOP LOSS CHECK                                              │
-│     current_price <= min(0.30, entry_price - 0.10)?            │
-│        │                                                          │
-│        ├─ YES ──→ Reversal triggered?                            │
-│        │            │                                            │
-│        │            ├─ NO → Trigger reversal trade              │
-│        │            │        (opposite side, is_reversal=True)   │
-│        │            │        Mark: reversal_triggered=1         │
-│        │            │        Return (wait for next cycle)       │
-│        │            │                                            │
-│        │            └─ YES → Triple check:                       │
-│        │                     ├─ Price <= $0.15? → Stop loss     │
-│        │                     ├─ < 120s since reversal? → Wait    │
-│        │                     └─ Strategy favors opposite? → SL   │
-│        │                     Otherwise: Continue (hold hedge)   │
-│        │                                                         │
-│        └─ NO ──→ Continue to scale-in check                     │
-│                   ↓                                             │
-│  2. SCALE-IN CHECK                                               │
-│     Conditions met?                                              │
-│        ├─ Price in range ($0.50-$0.75)?                          │
-│        ├─ Winning side on spot?                                  │
-│        ├─ Time window met? (dynamic based on confidence)         │
-│        └─ Already scaled in?                                     │
-│                   ↓                                             │
-│        ├─ YES ──→ Place MAKER limit order                       │
-│        │            (adds SCALE_IN_MULTIPLIER × original size)   │
-│        │            Update: scaled_in=1, size increased          │
-│        │            Continue to exit plan (size may change)     │
-│        │                                                         │
-│        └─ NO ──→ Continue to exit plan check                    │
-│                   ↓                                             │
-│  3. EXIT PLAN CHECK                                              │
-│     (Always runs for every position)                            │
-│        ├─ Has limit_sell_order_id?                              │
-│        │   ├─ YES → Check status, repair size if needed        │
-│        │   └─ NO → Place limit sell at EXIT_PRICE_TARGET        │
-│        │                                                           │
-│        └─ Exit order fills?                                      │
-│            → Mark settled=1, exited_early=1                      │
-│            → Return (position closed)                            │
-│                   ↓                                             │
-│  Return to top of monitoring loop (next position or next cycle) │
+│                   ATOMIC HEDGING FLOW                           │
 └─────────────────────────────────────────────────────────────────┘
+
+1. SIGNAL GENERATION (strategy.py)
+   ↓
+   Calculate confidence and bias from multi-source signals
+   - Binance momentum, order flow, divergence
+   - Polymarket momentum
+   - Volume-weighted signals
+   ↓
+   confidence >= MIN_EDGE?
+   ├─ NO → Skip trade
+   └─ YES → Continue
+
+2. ATOMIC PAIR PLACEMENT (execution.py)
+   ↓
+   Calculate prices:
+   - Entry: best_bid (MAKER pricing)
+   - Hedge: calculated to ensure combined ≤ $0.99
+   ↓
+   combined_price <= COMBINED_PRICE_THRESHOLD?
+   ├─ NO → Reject trade (not profitable)
+   └─ YES → Continue
+   ↓
+   Select order type:
+   - POST_ONLY (first 3 attempts) → maker rebates
+   - GTC (after 3 failures) → taker fees
+   ↓
+   Submit batch order (both orders simultaneously)
+   ↓
+   Monitor fills for 120s (poll every 5s)
+   ↓
+   ┌─────────────────────────────────────┐
+   │ OUTCOME HANDLING                    │
+   └─────────────────────────────────────┘
+   ├─ BOTH FILL → Trade complete ✅
+   │               Record in database
+   │               Profit structure locked in
+   │               → Continue to Stage 3
+   │
+   ├─ ONE FILLS → Emergency liquidation ⚠️
+   │              Cancel unfilled order
+   │              → Emergency sell (Stage 4)
+   │
+   └─ NEITHER FILLS → Cancel both ❌
+                       Increment POST_ONLY counter
+                       No risk, try again
+
+3. PRE-SETTLEMENT EXIT (pre_settlement_exit.py)
+   ↓
+   Runs in background thread
+   Checks every 30s
+   ↓
+   For each position in time window (T-180s to T-45s):
+   ├─ Calculate strategy confidence
+   ├─ confidence_one_side > 80%?
+   │  ├─ YES → Sell losing side early
+   │  │         Keep winning side for resolution
+   │  └─ NO → Hold both sides (wait)
+   └─ Continue monitoring
+
+4. EMERGENCY LIQUIDATION (if needed)
+   ↓
+   Determine time remaining:
+   ├─ >600s → PATIENT mode
+   │          Small drops (1¢), long waits (10-20s)
+   │          Goal: Maximize recovery
+   │
+   ├─ 300-600s → BALANCED mode
+   │             Moderate drops (2-5¢), balanced waits (6-10s)
+   │             Goal: Balance recovery/urgency
+   │
+   └─ <300s → AGGRESSIVE mode
+              Rapid drops (5-10¢), short waits (5-10s)
+              Goal: Ensure liquidation
+   ↓
+   Progressive pricing:
+   1. bid - $0.01 (wait)
+   2. bid - $0.02 (wait)
+   3. bid - $0.05 (wait)
+   4. bid - $0.10 (wait)
+   ...continue until filled
+   ↓
+   Special case: size < MIN_ORDER_SIZE (5.0 shares)?
+   ├─ Winning → HOLD through resolution
+   └─ Losing → ORPHAN position
+
+5. RESOLUTION
+   ↓
+   Market settles at T=0
+   ├─ Complete atomic pair → Full profit
+   ├─ Pre-settlement exit → Partial profit
+   └─ Emergency liquidation → Recovery
 ```
 
 ---
 
-## Hedged Reversal Strategy
+## Atomic Hedging Strategy
 
 ### Concept
 
-The hedged reversal strategy is a risk management technique that opens a position on the **opposite side** before stopping out a losing trade. This provides two benefits:
+The atomic hedging strategy places **simultaneous entry+hedge pairs** using batch API. Every trade consists of two orders:
+1. **Entry order**: The side favored by strategy signals (UP or DOWN)
+2. **Hedge order**: The opposite side to cap risk and ensure profitability
 
-1. **Cap losses**: If market continues in losing direction, reversal position profits
-2. **Market timing**: Allows waiting for confirmation before closing losing position
+This eliminates unhedged positions and guarantees a profit structure when both orders fill.
 
-### Sequence
+### Benefits
 
+1. **Guaranteed Profit Structure**: Entry + Hedge ≤ $0.99 ensures profit regardless of outcome
+   - Example: UP @ $0.52 + DOWN @ $0.46 = $0.98 (1¢ edge per share)
+   - If UP wins: Profit = $1.00 - $0.52 = $0.48, Loss = $0.46, Net = $0.02
+   - If DOWN wins: Profit = $1.00 - $0.46 = $0.54, Loss = $0.52, Net = $0.02
+
+2. **No Unhedged Positions**: Eliminates directional risk
+3. **Maker Rebates**: POST_ONLY orders earn 0.15% rebates (default)
+4. **Immediate Hedging**: No delay between entry and hedge placement
+
+### POST_ONLY → GTC Fallback
+
+The bot tracks POST_ONLY failures per symbol to adapt to market conditions:
+
+| Attempt | Order Type | Fee Structure | Goal |
+|---------|-----------|---------------|------|
+| 1-3 | POST_ONLY | +0.15% rebate | Earn maker rebates |
+| 4+ | GTC | -1.54% taker fee | Ensure fills |
+
+- **Success**: Counter resets to 0
+- **Failure**: Counter increments, switches to GTC after 3 failures
+
+This prevents repeated crossing errors while preserving maker rebate opportunities.
+
+### Combined Price Threshold
+
+The bot enforces strict profitability:
 ```
-Original Trade: BUY UP @ $0.60
-    ↓ (Price drops to $0.28)
-Reversal Triggered: BUY DOWN @ $0.72 (1.0 - UP_ask)
-    ↓ (Both positions open)
-Hedge Period: Wait 120s
-    ↓
-Check Strategy:
-    ├─ Strategy favors DOWN @ 45% → Stop loss UP position
-    │   (Keep DOWN position, let it profit)
-    └─ Strategy still favors UP @ 35% → Hold both (wait)
+entry_price + hedge_price ≤ COMBINED_PRICE_THRESHOLD
 ```
+
+**Default**: $0.99 (1¢ edge minimum)
+
+If combined price exceeds threshold, trade is rejected (not profitable).
 
 ### Database State
 
-**After Reversal**:
+**After Successful Atomic Placement**:
 
-| Trade ID | Side | reversal_triggered | reversal_triggered_at | Status |
-|----------|------|-------------------|----------------------|--------|
-| 1234     | UP   | 1                 | 2026-01-08 10:05:30   | Hedged |
-| 1235     | DOWN | 0                 | NULL                  | Open   |
+| Trade ID | Side | Entry Price | Hedge Trade ID | Status |
+|----------|------|-------------|----------------|--------|
+| 1234 | UP | $0.52 | 1235 | FILLED |
+| 1235 | DOWN | $0.46 | 1234 | FILLED |
 
-### Key Points
-
-1. **Original trade marked** (`reversal_triggered=1`) to prevent duplicate reversals
-2. **Reversal is a new trade** (`is_reversal=True`, `reversal_triggered=0`)
-3. **120s cooldown** prevents immediate stop loss after reversal
-4. **Strategy confirmation** ensures reversal aligns with market signals
-5. **Stop loss on original** occurs only after confirmation, keeping hedge if strategy disagrees
+Both trades linked via `hedge_trade_id` field.
 
 ---
 
-## Balance Syncing & Repair
+## Emergency Liquidation
 
-### Why It's Needed
+### When It's Triggered
 
-The Polymarket API may not immediately reflect balance changes after orders fill, causing discrepancies between:
-- **Database size** (what we think we have)
-- **Exchange balance** (what we actually have)
+Emergency liquidation occurs when an atomic pair **partially fills**:
+- Entry order fills, hedge order unfilled
+- Hedge order fills, entry order unfilled
 
-### Syncing Triggers
+### Time-Aware Pricing Strategy
 
-**Exit Plan Module** (`exit.py`):
+The bot adapts its liquidation strategy based on **time remaining** in the 15-minute window:
 
-```python
-# Always sync if balance is higher (we bought more)
-if actual_bal > size + 0.0001:
-    needs_sync = True
+#### PATIENT Mode (>600s remaining)
+- **Pricing**: Small drops (1¢ steps from bid)
+- **Wait Times**: Long waits (10-20s between attempts)
+- **Goal**: Maximize recovery (plenty of time)
 
-# Periodic sync for other cases
-elif age > 60 and scale_in_age > 60 and abs(actual_bal - size) > 0.0001:
-    needs_sync = True
+**Example Sequence**:
+```
+1. Sell at bid - $0.01 (wait 10s)
+2. Sell at bid - $0.02 (wait 10s)
+3. Sell at bid - $0.05 (wait 10s)
+4. Sell at bid - $0.10 (wait 10s)
+5. Continue...
 ```
 
-### Repair Mechanisms
+#### BALANCED Mode (300-600s remaining)
+- **Pricing**: Moderate drops (2-5¢ steps)
+- **Wait Times**: Balanced waits (6-10s)
+- **Goal**: Balance recovery and urgency
 
-#### 1. Entry/Scale-in Follow-up
-After scale-in order fills:
-```python
-# Update position size with new shares
-size = size + scale_in_shares
-bet_usd = bet_usd + (scale_in_shares × scale_in_price)
-entry_price = new_bet_usd / new_size
-scaled_in = 1
+**Example Sequence**:
+```
+1. Sell at bid - $0.02 (wait 8s)
+2. Sell at bid - $0.05 (wait 8s)
+3. Sell at bid - $0.10 (wait 8s)
+4. Continue...
 ```
 
-#### 2. Exit Plan Size Repair
-When size mismatches detected:
-1. Cancel existing exit order
-2. Sync database size to actual balance
-3. Place new exit order with corrected size
+#### AGGRESSIVE Mode (<300s remaining)
+- **Pricing**: Rapid drops (5-10¢ steps)
+- **Wait Times**: Short waits (5-10s)
+- **Goal**: Ensure liquidation before expiry
 
-#### 3. Stop Loss Sync
-Before stop loss sell:
-```python
-balance_info = get_balance_allowance(token_id)
-actual_balance = balance_info.get("balance", 0)
-
-# Update size if mismatch detected
-if abs(actual_balance - size) > 0.0001:
-    size = actual_balance
-    c.execute("UPDATE trades SET size = ? WHERE id = ?", (size, trade_id))
+**Example Sequence**:
+```
+1. Sell at bid - $0.05 (wait 5s)
+2. Sell at bid - $0.10 (wait 5s)
+3. Sell at $0.30 (wait 5s)
+4. Sell at $0.20 (wait 5s)
+5. Continue...
 ```
 
-### Precision Thresholds
+### MIN_ORDER_SIZE Handling
 
-- **Standard precision**: `0.0001` (supports 6-decimal token pricing)
-- **Conservative**: Larger gaps trigger immediate sync
-- **Periodic**: Small gaps synced after 60s grace period
+Polymarket enforces a **5.0 share minimum** for all orders. The bot handles small positions intelligently:
+
+```python
+if size < MIN_ORDER_SIZE:
+    if current_price > entry_price:
+        # Position is winning
+        HOLD through resolution (let it profit at $1.00)
+        mark_as_hold_min_size()
+    else:
+        # Position is losing
+        ORPHAN position (accept small loss)
+        mark_as_orphaned()
+```
+
+**Example**:
+```
+Position: 4.5 shares UP @ $0.60 entry
+Current price: $0.75
+
+Since 4.5 < 5.0:
+  Check: $0.75 > $0.60 ✅ (winning)
+  Action: HOLD through resolution
+  Expected profit: 4.5 × ($1.00 - $0.60) = $1.80
+```
+
+---
+
+## Pre-Settlement Exit
+
+### Overview
+
+Between T-180s and T-45s before market resolution, the bot evaluates positions and may **exit the losing side early** while keeping the winning side for full resolution profit.
+
+### Why It's Useful
+
+- **Maximize profit**: Winning side resolves at $1.00 (full profit)
+- **Lock in gains**: Losing side sold before resolution (recovers some value)
+- **Confidence-driven**: Only exits when strategy strongly favors one side
+
+### Trigger Conditions
+
+1. **Time window**: 180-45 seconds before resolution
+2. **Confidence threshold**: Strategy signals > 80% (default) on one side
+3. **Position exists**: Have both sides of a hedged pair
+
+### Decision Logic
+
+```python
+# Fetch latest strategy signals
+confidence_up, confidence_down = get_current_confidence(symbol)
+
+if confidence_up > PRE_SETTLEMENT_MIN_CONFIDENCE:
+    # Strong confidence UP is winning
+    SELL DOWN position (losing side)
+    HOLD UP position (winning side for $1.00)
+    
+elif confidence_down > PRE_SETTLEMENT_MIN_CONFIDENCE:
+    # Strong confidence DOWN is winning
+    SELL UP position (losing side)
+    HOLD DOWN position (winning side for $1.00)
+    
+else:
+    # Not confident enough
+    HOLD both sides (wait for resolution)
+```
+
+### Example Scenario
+
+```
+Position: UP @ $0.52 + DOWN @ $0.46 (atomic pair)
+Time: T-120s (2 minutes before resolution)
+
+Strategy signals:
+  - Confidence UP: 85%
+  - Confidence DOWN: 15%
+
+Decision: Confidence UP (85%) > threshold (80%)
+Action:
+  1. Sell DOWN @ $0.15 (losing side, recover some value)
+  2. Hold UP (winning side, resolves at $1.00)
+
+Result:
+  - DOWN sold: -$0.46 + $0.15 = -$0.31 loss
+  - UP resolves: -$0.52 + $1.00 = +$0.48 profit
+  - Net profit: $0.48 - $0.31 = $0.17 per share
+```
+
+### Configuration
+
+```env
+ENABLE_PRE_SETTLEMENT_EXIT=YES       # Enable feature
+PRE_SETTLEMENT_MIN_CONFIDENCE=0.80   # Min confidence to trigger (80%)
+PRE_SETTLEMENT_EXIT_SECONDS=180      # Start checking at T-180s
+PRE_SETTLEMENT_CHECK_INTERVAL=30     # Check every 30s
+```
 
 ---
 
 ## Exit Outcomes
 
-### 1. Profitable Exit (Exit Plan Filled)
+### 1. Complete Atomic Pair (Full Profit)
 
-**Trigger**: Limit sell order at `EXIT_PRICE_TARGET` fills
+**Trigger**: Both entry and hedge orders fill
 
 **Outcome**:
-- `order_status = "EXIT_PLAN_FILLED"`
-- `settled = 1`
-- `exited_early = 1`
-- Records actual fill price, PnL, ROI
+- Profit structure locked in: Combined price ≤ $0.99
+- Both positions held through resolution
+- Guaranteed profit regardless of outcome
 
 **Example**:
 ```
-💰 [BTC] #1234 UP EXIT SUCCESS: MATCHED at 0.95! (size: 250.00) | +107.50$ (+42.8%)
+Entry: UP @ $0.52 (100 shares)
+Hedge: DOWN @ $0.46 (100 shares)
+Combined: $0.98 (1¢ edge)
+
+Resolution: UP wins
+  - UP profit: 100 × ($1.00 - $0.52) = +$48.00
+  - DOWN loss: 100 × ($0.46 - $0.00) = -$46.00
+  - Net profit: $48.00 - $46.00 = +$2.00
 ```
 
 ---
 
-### 2. Stop Loss Exit (Loss)
+### 2. Pre-Settlement Exit (Optimized Profit)
 
-**Trigger**: Price drops below stop loss threshold (after reversal cooldown and strategy confirmation)
+**Trigger**: Strategy confidence > 80% on one side (T-180s to T-45s)
 
 **Outcome**:
-- `order_status = "STOP_LOSS"` or `"REVERSAL_STOP_LOSS"` (if reversed)
-- `settled = 1`
-- `exited_early = 1`
-- Records actual fill price, PnL, ROI
-- Cancels any pending scale-in orders
+- Losing side sold early (recovers some value)
+- Winning side held for full resolution at $1.00
+- Higher profit than complete atomic pair
 
 **Example**:
 ```
-🛡️ [BTC] #1234 HEDGE CONFIRMED: Strategy favors DOWN @ 45%. Clearing losing side.
-🛑 [BTC] #1234 STOP_LOSS: Midpoint $0.25 <= $0.30 trigger
+Atomic pair: UP @ $0.52 + DOWN @ $0.46
+Time: T-120s
+
+Strategy: 85% confidence UP wins
+Action: Sell DOWN @ $0.15
+
+Resolution: UP wins
+  - UP profit: $1.00 - $0.52 = +$0.48
+  - DOWN early exit: $0.15 - $0.46 = -$0.31
+  - Net profit: $0.48 - $0.31 = +$0.17 per share (17¢ vs 1¢ edge)
 ```
 
 ---
 
-### 3. Settlement (Window Expiry)
+### 3. Emergency Liquidation (Partial Fill Recovery)
 
-**Trigger**: 15-minute prediction window expires, Polymarket settles markets
+**Trigger**: One order fills, other unfilled (timeout or partial fill)
 
 **Outcome**:
-- `settled = 1`
-- `exited_early = 0` (ran to expiry)
-- Final outcome based on actual market result
+- Unfilled order cancelled immediately
+- Filled position liquidated using time-aware pricing
+- Recovery depends on mode (PATIENT/BALANCED/AGGRESSIVE)
 
 **Example**:
 ```
-⏰ [BTC] Window expired. Market settled: UP wins
-✅ [BTC] #1234 Settlement: UP position won (size: 250.00 @ $1.00) | +125.00$ (+50.0%)
+Intended: UP @ $0.52 + DOWN @ $0.46
+Actual: UP filled @ $0.52, DOWN unfilled
+
+Emergency liquidation (BALANCED mode, 450s remaining):
+  1. Sell UP @ bid - $0.02 = $0.50 (wait 8s) - filled
+  2. Recovery: $0.50 - $0.52 = -$0.02 per share (small loss)
 ```
 
 ---
 
-### 4. Ghost Trades (Edge Cases)
+### 4. MIN_ORDER_SIZE Hold (Winning Small Position)
 
-**Trigger**: Position has 0 balance after fill or scale-in
+**Trigger**: Position < 5.0 shares and winning (current_price > entry_price)
 
 **Outcome**:
-- `settled = 1`
-- `final_outcome = "GHOST_TRADE_ZERO_BAL"` or `"STOP_LOSS_GHOST_FILL"`
-- `pnl_usd = 0.0`, `roi_pct = 0.0`
+- Position held through resolution (can't sell due to minimum)
+- Resolves at $1.00 for profit
 
-**Handling**:
-- If balance is 0 but position age > 5 minutes, settles as ghost trade
-- If age < 5 minutes, waits for API sync
+**Example**:
+```
+Position: 4.5 shares UP @ $0.60
+Current price: $0.75 (winning)
+
+Action: HOLD through resolution
+Resolution: UP wins
+  - Profit: 4.5 × ($1.00 - $0.60) = +$1.80
+```
+
+---
+
+### 5. MIN_ORDER_SIZE Orphan (Losing Small Position)
+
+**Trigger**: Position < 5.0 shares and losing (current_price ≤ entry_price)
+
+**Outcome**:
+- Position orphaned (can't sell, accept loss)
+- Marked as "ORPHANED_MIN_SIZE"
+
+**Example**:
+```
+Position: 4.2 shares DOWN @ $0.55
+Current price: $0.25 (losing)
+
+Action: ORPHAN position
+Resolution: DOWN loses
+  - Loss: 4.2 × ($0.55 - $0.00) = -$2.31 (small loss accepted)
+```
+
+---
+
+### 6. Timeout (No Fills)
+
+**Trigger**: Neither entry nor hedge fills after 120s
+
+**Outcome**:
+- Both orders cancelled immediately
+- No positions held, no risk
+- POST_ONLY failure counter incremented (switch to GTC after 3 failures)
+
+**Example**:
+```
+Intended: UP @ $0.52 + DOWN @ $0.46
+Actual: Neither order filled after 120s
+
+Action: Cancel both orders
+Result: No trade, no risk, try again next window
+```
 
 ---
 
@@ -546,49 +782,45 @@ Key environment variables controlling position flow:
 
 ```bash
 # Entry
-MIN_EDGE=0.565              # Minimum confidence to enter trade
-MAX_POSITIONS=5             # Maximum concurrent positions
+MIN_EDGE=0.35              # Minimum confidence to enter trade (35%)
 
-# Scale-In
-ENABLE_SCALE_IN=YES
-SCALE_IN_MIN_PRICE=0.50
-SCALE_IN_MAX_PRICE=0.75
-SCALE_IN_TIME_LEFT=450
-SCALE_IN_MULTIPLIER=1.5
+# Atomic Hedging
+COMBINED_PRICE_THRESHOLD=0.99        # Max combined price (default: 0.99)
+HEDGE_FILL_TIMEOUT_SECONDS=120       # Fill timeout (default: 120s)
+HEDGE_POLL_INTERVAL_SECONDS=5        # Poll interval (default: 5s)
 
-# Stop Loss
-ENABLE_STOP_LOSS=YES
-STOP_LOSS_PERCENT=0.50      # 50% loss threshold
-STOP_LOSS_PRICE=0.30
+# Pre-Settlement Exit
+ENABLE_PRE_SETTLEMENT_EXIT=YES       # Enable early exit
+PRE_SETTLEMENT_MIN_CONFIDENCE=0.80   # Min confidence (80%)
+PRE_SETTLEMENT_EXIT_SECONDS=180      # Start at T-180s
+PRE_SETTLEMENT_CHECK_INTERVAL=30     # Check every 30s
 
-# Reversal
-ENABLE_REVERSAL=YES
-ENABLE_HEDGED_REVERSAL=YES
-
-# Exit Plan
-ENABLE_EXIT_PLAN=YES
-EXIT_PRICE_TARGET=0.95
-EXIT_MIN_POSITION_AGE=0
+# Emergency Liquidation
+EMERGENCY_SELL_ENABLE_PROGRESSIVE=YES # Time-aware pricing
+EMERGENCY_SELL_WAIT_SHORT=5          # Aggressive mode wait (<300s)
+EMERGENCY_SELL_WAIT_MEDIUM=8         # Balanced mode wait (300-600s)
+EMERGENCY_SELL_WAIT_LONG=10          # Patient mode wait (>600s)
+EMERGENCY_SELL_FALLBACK_PRICE=0.10   # Final fallback
 ```
 
 ---
 
 ## Summary
 
-The PolyFlup position flow lifecycle is a sophisticated multi-stage system:
+The PolyFlup position flow lifecycle with atomic hedging is a sophisticated risk-managed system:
 
-1. **Entry**: Smart initial position placement based on signal confidence
-2. **Monitoring**: 1-second cycle evaluating position health
-3. **Stop Loss**: Triple-checked protection with reversal option
-4. **Reversal**: Hedged strategy to cap losses while waiting for confirmation
-5. **Scale-In**: Adding to winning positions at optimal times
-6. **Exit Plan**: Continuous management of limit sell orders with auto-repair
+1. **Signal Generation**: Multi-source confidence calculation (Binance + Polymarket)
+2. **Atomic Placement**: Simultaneous entry+hedge pairs with guaranteed profit structure
+3. **Fill Monitoring**: 120-second timeout with immediate cancellation
+4. **Pre-Settlement Exit**: Confidence-driven early exit of losing side (T-180s to T-45s)
+5. **Emergency Liquidation**: Time-aware pricing adapts to remaining time
+6. **Resolution**: Complete pairs maximize profit, partial fills recover capital
 
 **Key Design Principles**:
-- **Modularity**: Each function has a single responsibility
-- **Robustness**: Balance sync and repair prevent ghost positions
-- **Flexibility**: Dynamic thresholds adapt to market conditions
-- **Safety**: Cooldowns and triple checks prevent premature exits
-- **Efficiency**: Batch operations and WebSocket caching minimize API calls
+- **No Unhedged Positions**: Every trade is an atomic pair
+- **Guaranteed Profitability**: Combined price ≤ $0.99 ensures edge
+- **Adaptive Execution**: POST_ONLY → GTC fallback, time-aware liquidation
+- **Smart Recovery**: MIN_ORDER_SIZE handling, pre-settlement optimization
+- **Risk Minimization**: Immediate cancellation, progressive pricing
 
-This architecture allows the bot to respond quickly to market movements while maintaining position safety and maximizing profitable exits.
+This architecture eliminates directional risk while maintaining profitability through maker rebates and optimized exit strategies.
