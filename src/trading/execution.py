@@ -91,10 +91,16 @@ def emergency_sell_position(
     reason: str,
     entry_order_id: Optional[str] = None,
     entry_price: Optional[float] = None,
+    window_end: Optional[str] = None,
 ) -> bool:
     """
-    Emergency sell position using progressive pricing strategy.
+    Emergency sell position using time-aware progressive pricing strategy.
     Uses orderbook bid prices when available, falls back to entry_price reference when not.
+
+    Adjusts urgency based on time remaining in window:
+    - Early window (>600s): Patient - smaller drops, longer waits
+    - Mid window (300-600s): Balanced - moderate drops
+    - Late window (<300s): Aggressive - rapid drops to ensure liquidation
 
     Args:
         symbol: Trading symbol
@@ -103,6 +109,7 @@ def emergency_sell_position(
         reason: Reason for emergency exit
         entry_order_id: Entry order ID to look up any existing exit orders (optional)
         entry_price: Entry fill price for price reference fallback (optional)
+        window_end: Window end time (ISO format) for time-aware pricing (optional)
 
     Returns True if sell order placed successfully, False otherwise.
     """
@@ -133,6 +140,42 @@ def emergency_sell_position(
             log(
                 f"   ⚠️  [{symbol}] Could not verify balance, using requested size {size:.2f}"
             )
+
+        # TIME-AWARE URGENCY: Calculate time remaining in window
+        # Adjust pricing strategy based on urgency:
+        # - Early (>600s): Patient strategy (small drops, long waits)
+        # - Mid (300-600s): Balanced strategy (moderate drops)
+        # - Late (<300s): Aggressive strategy (rapid drops - current behavior)
+        time_remaining = None
+        urgency_level = "AGGRESSIVE"  # Default to aggressive (safe fallback)
+
+        if window_end:
+            try:
+                from datetime import datetime, timezone
+
+                if isinstance(window_end, str):
+                    # Parse ISO format: "2026-01-18T23:15:00-05:00"
+                    window_end_dt = datetime.fromisoformat(window_end)
+                else:
+                    window_end_dt = window_end
+
+                now = datetime.now(timezone.utc)
+                time_remaining = (window_end_dt - now).total_seconds()
+
+                if time_remaining > 600:
+                    urgency_level = "PATIENT"
+                elif time_remaining > 300:
+                    urgency_level = "BALANCED"
+                else:
+                    urgency_level = "AGGRESSIVE"
+
+                log(
+                    f"   ⏰ [{symbol}] Time remaining: {int(time_remaining)}s → {urgency_level} pricing strategy"
+                )
+            except Exception as e:
+                log(
+                    f"   ⚠️  [{symbol}] Could not calculate time remaining: {e}, using AGGRESSIVE strategy"
+                )
 
         # SMART POSITION HOLD: Check if filled price is still reasonable vs current market
         # If position is on winning side, HOLD it as directional bet instead of emergency sell
@@ -314,6 +357,7 @@ def emergency_sell_position(
         # TIME-BASED PROGRESSIVE PRICING: Place GTC orders with wait periods
         # Strategy: Start aggressive, progressively lower price with increasing wait times
         # This gives maker orders time to be taken while maximizing recovery value
+        # Urgency adapts based on time remaining in window
         if orderbook_available and best_bid:
             from src.config.settings import (
                 EMERGENCY_SELL_ENABLE_PROGRESSIVE,
@@ -323,59 +367,83 @@ def emergency_sell_position(
                 EMERGENCY_SELL_FALLBACK_PRICE,
             )
 
-            # Define pricing strategy: (price_description, price_value, wait_seconds, order_type)
-            # Start with FOK for immediate attempts, then use GTC with wait periods
-            attempts = [
-                ("best bid (FOK)", best_bid, 0, "FOK"),  # Try instant fill first
-                (
-                    f"best bid - $0.01 (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
-                    max(0.01, best_bid - 0.01),
-                    EMERGENCY_SELL_WAIT_SHORT,
-                    "GTC",
-                ),
-                (
-                    f"best bid - $0.02 (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
-                    max(0.01, best_bid - 0.02),
-                    EMERGENCY_SELL_WAIT_SHORT,
-                    "GTC",
-                ),
-                (
-                    f"best bid - $0.03 (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
-                    max(0.01, best_bid - 0.03),
-                    EMERGENCY_SELL_WAIT_SHORT,
-                    "GTC",
-                ),
-                (
-                    f"best bid - $0.05 (GTC {EMERGENCY_SELL_WAIT_MEDIUM}s)",
-                    max(0.01, best_bid - 0.05),
-                    EMERGENCY_SELL_WAIT_MEDIUM,
-                    "GTC",
-                ),
-                (
-                    f"best bid - $0.10 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                    max(0.01, best_bid - 0.10),
-                    EMERGENCY_SELL_WAIT_LONG,
-                    "GTC",
-                ),
-                (
-                    f"$0.30 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                    0.30,
-                    EMERGENCY_SELL_WAIT_LONG,
-                    "GTC",
-                ),
-                (
-                    f"$0.20 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                    0.20,
-                    EMERGENCY_SELL_WAIT_LONG,
-                    "GTC",
-                ),
-                (
-                    f"$0.15 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                    0.15,
-                    EMERGENCY_SELL_WAIT_LONG,
-                    "GTC",
-                ),
-            ]
+            # Define TIME-AWARE pricing strategy based on urgency level
+            # Format: (price_description, price_value, wait_seconds, order_type)
+            if urgency_level == "PATIENT":
+                # Early window (>600s): Small drops, long waits
+                # Goal: Maximize recovery value, accept slower fills
+                attempts = [
+                    ("best bid (FOK)", best_bid, 0, "FOK"),
+                    (f"bid - $0.01 (GTC 10s)", max(0.01, best_bid - 0.01), 10, "GTC"),
+                    (f"bid - $0.02 (GTC 10s)", max(0.01, best_bid - 0.02), 10, "GTC"),
+                    (f"bid - $0.03 (GTC 12s)", max(0.01, best_bid - 0.03), 12, "GTC"),
+                    (f"bid - $0.05 (GTC 15s)", max(0.01, best_bid - 0.05), 15, "GTC"),
+                    (f"bid - $0.10 (GTC 20s)", max(0.01, best_bid - 0.10), 20, "GTC"),
+                    (f"$0.30 (GTC 20s)", 0.30, 20, "GTC"),
+                    (f"$0.20 (GTC 15s)", 0.20, 15, "GTC"),
+                    (f"$0.15 (GTC 15s)", 0.15, 15, "GTC"),
+                ]
+            elif urgency_level == "BALANCED":
+                # Mid window (300-600s): Moderate drops, balanced waits
+                # Goal: Balance recovery value with liquidation speed
+                attempts = [
+                    ("best bid (FOK)", best_bid, 0, "FOK"),
+                    (f"bid - $0.01 (GTC 6s)", max(0.01, best_bid - 0.01), 6, "GTC"),
+                    (f"bid - $0.02 (GTC 6s)", max(0.01, best_bid - 0.02), 6, "GTC"),
+                    (f"bid - $0.05 (GTC 8s)", max(0.01, best_bid - 0.05), 8, "GTC"),
+                    (f"bid - $0.10 (GTC 10s)", max(0.01, best_bid - 0.10), 10, "GTC"),
+                    (f"$0.30 (GTC 10s)", 0.30, 10, "GTC"),
+                    (f"$0.20 (GTC 10s)", 0.20, 10, "GTC"),
+                    (f"$0.15 (GTC 10s)", 0.15, 10, "GTC"),
+                ]
+            else:  # AGGRESSIVE (default)
+                # Late window (<300s) or unknown: Rapid drops, short waits
+                # Goal: Ensure liquidation before resolution, accept lower prices
+                attempts = [
+                    ("best bid (FOK)", best_bid, 0, "FOK"),
+                    (
+                        f"bid - $0.01 (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
+                        max(0.01, best_bid - 0.01),
+                        EMERGENCY_SELL_WAIT_SHORT,
+                        "GTC",
+                    ),
+                    (
+                        f"bid - $0.02 (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
+                        max(0.01, best_bid - 0.02),
+                        EMERGENCY_SELL_WAIT_SHORT,
+                        "GTC",
+                    ),
+                    (
+                        f"bid - $0.05 (GTC {EMERGENCY_SELL_WAIT_MEDIUM}s)",
+                        max(0.01, best_bid - 0.05),
+                        EMERGENCY_SELL_WAIT_MEDIUM,
+                        "GTC",
+                    ),
+                    (
+                        f"bid - $0.10 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                        max(0.01, best_bid - 0.10),
+                        EMERGENCY_SELL_WAIT_LONG,
+                        "GTC",
+                    ),
+                    (
+                        f"$0.30 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                        0.30,
+                        EMERGENCY_SELL_WAIT_LONG,
+                        "GTC",
+                    ),
+                    (
+                        f"$0.20 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                        0.20,
+                        EMERGENCY_SELL_WAIT_LONG,
+                        "GTC",
+                    ),
+                    (
+                        f"$0.15 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                        0.15,
+                        EMERGENCY_SELL_WAIT_LONG,
+                        "GTC",
+                    ),
+                ]
 
             last_order_id = None
 
@@ -481,62 +549,140 @@ def emergency_sell_position(
                 EMERGENCY_SELL_WAIT_LONG,
             )
 
-            # Calculate complement price (opposite side of the hedge)
-            # If selling entry: try near entry_price
-            # If selling hedge: try near (0.99 - entry_price)
+            # Calculate reference price based on entry
             # Start at entry_price and work down since we're selling
             reference_price = min(0.99, max(0.01, entry_price))
 
-            attempts = [
-                (
-                    f"${reference_price:.2f} (entry ref, FOK)",
-                    reference_price,
-                    0,
-                    "FOK",
-                ),
-                (
-                    f"${reference_price - 0.01:.2f} (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
-                    max(0.01, reference_price - 0.01),
-                    EMERGENCY_SELL_WAIT_SHORT,
-                    "GTC",
-                ),
-                (
-                    f"${reference_price - 0.02:.2f} (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
-                    max(0.01, reference_price - 0.02),
-                    EMERGENCY_SELL_WAIT_SHORT,
-                    "GTC",
-                ),
-                (
-                    f"${reference_price - 0.05:.2f} (GTC {EMERGENCY_SELL_WAIT_MEDIUM}s)",
-                    max(0.01, reference_price - 0.05),
-                    EMERGENCY_SELL_WAIT_MEDIUM,
-                    "GTC",
-                ),
-                (
-                    f"${reference_price - 0.10:.2f} (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                    max(0.01, reference_price - 0.10),
-                    EMERGENCY_SELL_WAIT_LONG,
-                    "GTC",
-                ),
-                (
-                    f"$0.30 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                    0.30,
-                    EMERGENCY_SELL_WAIT_LONG,
-                    "GTC",
-                ),
-                (
-                    f"$0.20 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                    0.20,
-                    EMERGENCY_SELL_WAIT_LONG,
-                    "GTC",
-                ),
-                (
-                    f"$0.15 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                    0.15,
-                    EMERGENCY_SELL_WAIT_LONG,
-                    "GTC",
-                ),
-            ]
+            # TIME-AWARE fallback pricing (same strategy as orderbook-based)
+            if urgency_level == "PATIENT":
+                attempts = [
+                    (
+                        f"${reference_price:.2f} (entry ref, FOK)",
+                        reference_price,
+                        0,
+                        "FOK",
+                    ),
+                    (
+                        f"${reference_price - 0.01:.2f} (GTC 10s)",
+                        max(0.01, reference_price - 0.01),
+                        10,
+                        "GTC",
+                    ),
+                    (
+                        f"${reference_price - 0.02:.2f} (GTC 10s)",
+                        max(0.01, reference_price - 0.02),
+                        10,
+                        "GTC",
+                    ),
+                    (
+                        f"${reference_price - 0.03:.2f} (GTC 12s)",
+                        max(0.01, reference_price - 0.03),
+                        12,
+                        "GTC",
+                    ),
+                    (
+                        f"${reference_price - 0.05:.2f} (GTC 15s)",
+                        max(0.01, reference_price - 0.05),
+                        15,
+                        "GTC",
+                    ),
+                    (
+                        f"${reference_price - 0.10:.2f} (GTC 20s)",
+                        max(0.01, reference_price - 0.10),
+                        20,
+                        "GTC",
+                    ),
+                    (f"$0.30 (GTC 20s)", 0.30, 20, "GTC"),
+                    (f"$0.20 (GTC 15s)", 0.20, 15, "GTC"),
+                    (f"$0.15 (GTC 15s)", 0.15, 15, "GTC"),
+                ]
+            elif urgency_level == "BALANCED":
+                attempts = [
+                    (
+                        f"${reference_price:.2f} (entry ref, FOK)",
+                        reference_price,
+                        0,
+                        "FOK",
+                    ),
+                    (
+                        f"${reference_price - 0.01:.2f} (GTC 6s)",
+                        max(0.01, reference_price - 0.01),
+                        6,
+                        "GTC",
+                    ),
+                    (
+                        f"${reference_price - 0.02:.2f} (GTC 6s)",
+                        max(0.01, reference_price - 0.02),
+                        6,
+                        "GTC",
+                    ),
+                    (
+                        f"${reference_price - 0.05:.2f} (GTC 8s)",
+                        max(0.01, reference_price - 0.05),
+                        8,
+                        "GTC",
+                    ),
+                    (
+                        f"${reference_price - 0.10:.2f} (GTC 10s)",
+                        max(0.01, reference_price - 0.10),
+                        10,
+                        "GTC",
+                    ),
+                    (f"$0.30 (GTC 10s)", 0.30, 10, "GTC"),
+                    (f"$0.20 (GTC 10s)", 0.20, 10, "GTC"),
+                    (f"$0.15 (GTC 10s)", 0.15, 10, "GTC"),
+                ]
+            else:  # AGGRESSIVE
+                attempts = [
+                    (
+                        f"${reference_price:.2f} (entry ref, FOK)",
+                        reference_price,
+                        0,
+                        "FOK",
+                    ),
+                    (
+                        f"${reference_price - 0.01:.2f} (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
+                        max(0.01, reference_price - 0.01),
+                        EMERGENCY_SELL_WAIT_SHORT,
+                        "GTC",
+                    ),
+                    (
+                        f"${reference_price - 0.02:.2f} (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
+                        max(0.01, reference_price - 0.02),
+                        EMERGENCY_SELL_WAIT_SHORT,
+                        "GTC",
+                    ),
+                    (
+                        f"${reference_price - 0.05:.2f} (GTC {EMERGENCY_SELL_WAIT_MEDIUM}s)",
+                        max(0.01, reference_price - 0.05),
+                        EMERGENCY_SELL_WAIT_MEDIUM,
+                        "GTC",
+                    ),
+                    (
+                        f"${reference_price - 0.10:.2f} (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                        max(0.01, reference_price - 0.10),
+                        EMERGENCY_SELL_WAIT_LONG,
+                        "GTC",
+                    ),
+                    (
+                        f"$0.30 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                        0.30,
+                        EMERGENCY_SELL_WAIT_LONG,
+                        "GTC",
+                    ),
+                    (
+                        f"$0.20 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                        0.20,
+                        EMERGENCY_SELL_WAIT_LONG,
+                        "GTC",
+                    ),
+                    (
+                        f"$0.15 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                        0.15,
+                        EMERGENCY_SELL_WAIT_LONG,
+                        "GTC",
+                    ),
+                ]
 
             last_order_id = None
 
@@ -674,10 +820,14 @@ def place_entry_and_hedge_atomic(
     entry_side: str,
     entry_price: float,
     entry_size: float,
+    window_end: Optional[str] = None,
 ) -> tuple[Optional[dict], Optional[dict], Optional[float]]:
     """
     Place entry and hedge orders simultaneously using batch order API.
     This eliminates timing gaps and improves hedge fill rates.
+
+    Args:
+        window_end: Window end time (ISO format) for time-aware emergency sell pricing
 
     Returns:
         (entry_result, hedge_result, hedge_price) - Results are dicts with success, order_id, status; hedge_price is the calculated price
@@ -841,6 +991,7 @@ def place_entry_and_hedge_atomic(
                     reason="hedge without entry",
                     entry_order_id=hedge_order_id,
                     entry_price=hedge_price,  # Use hedge price as reference
+                    window_end=window_end,
                 )
             return None, None, None
 
@@ -1004,7 +1155,8 @@ def place_entry_and_hedge_atomic(
                         size=entry_size,
                         reason="entry without hedge after retries",
                         entry_order_id=entry_order_id,
-                        entry_price=entry_price,  # Use entry price as reference
+                        entry_price=entry_price,
+                        window_end=window_end,
                     )
                 return None, None, None
 
@@ -1148,6 +1300,7 @@ def place_entry_and_hedge_atomic(
                         reason="hedge timeout after entry fill",
                         entry_order_id=entry_order_id,
                         entry_price=entry_price,  # Use entry price as reference
+                        window_end=window_end,
                     )
 
                     # If hedge partially filled, emergency sell those shares too
@@ -1256,6 +1409,7 @@ def place_entry_and_hedge_atomic(
                                     reason=f"holding winning {hedge_side}, liquidating {entry_side}",
                                     entry_order_id=entry_order_id,
                                     entry_price=entry_price,
+                                    window_end=window_end,
                                 )
                     elif (
                         EMERGENCY_SELL_HOLD_IF_WINNING
@@ -1278,6 +1432,7 @@ def place_entry_and_hedge_atomic(
                             reason=f"holding winning {entry_side}, liquidating {hedge_side}",
                             entry_order_id=hedge_order_id,
                             entry_price=hedge_price,
+                            window_end=window_end,
                         )
                     else:
                         # Neither is clearly winning, or both similar - SELL BOTH
@@ -1295,6 +1450,7 @@ def place_entry_and_hedge_atomic(
                             reason=f"{entry_side} timeout after {hedge_side} fill",
                             entry_order_id=hedge_order_id,
                             entry_price=hedge_price,
+                            window_end=window_end,
                         )
                         # Sell entry if partially filled
                         if final_entry_filled_size > 0.01:
@@ -1317,6 +1473,7 @@ def place_entry_and_hedge_atomic(
                                     reason=f"partial {entry_side} fill cleanup",
                                     entry_order_id=entry_order_id,
                                     entry_price=entry_price,
+                                    window_end=window_end,
                                 )
                         # Note: Entry order already cancelled at the top of this block
 
@@ -1424,6 +1581,7 @@ def place_entry_and_hedge_atomic(
                                     reason=f"holding winning {hedge_side}, liquidating {entry_side}",
                                     entry_order_id=entry_order_id,
                                     entry_price=entry_price,
+                                    window_end=window_end,
                                 )
                     else:
                         # Neither is clearly winning, or both similar - SELL BOTH
@@ -1450,6 +1608,7 @@ def place_entry_and_hedge_atomic(
                                     reason=f"partial {entry_side} fill cleanup",
                                     entry_order_id=entry_order_id,
                                     entry_price=entry_price,
+                                    window_end=window_end,
                                 )
 
                         # Sell any partial hedge fills
@@ -1571,7 +1730,7 @@ def execute_trade(
 
     if not is_reversal:
         entry_result, hedge_result, hedge_price = place_entry_and_hedge_atomic(
-            symbol, token_id, side, price, size
+            symbol, token_id, side, price, size, trade_params.get("window_end")
         )
 
         if not entry_result or not entry_result.get("success"):
