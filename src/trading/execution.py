@@ -1315,9 +1315,8 @@ def place_entry_and_hedge_atomic(
                 final_entry_filled = final_entry_filled_size >= (entry_size - 0.01)
                 final_hedge_filled = final_hedge_filled_size >= (entry_size - 0.01)
 
-                # CRITICAL: Handle partial fills with emergency sell
-                # NEW BEHAVIOR: Emergency sell BOTH positions on ANY partial fill
-                # to prevent orphaned positions
+                # CRITICAL: Handle partial fills with smart hold logic
+                # Check which position is more profitable and hold the winner
                 if final_entry_filled and not final_hedge_filled:
                     # Entry filled but hedge didn't (or partially filled)
                     log(
@@ -1334,33 +1333,167 @@ def place_entry_and_hedge_atomic(
                     except Exception as e:
                         log_error(f"[{symbol}] Error cancelling {hedge_side}: {e}")
 
-                    # Emergency sell entry position
-                    log(
-                        f"   💥 [{symbol}] Emergency selling entry position ({final_entry_filled_size:.2f} shares)"
-                    )
-                    emergency_sell_position(
-                        symbol=symbol,
-                        token_id=entry_token_id,
-                        size=final_entry_filled_size,
-                        reason="hedge timeout after entry fill",
-                        entry_order_id=entry_order_id,
-                        entry_price=entry_price,  # Use entry price as reference
-                        window_end=window_end,
+                    # SMART DECISION: Check which position is more profitable
+                    # CRITICAL: Can only hold ONE side (holding both = 100% loss on losing side)
+                    from src.utils.websocket_manager import ws_manager
+                    from src.config.settings import (
+                        EMERGENCY_SELL_HOLD_IF_WINNING,
+                        EMERGENCY_SELL_PRICE_TOLERANCE_PCT,
+                        EMERGENCY_SELL_MIN_PROFIT_CENTS,
                     )
 
-                    # If hedge partially filled, emergency sell those shares too
-                    if final_hedge_filled_size > 0.01:
+                    entry_profit = 0.0
+                    hedge_profit = 0.0
+                    entry_mid = 0.0
+                    hedge_mid = 0.0
+
+                    if EMERGENCY_SELL_HOLD_IF_WINNING:
+                        # Check entry position profit
+                        entry_bid, entry_ask = ws_manager.get_bid_ask(entry_token_id)
+                        if entry_bid and entry_ask and entry_bid > 0.01:
+                            entry_mid = (entry_bid + entry_ask) / 2
+                            entry_profit = entry_mid - entry_price
+                            log(
+                                f"   📊 [{symbol}] {entry_side}: Filled ${entry_price:.2f}, now ${entry_mid:.2f} ({entry_profit:+.2f})"
+                            )
+
+                        # Check hedge position profit (if partially filled)
+                        if final_hedge_filled_size > 0.01:
+                            hedge_bid, hedge_ask = ws_manager.get_bid_ask(
+                                hedge_token_id
+                            )
+                            if hedge_bid and hedge_ask and hedge_bid > 0.01:
+                                hedge_mid = (hedge_bid + hedge_ask) / 2
+                                hedge_profit = hedge_mid - hedge_price
+                                log(
+                                    f"   📊 [{symbol}] {hedge_side}: Filled ${hedge_price:.2f}, now ${hedge_mid:.2f} ({hedge_profit:+.2f})"
+                                )
+
+                    # CRITICAL LOGIC: Only hold the MORE profitable side (can't hold both!)
+                    # If entry is more profitable → hold entry, sell hedge
+                    # If hedge is more profitable → hold hedge, sell entry
+                    # If neither profitable → sell both
+                    min_profit = EMERGENCY_SELL_MIN_PROFIT_CENTS / 100
+
+                    # FALLBACK: If orderbook unavailable, infer winner from entry prices
+                    # Lower entry price = cheaper = more profit potential
+                    if (
+                        entry_mid == 0.0
+                        and hedge_mid == 0.0
+                        and final_hedge_filled_size > 0.01
+                    ):
+                        # Use entry prices as proxy for profitability
+                        # Cheaper entry = higher profit potential in binary market
+                        if entry_price < hedge_price:
+                            # Entry cheaper → entry is winning
+                            entry_profit = 0.10  # Fake profit to trigger hold logic
+                            log(
+                                f"   🔮 [{symbol}] Orderbook unavailable - inferring from entry prices: {entry_side} ${entry_price:.2f} < {hedge_side} ${hedge_price:.2f} → {entry_side} is winning"
+                            )
+                        else:
+                            # Hedge cheaper → hedge is winning
+                            hedge_profit = 0.10  # Fake profit to trigger hold logic
+                            log(
+                                f"   🔮 [{symbol}] Orderbook unavailable - inferring from entry prices: {hedge_side} ${hedge_price:.2f} < {entry_side} ${entry_price:.2f} → {hedge_side} is winning"
+                            )
+
+                    if (
+                        EMERGENCY_SELL_HOLD_IF_WINNING
+                        and entry_profit > min_profit
+                        and entry_profit > hedge_profit
+                    ):
+                        # Entry is clearly winning - HOLD IT
                         log(
-                            f"   💥 [{symbol}] Emergency selling partial hedge position ({final_hedge_filled_size:.2f} shares)"
+                            f"   🎯 [{symbol}] {entry_side} is MORE PROFITABLE (+${entry_profit:.2f}) - HOLDING {entry_side}, selling {hedge_side}"
+                        )
+                        # Keep entry, sell hedge (if any)
+                        if final_hedge_filled_size > 0.01:
+                            if final_hedge_filled_size < MIN_ORDER_SIZE:
+                                log_error(
+                                    f"   ⚠️  [{symbol}] Partial {hedge_side} fill ({final_hedge_filled_size:.2f} shares) is below minimum order size ({MIN_ORDER_SIZE})"
+                                )
+                                log_error(
+                                    f"   🔒 [{symbol}] Cannot emergency sell - HOLDING {entry_side}, keeping orphaned {hedge_side}"
+                                )
+                                # Partial hedge too small to sell, but entry is winning so keep it
+                            else:
+                                log(
+                                    f"   💥 [{symbol}] Emergency selling partial {hedge_side} position ({final_hedge_filled_size:.2f} shares)"
+                                )
+                                emergency_sell_position(
+                                    symbol=symbol,
+                                    token_id=hedge_token_id,
+                                    size=final_hedge_filled_size,
+                                    reason=f"holding winning {entry_side}, liquidating {hedge_side}",
+                                    entry_order_id=hedge_order_id,
+                                    entry_price=hedge_price,
+                                    window_end=window_end,
+                                )
+                    elif (
+                        EMERGENCY_SELL_HOLD_IF_WINNING
+                        and final_hedge_filled_size > 0.01
+                        and hedge_profit > min_profit
+                        and hedge_profit > entry_profit
+                    ):
+                        # Hedge is clearly winning - HOLD IT
+                        log(
+                            f"   🎯 [{symbol}] {hedge_side} is MORE PROFITABLE (+${hedge_profit:.2f}) - HOLDING {hedge_side}, selling {entry_side}"
+                        )
+                        # Keep hedge, sell entry
+                        if final_entry_filled_size < MIN_ORDER_SIZE:
+                            log_error(
+                                f"   ⚠️  [{symbol}] {entry_side} fill ({final_entry_filled_size:.2f} shares) is below minimum order size ({MIN_ORDER_SIZE})"
+                            )
+                            log_error(
+                                f"   🔒 [{symbol}] Cannot emergency sell - HOLDING {hedge_side}, keeping orphaned {entry_side}"
+                            )
+                            # Entry too small to sell, but hedge is winning so keep it
+                        else:
+                            log(
+                                f"   💥 [{symbol}] Emergency selling {entry_side} position ({final_entry_filled_size:.2f} shares)"
+                            )
+                            emergency_sell_position(
+                                symbol=symbol,
+                                token_id=entry_token_id,
+                                size=final_entry_filled_size,
+                                reason=f"holding winning {hedge_side}, liquidating {entry_side}",
+                                entry_order_id=entry_order_id,
+                                entry_price=entry_price,
+                                window_end=window_end,
+                            )
+                    else:
+                        # Neither side is clearly winning OR both equally profitable
+                        # Liquidate everything to minimize risk
+                        log(
+                            f"   💥 [{symbol}] No clear winner - emergency selling ALL positions"
+                        )
+                        log(
+                            f"   💥 [{symbol}] Emergency selling entry position ({final_entry_filled_size:.2f} shares)"
                         )
                         emergency_sell_position(
                             symbol=symbol,
-                            token_id=hedge_token_id,
-                            size=final_hedge_filled_size,
-                            reason="partial hedge fill cleanup",
-                            entry_order_id=hedge_order_id,
-                            entry_price=hedge_price,  # Use hedge price as reference
+                            token_id=entry_token_id,
+                            size=final_entry_filled_size,
+                            reason="hedge timeout after entry fill",
+                            entry_order_id=entry_order_id,
+                            entry_price=entry_price,
+                            window_end=window_end,
                         )
+
+                        # If hedge partially filled, emergency sell those shares too
+                        if final_hedge_filled_size > 0.01:
+                            log(
+                                f"   💥 [{symbol}] Emergency selling partial hedge position ({final_hedge_filled_size:.2f} shares)"
+                            )
+                            emergency_sell_position(
+                                symbol=symbol,
+                                token_id=hedge_token_id,
+                                size=final_hedge_filled_size,
+                                reason="partial hedge fill cleanup",
+                                entry_order_id=hedge_order_id,
+                                entry_price=hedge_price,
+                                window_end=window_end,
+                            )
 
                     # Note: Hedge order already cancelled at the top of this block
 
@@ -1423,6 +1556,28 @@ def place_entry_and_hedge_atomic(
                     # If entry is more profitable → hold entry, sell hedge
                     # If neither profitable → sell both
                     min_profit = EMERGENCY_SELL_MIN_PROFIT_CENTS / 100
+
+                    # FALLBACK: If orderbook unavailable, infer winner from entry prices
+                    # Lower entry price = cheaper = more profit potential
+                    if (
+                        hedge_mid == 0.0
+                        and entry_mid == 0.0
+                        and final_entry_filled_size > 0.01
+                    ):
+                        # Use entry prices as proxy for profitability
+                        # Cheaper entry = higher profit potential in binary market
+                        if hedge_price < entry_price:
+                            # Hedge cheaper → hedge is winning
+                            hedge_profit = 0.10  # Fake profit to trigger hold logic
+                            log(
+                                f"   🔮 [{symbol}] Orderbook unavailable - inferring from entry prices: {hedge_side} ${hedge_price:.2f} < {entry_side} ${entry_price:.2f} → {hedge_side} is winning"
+                            )
+                        else:
+                            # Entry cheaper → entry is winning
+                            entry_profit = 0.10  # Fake profit to trigger hold logic
+                            log(
+                                f"   🔮 [{symbol}] Orderbook unavailable - inferring from entry prices: {entry_side} ${entry_price:.2f} < {hedge_side} ${hedge_price:.2f} → {entry_side} is winning"
+                            )
 
                     if (
                         EMERGENCY_SELL_HOLD_IF_WINNING
