@@ -304,6 +304,12 @@ def main():
                     log(f"🪟  NEW WINDOW: {range_str}")
                     last_window_logged = w_start
 
+                    # Auto-redeem winning tokens from recently settled trades
+                    # Run ONLY at window boundaries (every 15 minutes) to avoid spam
+                    from src.trading.settlement import redeem_recent_settled_trades
+
+                    redeem_recent_settled_trades()
+
             is_verbose_cycle = now_ts - last_verbose_log >= 60
             is_order_check_cycle = now_ts - last_order_check >= 10
 
@@ -361,12 +367,6 @@ def main():
 
             if now_ts - last_settle_check >= 60:
                 check_and_settle_trades()
-
-                # Auto-redeem winning tokens from recently settled trades
-                from src.trading.settlement import redeem_recent_settled_trades
-
-                redeem_recent_settled_trades()
-
                 last_settle_check = now_ts
 
             # Periodic position sync to detect external merges/closes
