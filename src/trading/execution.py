@@ -177,6 +177,51 @@ def emergency_sell_position(
                     f"   ⚠️  [{symbol}] Could not calculate time remaining: {e}, using AGGRESSIVE strategy"
                 )
 
+        # CHECK MIN_ORDER_SIZE: If position is too small to sell, hold it if winning
+        # This prevents orphaned small positions from causing emergency sell failures
+        if size < MIN_ORDER_SIZE:
+            log(
+                f"   ⚠️  [{symbol}] Position size {size:.2f} < minimum {MIN_ORDER_SIZE} - cannot place sell order"
+            )
+
+            # Check if winning - if so, hold through resolution
+            if entry_price and entry_price > 0.01:
+                from src.utils.websocket_manager import ws_manager
+
+                current_bid, current_ask = ws_manager.get_bid_ask(token_id)
+                if (
+                    current_bid
+                    and current_ask
+                    and current_bid > 0.01
+                    and current_ask > 0.01
+                ):
+                    current_mid = (current_bid + current_ask) / 2
+
+                    if current_mid > entry_price:
+                        log(
+                            f"   🎉 [{symbol}] Small position is WINNING! Entry ${entry_price:.2f}, now ${current_mid:.2f} (+${current_mid - entry_price:.2f})"
+                        )
+                        log(
+                            f"   🎯 [{symbol}] HOLDING through resolution - position too small to sell but profitable"
+                        )
+                        return True  # Hold winning position
+                    else:
+                        log(
+                            f"   😔 [{symbol}] Small position is LOSING! Entry ${entry_price:.2f}, now ${current_mid:.2f} (-${entry_price - current_mid:.2f})"
+                        )
+                        log(
+                            f"   🔒 [{symbol}] Position ORPHANED - too small to sell, will lose on resolution"
+                        )
+                        return False  # Can't sell, position will be orphaned
+                else:
+                    log(
+                        f"   ⚠️  [{symbol}] Cannot determine if winning (no market price), position ORPHANED"
+                    )
+                    return False
+            else:
+                log(f"   🔒 [{symbol}] Position ORPHANED - too small to sell")
+                return False
+
         # SMART POSITION HOLD: Check if filled price is still reasonable vs current market
         # If position is on winning side, HOLD it as directional bet instead of emergency sell
         # This prevents dumping positions that are actually favorable
