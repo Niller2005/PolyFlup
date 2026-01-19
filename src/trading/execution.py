@@ -18,6 +18,11 @@ from src.trading.orders import (
 )
 from src.data.market_data import get_token_ids
 
+# Track POST_ONLY failures per symbol to switch to GTC after repeated crossing
+# Key: symbol, Value: consecutive failure count
+_post_only_failures: Dict[str, int] = {}
+MAX_POST_ONLY_ATTEMPTS = 3  # Switch to GTC after this many failures
+
 
 def _record_exit_price(
     entry_order_id: Optional[str], exit_price: float, symbol: str
@@ -720,26 +725,39 @@ def place_entry_and_hedge_atomic(
         # Calculate edge: amount under threshold
         edge_cents = (COMBINED_PRICE_THRESHOLD - final_combined) * 100
 
-        log(
-            f"   📊 [{symbol}] Both orders using MAKER (POST_ONLY) pricing: {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f} (combined ${final_combined:.2f}, {edge_cents:.1f}¢ edge)"
-        )
+        # Check if we should use POST_ONLY or switch to GTC due to repeated failures
+        use_post_only = _post_only_failures.get(symbol, 0) < MAX_POST_ONLY_ATTEMPTS
 
-        # Create batch order - both use POST_ONLY for maker rebates
+        if use_post_only:
+            log(
+                f"   📊 [{symbol}] Both orders using MAKER (POST_ONLY) pricing: {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f} (combined ${final_combined:.2f}, {edge_cents:.1f}¢ edge)"
+            )
+        else:
+            failure_count = _post_only_failures.get(symbol, 0)
+            log(
+                f"   ⚠️  [{symbol}] POST_ONLY failed {failure_count}x - switching to GTC (accepting taker fees)"
+            )
+            log(
+                f"   📊 [{symbol}] Both orders using TAKER (GTC) pricing: {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f} (combined ${final_combined:.2f}, {edge_cents:.1f}¢ edge)"
+            )
+
+        # Create batch order - use POST_ONLY for maker rebates, or GTC after repeated failures
         # postOnly=True ensures orders are rejected if they would cross the spread
+        # GTC accepts taker fees (1.54%) but guarantees execution
         orders = [
             {
                 "token_id": entry_token_id,
                 "price": entry_price,
                 "size": entry_size,
                 "side": BUY,
-                "post_only": True,  # POST_ONLY: Earn 0.15% rebate, ensure whole number fills
+                "post_only": use_post_only,  # POST_ONLY (maker) or GTC (taker) based on failure history
             },
             {
                 "token_id": hedge_token_id,
                 "price": hedge_price,
                 "size": entry_size,
                 "side": BUY,
-                "post_only": True,  # POST_ONLY: Earn 0.15% rebate
+                "post_only": use_post_only,  # POST_ONLY (maker) or GTC (taker) based on failure history
             },
         ]
 
@@ -767,6 +785,21 @@ def place_entry_and_hedge_atomic(
 
         entry_success = entry_result.get("success")
         hedge_success = hedge_result.get("success")
+
+        # Check for POST_ONLY crossing errors and track failures
+        entry_error = entry_result.get("error", "")
+        hedge_error = hedge_result.get("error", "")
+
+        post_only_crossed = False
+        if (
+            "order crosses book" in entry_error.lower()
+            or "order crosses book" in hedge_error.lower()
+        ):
+            post_only_crossed = True
+            _post_only_failures[symbol] = _post_only_failures.get(symbol, 0) + 1
+            log(
+                f"   🚨 [{symbol}] POST_ONLY crossing detected (failure #{_post_only_failures[symbol]})"
+            )
 
         # CRITICAL: Handle order placement failures
         # If one succeeds and other fails, clean up the successful one
@@ -1038,6 +1071,15 @@ def place_entry_and_hedge_atomic(
                         f"   ✅ [{symbol}] Both orders filled after {elapsed}s - trade complete!"
                     )
                     both_filled = True
+
+                    # Reset POST_ONLY failure counter on successful atomic placement
+                    if symbol in _post_only_failures:
+                        old_count = _post_only_failures[symbol]
+                        del _post_only_failures[symbol]
+                        log(
+                            f"   🔄 [{symbol}] POST_ONLY failure counter reset (was {old_count})"
+                        )
+
                     break
 
                 # Log partial fills
