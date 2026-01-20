@@ -67,6 +67,12 @@ LIQUIDITY_MAX_SPREAD_PCT = float(
 LIQUIDITY_MAX_COMBINED_SPREAD_PCT = float(
     os.getenv("LIQUIDITY_MAX_COMBINED_SPREAD_PCT", "12.0")
 )  # Reject if entry+hedge spread > 12%
+LIQUIDITY_MIN_FILL_VELOCITY = float(
+    os.getenv("LIQUIDITY_MIN_FILL_VELOCITY", "10.0")
+)  # Minimum shares filled per minute (0 = disabled)
+LIQUIDITY_FILL_LOOKBACK_SECONDS = int(
+    os.getenv("LIQUIDITY_FILL_LOOKBACK_SECONDS", "120")
+)  # Look at last 120 seconds of fills
 
 
 # Position Management
@@ -101,6 +107,9 @@ UNFILLED_TIMEOUT_SECONDS = int(
 HEDGE_FILL_TIMEOUT_SECONDS = int(
     os.getenv("HEDGE_FILL_TIMEOUT_SECONDS", "90")
 )  # Time to wait for hedge to fill before cancelling entry
+HEDGE_GTC_FALLBACK_SECONDS = int(
+    os.getenv("HEDGE_GTC_FALLBACK_SECONDS", "30")
+)  # Switch hedge to GTC (taker) after this many seconds if entry filled but hedge not
 HEDGE_POLL_INTERVAL_SECONDS = int(
     os.getenv("HEDGE_POLL_INTERVAL_SECONDS", "5")
 )  # Check hedge fill status every N seconds

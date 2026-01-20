@@ -1352,6 +1352,7 @@ def place_entry_and_hedge_atomic(
         from src.config.settings import (
             HEDGE_FILL_TIMEOUT_SECONDS,
             HEDGE_POLL_INTERVAL_SECONDS,
+            HEDGE_GTC_FALLBACK_SECONDS,
         )
 
         entry_order_id = entry_result.get("order_id")
@@ -1362,11 +1363,12 @@ def place_entry_and_hedge_atomic(
             return None, None, None
 
         log(
-            f"   ⏱️  [{symbol}] Monitoring fills for {HEDGE_FILL_TIMEOUT_SECONDS}s (polling every {HEDGE_POLL_INTERVAL_SECONDS}s)..."
+            f"   ⏱️  [{symbol}] Monitoring fills for {HEDGE_FILL_TIMEOUT_SECONDS}s (GTC fallback @ {HEDGE_GTC_FALLBACK_SECONDS}s, polling every {HEDGE_POLL_INTERVAL_SECONDS}s)"
         )
 
         elapsed = 0
         both_filled = False
+        gtc_switched = False  # Track if we've switched hedge to GTC
 
         while elapsed < HEDGE_FILL_TIMEOUT_SECONDS:
             time.sleep(HEDGE_POLL_INTERVAL_SECONDS)
@@ -1405,6 +1407,105 @@ def place_entry_and_hedge_atomic(
                         )
 
                     break
+
+                # GTC FALLBACK: If entry filled but hedge not after 30s, switch hedge to GTC
+                # This pays taker fee (~$0.04) but prevents emergency liquidation loss (~$1.90)
+                if (
+                    elapsed >= HEDGE_GTC_FALLBACK_SECONDS
+                    and entry_filled
+                    and not hedge_filled
+                    and not gtc_switched
+                    and use_post_only  # Only switch if we started with POST_ONLY
+                ):
+                    log(
+                        f"   ⚠️  [{symbol}] Entry filled but hedge timeout after {elapsed}s - switching hedge to GTC (taker)"
+                    )
+
+                    try:
+                        # Cancel existing POST_ONLY hedge order
+                        cancel_order(hedge_order_id)
+                        log(
+                            f"   🚫 [{symbol}] Cancelled POST_ONLY hedge order {hedge_order_id[:10]}"
+                        )
+
+                        # Get fresh hedge pricing (slightly more aggressive to ensure fill)
+                        from src.utils.websocket_manager import ws_manager
+
+                        hedge_bid, hedge_ask = ws_manager.get_bid_ask(hedge_token_id)
+
+                        # If no websocket data, use original price + 1¢
+                        if not hedge_bid or not hedge_ask or hedge_ask < 0.02:
+                            gtc_hedge_price = min(0.99, hedge_price + 0.01)
+                            log(
+                                f"   📊 [{symbol}] Using fallback pricing: ${gtc_hedge_price:.2f}"
+                            )
+                        else:
+                            # Use ask price - 1¢ to cross spread but not overpay
+                            gtc_hedge_price = round(hedge_ask - 0.01, 2)
+                            gtc_hedge_price = max(
+                                0.01, min(0.99, gtc_hedge_price)
+                            )  # Clamp to valid range
+                            log(
+                                f"   📊 [{symbol}] Hedge GTC pricing: ask=${hedge_ask:.2f} → ${gtc_hedge_price:.2f}"
+                            )
+
+                        # Verify combined price still profitable
+                        combined_with_gtc = entry_price + gtc_hedge_price
+                        if combined_with_gtc > 0.99:
+                            log(
+                                f"   ⚠️  [{symbol}] GTC hedge price ${gtc_hedge_price:.2f} + entry ${entry_price:.2f} = ${combined_with_gtc:.2f} > $0.99 - adjusting"
+                            )
+                            gtc_hedge_price = round(0.98 - entry_price, 2)
+                            gtc_hedge_price = max(0.01, min(0.99, gtc_hedge_price))
+                            log(
+                                f"   🔧 [{symbol}] Adjusted GTC hedge to ${gtc_hedge_price:.2f} (combined ${entry_price + gtc_hedge_price:.2f})"
+                            )
+
+                        # Calculate remaining hedge size (in case of partial fill)
+                        remaining_hedge_size = entry_size - hedge_filled_size
+
+                        # Place GTC hedge order (will pay taker fee but guarantees fill)
+                        from src.trading.orders.limit import place_limit_order
+
+                        gtc_result = place_limit_order(
+                            token_id=hedge_token_id,
+                            price=gtc_hedge_price,
+                            size=remaining_hedge_size,
+                            side=BUY,
+                            order_type="GTC",  # Good-til-cancelled = taker order
+                        )
+
+                        if gtc_result.get("success"):
+                            hedge_order_id = gtc_result.get("order_id")
+                            hedge_price = gtc_hedge_price  # Update for DB tracking
+                            gtc_switched = True
+
+                            taker_fee_pct = 1.54
+                            taker_fee_cost = (
+                                remaining_hedge_size
+                                * gtc_hedge_price
+                                * taker_fee_pct
+                                / 100
+                            )
+
+                            log(
+                                f"   ✅ [{symbol}] Hedge switched to GTC @ ${gtc_hedge_price:.2f} (ID: {hedge_order_id[:10]})"
+                            )
+                            log(
+                                f"   💸 [{symbol}] Will pay taker fee: ${taker_fee_cost:.3f} ({taker_fee_pct}% of ${remaining_hedge_size * gtc_hedge_price:.2f})"
+                            )
+                            log(
+                                f"   💰 [{symbol}] Combined cost: ${entry_price + gtc_hedge_price:.2f} (entry + hedge + fee vs ${0.99:.2f} settlement)"
+                            )
+                        else:
+                            log_error(
+                                f"[{symbol}] GTC hedge placement failed: {gtc_result.get('error')}"
+                            )
+                            # Fall through to normal timeout handling
+
+                    except Exception as gtc_err:
+                        log_error(f"[{symbol}] Error switching to GTC: {gtc_err}")
+                        # Fall through to normal timeout handling
 
                 # Log partial fills
                 if entry_filled_size > 0 or hedge_filled_size > 0:

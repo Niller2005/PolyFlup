@@ -1,6 +1,7 @@
 """Market information and pricing"""
 
 import time
+from datetime import datetime, timezone
 from typing import List, Dict, Optional, Any
 from py_clob_client.clob_types import BookParams, TradeParams
 from src.utils.logger import log
@@ -205,6 +206,84 @@ def check_liquidity(token_id: str, size: float, warn_threshold: float = 0.05) ->
     return True
 
 
+def _check_fill_velocity(
+    token_id: str, min_velocity: float, lookback_seconds: int
+) -> tuple[bool, float]:
+    """
+    Check if token has sufficient recent fill activity (velocity).
+
+    Prevents trading on illiquid markets that show orderbook depth but no actual fills.
+
+    Args:
+        token_id: Token ID to check
+        min_velocity: Minimum shares filled per minute required
+        lookback_seconds: How far back to look for trades (e.g., 120 = last 2 minutes)
+
+    Returns:
+        tuple[bool, float]:
+            - is_sufficient: True if velocity meets minimum, False otherwise
+            - actual_velocity: Measured shares per minute
+    """
+    if min_velocity <= 0:
+        # Velocity check disabled
+        return True, 0.0
+
+    try:
+        # Get recent trades for this token
+        trades = get_trades(asset_id=token_id, limit=200)
+
+        if not trades:
+            # No recent trades = illiquid market
+            return False, 0.0
+
+        # Calculate cutoff timestamp
+        now = datetime.now(timezone.utc)
+        cutoff_time = now.timestamp() - lookback_seconds
+
+        # Sum filled shares within lookback window
+        total_filled = 0.0
+        for trade in trades:
+            # Parse trade timestamp (format varies by API)
+            trade_ts = None
+            if isinstance(trade, dict):
+                # Try different timestamp field names
+                ts_field = (
+                    trade.get("timestamp")
+                    or trade.get("created_at")
+                    or trade.get("time")
+                )
+                if ts_field:
+                    try:
+                        # Handle both unix timestamp (int/float) and ISO string
+                        if isinstance(ts_field, (int, float)):
+                            trade_ts = float(ts_field)
+                        else:
+                            # Parse ISO string
+                            dt = datetime.fromisoformat(
+                                str(ts_field).replace("Z", "+00:00")
+                            )
+                            trade_ts = dt.timestamp()
+                    except Exception:
+                        continue
+
+            if trade_ts and trade_ts >= cutoff_time:
+                # Sum the size of this trade
+                size = trade.get("size", 0) if isinstance(trade, dict) else 0
+                total_filled += float(size) if size else 0.0
+
+        # Calculate velocity (shares per minute)
+        lookback_minutes = lookback_seconds / 60.0
+        velocity = total_filled / lookback_minutes if lookback_minutes > 0 else 0.0
+
+        return velocity >= min_velocity, velocity
+
+    except Exception as e:
+        log(f"   ⚠️  Fill velocity check error: {e}")
+        # On error, fail-open (return True) since this is an additional safety check
+        # The core depth/spread checks are still required
+        return True, 0.0
+
+
 def check_atomic_hedge_liquidity(
     entry_token_id: str, hedge_token_id: str, size: float
 ) -> tuple[bool, str, dict]:
@@ -212,7 +291,7 @@ def check_atomic_hedge_liquidity(
     Check if market has sufficient liquidity for atomic hedge to succeed.
 
     Pre-flight liquidity check to prevent catastrophic emergency liquidations.
-    Checks orderbook depth, spread width, and combined spread threshold.
+    Checks orderbook depth, spread width, combined spread threshold, and fill velocity.
 
     Args:
         entry_token_id: Token ID for entry side
@@ -223,13 +302,15 @@ def check_atomic_hedge_liquidity(
         tuple[bool, str, dict]:
             - is_liquid: True if sufficient liquidity, False to skip trade
             - skip_reason: Human-readable reason for skipping (empty if liquid)
-            - metrics: Dict with spread/depth data for logging
+            - metrics: Dict with spread/depth/velocity data for logging
     """
     from src.config.settings import (
         ENABLE_LIQUIDITY_CHECK,
         LIQUIDITY_MIN_DEPTH_RATIO,
         LIQUIDITY_MAX_SPREAD_PCT,
         LIQUIDITY_MAX_COMBINED_SPREAD_PCT,
+        LIQUIDITY_MIN_FILL_VELOCITY,
+        LIQUIDITY_FILL_LOOKBACK_SECONDS,
     )
     from src.utils.websocket_manager import ws_manager
 
@@ -243,6 +324,8 @@ def check_atomic_hedge_liquidity(
         "combined_spread": None,
         "entry_depth": None,
         "hedge_depth": None,
+        "entry_velocity": None,
+        "hedge_velocity": None,
     }
 
     try:
@@ -373,13 +456,53 @@ def check_atomic_hedge_liquidity(
                 log(f"   ⚠️  Orderbook depth check failed: {depth_err}")
                 return False, "Unable to check orderbook depth (fail-closed)", metrics
 
+        # Check 4: Fill velocity (recent trading activity)
+        # This prevents "liquidity mirages" where orderbook shows depth but no actual fills
+        if LIQUIDITY_MIN_FILL_VELOCITY > 0:
+            entry_sufficient, entry_velocity = _check_fill_velocity(
+                entry_token_id,
+                LIQUIDITY_MIN_FILL_VELOCITY,
+                LIQUIDITY_FILL_LOOKBACK_SECONDS,
+            )
+            hedge_sufficient, hedge_velocity = _check_fill_velocity(
+                hedge_token_id,
+                LIQUIDITY_MIN_FILL_VELOCITY,
+                LIQUIDITY_FILL_LOOKBACK_SECONDS,
+            )
+
+            metrics["entry_velocity"] = entry_velocity
+            metrics["hedge_velocity"] = hedge_velocity
+
+            if not entry_sufficient:
+                return (
+                    False,
+                    f"Entry velocity too low: {entry_velocity:.1f} shares/min (need {LIQUIDITY_MIN_FILL_VELOCITY:.1f})",
+                    metrics,
+                )
+
+            if not hedge_sufficient:
+                return (
+                    False,
+                    f"Hedge velocity too low: {hedge_velocity:.1f} shares/min (need {LIQUIDITY_MIN_FILL_VELOCITY:.1f})",
+                    metrics,
+                )
+
         # All checks passed - log success for visibility
+        velocity_str = ""
+        if LIQUIDITY_MIN_FILL_VELOCITY > 0:
+            entry_vel = metrics.get("entry_velocity", 0)
+            hedge_vel = metrics.get("hedge_velocity", 0)
+            velocity_str = (
+                f", entry_vel={entry_vel:.1f}/min, hedge_vel={hedge_vel:.1f}/min"
+            )
+
         log(
             f"   ✅ Liquidity check passed: "
             f"entry_spread={metrics.get('entry_spread', 'N/A'):.3f}, "
             f"hedge_spread={metrics.get('hedge_spread', 'N/A'):.3f}, "
             f"entry_depth={metrics.get('entry_depth', 'N/A'):.1f}, "
             f"hedge_depth={metrics.get('hedge_depth', 'N/A'):.1f}"
+            f"{velocity_str}"
         )
         return True, "", metrics
 
