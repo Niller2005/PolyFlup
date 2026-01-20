@@ -32,6 +32,16 @@ COMBINED_PRICE_THRESHOLD = float(
     os.getenv("COMBINED_PRICE_THRESHOLD", "0.97")
 )  # Max combined entry+hedge price for profit (default 3¢ buffer, increased from 1.5¢)
 
+# Confidence-Biased Fill Priority
+# Makes winning side (high confidence) more aggressive to fill first
+ENABLE_CONFIDENCE_BOOST = os.getenv("ENABLE_CONFIDENCE_BOOST", "YES").upper() == "YES"
+CONFIDENCE_BOOST_MAX = float(
+    os.getenv("CONFIDENCE_BOOST_MAX", "0.03")
+)  # Maximum additional price boost for 100% confidence (3¢)
+CONFIDENCE_BOOST_MIN_CONFIDENCE = float(
+    os.getenv("CONFIDENCE_BOOST_MIN_CONFIDENCE", "0.50")
+)  # Only apply boost if confidence >= 50%
+
 # Adaptive Combined Price Threshold (Option C)
 ENABLE_ADAPTIVE_THRESHOLD = (
     os.getenv("ENABLE_ADAPTIVE_THRESHOLD", "YES").upper() == "YES"

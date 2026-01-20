@@ -352,19 +352,48 @@ def _prepare_trade_params(
         if spread <= TIGHT_SPREAD_THRESHOLD:
             # TIGHT SPREAD: Use maker pricing (bid + 2 cents) for better fill rate
             # More aggressive than bid+1¢ but still maker (earns 0.15% rebate)
-            price = round(best_bid_val + 0.02, 2)
+            base_price = round(best_bid_val + 0.02, 2)
             pricing_strategy = "maker (tight spread)"
         else:
             # WIDE SPREAD: Use mid-market pricing for better value
             mid_market = (best_bid_val + best_ask_val) / 2.0
-            price = round(mid_market, 2)  # Use mid-market directly
+            base_price = round(mid_market, 2)  # Use mid-market directly
             # Clamp to valid range
-            price = max(best_bid_val + 0.02, min(best_ask_val - 0.01, price))
+            base_price = max(best_bid_val + 0.02, min(best_ask_val - 0.01, base_price))
             pricing_strategy = "maker (wide spread)"
 
+        # Apply confidence boost to prioritize filling winning side first
+        from src.config.settings import (
+            ENABLE_CONFIDENCE_BOOST,
+            CONFIDENCE_BOOST_MAX,
+            CONFIDENCE_BOOST_MIN_CONFIDENCE,
+        )
+
+        price = base_price
+        confidence_boost_applied = 0.0
+
+        if (
+            ENABLE_CONFIDENCE_BOOST
+            and sizing_confidence >= CONFIDENCE_BOOST_MIN_CONFIDENCE
+        ):
+            # Scale boost linearly with confidence: 0% at min_confidence, full boost at 100%
+            confidence_ratio = (sizing_confidence - CONFIDENCE_BOOST_MIN_CONFIDENCE) / (
+                1.0 - CONFIDENCE_BOOST_MIN_CONFIDENCE
+            )
+            confidence_boost_applied = CONFIDENCE_BOOST_MAX * confidence_ratio
+            price = round(base_price + confidence_boost_applied, 2)
+            # Clamp to valid range (don't exceed ask)
+            price = min(price, best_ask_val - 0.01)
+            pricing_strategy += f" +boost"
+
         if verbose:
+            boost_str = (
+                f" (base=${base_price:.2f} + {confidence_boost_applied:.3f} boost)"
+                if confidence_boost_applied > 0
+                else ""
+            )
             log(
-                f"   💹 [{symbol}] {side} pricing: bid=${best_bid_val:.2f}, ask=${best_ask_val:.2f}, spread=${spread:.2f} → ${price:.2f} ({pricing_strategy})"
+                f"   💹 [{symbol}] {side} pricing: bid=${best_bid_val:.2f}, ask=${best_ask_val:.2f}, spread=${spread:.2f} → ${price:.2f} ({pricing_strategy}){boost_str}"
             )
     else:
         token_id = down_id
@@ -376,19 +405,50 @@ def _prepare_trade_params(
 
         if down_spread <= TIGHT_SPREAD_THRESHOLD:
             # TIGHT SPREAD: Use maker pricing (bid + 2 cents) for better fill rate
-            price = round(down_best_bid + 0.02, 2)
+            base_price = round(down_best_bid + 0.02, 2)
             pricing_strategy = "maker (tight spread)"
         else:
             # WIDE SPREAD: Use mid-market pricing
             down_mid_market = (down_best_bid + down_best_ask) / 2.0
-            price = round(down_mid_market, 2)  # Use mid-market directly
+            base_price = round(down_mid_market, 2)  # Use mid-market directly
             # Clamp to valid range
-            price = max(down_best_bid + 0.02, min(down_best_ask - 0.01, price))
+            base_price = max(
+                down_best_bid + 0.02, min(down_best_ask - 0.01, base_price)
+            )
             pricing_strategy = "maker (wide spread)"
 
+        # Apply confidence boost to prioritize filling winning side first
+        from src.config.settings import (
+            ENABLE_CONFIDENCE_BOOST,
+            CONFIDENCE_BOOST_MAX,
+            CONFIDENCE_BOOST_MIN_CONFIDENCE,
+        )
+
+        price = base_price
+        confidence_boost_applied = 0.0
+
+        if (
+            ENABLE_CONFIDENCE_BOOST
+            and sizing_confidence >= CONFIDENCE_BOOST_MIN_CONFIDENCE
+        ):
+            # Scale boost linearly with confidence: 0% at min_confidence, full boost at 100%
+            confidence_ratio = (sizing_confidence - CONFIDENCE_BOOST_MIN_CONFIDENCE) / (
+                1.0 - CONFIDENCE_BOOST_MIN_CONFIDENCE
+            )
+            confidence_boost_applied = CONFIDENCE_BOOST_MAX * confidence_ratio
+            price = round(base_price + confidence_boost_applied, 2)
+            # Clamp to valid range (don't exceed ask)
+            price = min(price, down_best_ask - 0.01)
+            pricing_strategy += f" +boost"
+
         if verbose:
+            boost_str = (
+                f" (base=${base_price:.2f} + {confidence_boost_applied:.3f} boost)"
+                if confidence_boost_applied > 0
+                else ""
+            )
             log(
-                f"   💹 [{symbol}] {side} pricing: bid=${down_best_bid:.2f}, ask=${down_best_ask:.2f}, spread=${down_spread:.2f} → ${price:.2f} ({pricing_strategy})"
+                f"   💹 [{symbol}] {side} pricing: bid=${down_best_bid:.2f}, ask=${down_best_ask:.2f}, spread=${down_spread:.2f} → ${price:.2f} ({pricing_strategy}){boost_str}"
             )
 
     # NEW: Check if we already have a trade for THIS SIDE in this window
