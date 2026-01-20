@@ -259,8 +259,13 @@ def check_atomic_hedge_liquidity(
                 metrics["hedge_spread"] = hedge_spread_api
                 metrics["combined_spread"] = entry_spread_api + hedge_spread_api
             else:
-                # No price data available - allow trade (fail-open)
-                return True, "", metrics
+                # No price data available - SKIP trade (fail-closed)
+                # Critical: Without price data we cannot assess liquidity risk
+                return (
+                    False,
+                    "No price data available (fail-closed for safety)",
+                    metrics,
+                )
         else:
             # Calculate spreads from bid/ask
             entry_spread = entry_ask - entry_bid
@@ -362,14 +367,27 @@ def check_atomic_hedge_liquidity(
                 )
 
         except Exception as depth_err:
-            # Orderbook API failed - log but allow trade (depth check is best-effort)
+            # Orderbook API failed - SKIP trade for safety (fail-closed)
+            # Without depth data we cannot assess if hedge will fill
             if not is_404_error(depth_err):
-                log(f"⚠️  Could not check orderbook depth: {depth_err}")
+                log(f"   ⚠️  Orderbook depth check failed: {depth_err}")
+                return False, "Unable to check orderbook depth (fail-closed)", metrics
 
-        # All checks passed
+        # All checks passed - log success for visibility
+        log(
+            f"   ✅ Liquidity check passed: "
+            f"entry_spread={metrics.get('entry_spread', 'N/A'):.3f}, "
+            f"hedge_spread={metrics.get('hedge_spread', 'N/A'):.3f}, "
+            f"entry_depth={metrics.get('entry_depth', 'N/A'):.1f}, "
+            f"hedge_depth={metrics.get('hedge_depth', 'N/A'):.1f}"
+        )
         return True, "", metrics
 
     except Exception as e:
-        # Fail-open: if liquidity check crashes, allow trade
-        log(f"⚠️  Liquidity check error: {e}")
-        return True, "", metrics
+        # Fail-closed: if liquidity check crashes unexpectedly, skip trade for safety
+        log(f"   ⚠️  Liquidity check error: {e}")
+        return (
+            False,
+            "Liquidity check failed with unexpected error (fail-closed)",
+            metrics,
+        )
