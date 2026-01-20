@@ -146,8 +146,8 @@ PRE_SETTLEMENT_EXIT_SECONDS = int(
     os.getenv("PRE_SETTLEMENT_EXIT_SECONDS", "180")
 )  # Start checking N seconds before window close (default 180s = 3 min)
 PRE_SETTLEMENT_MIN_CONFIDENCE = float(
-    os.getenv("PRE_SETTLEMENT_MIN_CONFIDENCE", "0.80")
-)  # Minimum confidence at earliest exit window (default 80%)
+    os.getenv("PRE_SETTLEMENT_MIN_CONFIDENCE", "0.85")
+)  # Minimum confidence at earliest exit window (default 85% - be VERY sure we're selling losing side)
 PRE_SETTLEMENT_CHECK_INTERVAL = int(
     os.getenv("PRE_SETTLEMENT_CHECK_INTERVAL", "5")
 )  # Check for pre-settlement exits every N seconds (default 5s)
@@ -157,11 +157,12 @@ PRE_SETTLEMENT_PRICE_MAX_AGE = int(
 
 # Progressive confidence thresholds (time_before_close: min_confidence)
 # Markets close ~2-3 minutes before settlement, so we use progressive thresholds
+# HIGH thresholds ensure we're VERY confident we're selling the losing side
 PRE_SETTLEMENT_CONFIDENCE_SCHEDULE = {
-    180: 0.80,  # T-3min: Very safe, require 80%+ confidence
-    120: 0.70,  # T-2min: Safe, require 70%+ confidence
-    60: 0.60,  # T-1min: Reasonable, require 60%+ confidence
-    45: 0.50,  # T-45s: Market likely closed, use cached prices, any confidence
+    180: 0.90,  # T-3min: Extremely safe, require 90%+ confidence
+    120: 0.85,  # T-2min: Very safe, require 85%+ confidence
+    60: 0.80,  # T-1min: Still safe, require 80%+ confidence
+    45: 0.75,  # T-45s: Market likely closed, 75%+ confidence (don't go lower - risk is too high)
 }
 
 # Enhanced Balance Validation for API Reliability Issues
