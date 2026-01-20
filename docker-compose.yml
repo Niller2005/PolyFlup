@@ -1,7 +1,10 @@
 services:
   polyflup:
     container_name: polyflup-bot
-    build: .
+    build:
+      context: .
+      args:
+        VERSION: ${GIT_VERSION:-unknown}
     volumes:
       - .:/app
     env_file:

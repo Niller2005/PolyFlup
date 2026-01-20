@@ -32,6 +32,13 @@ if [ "$PULL_CODE" = true ]; then
     echo ""
 fi
 
+# Get git version info for build
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+COMMIT=$(git rev-parse --short HEAD)
+export GIT_VERSION="${BRANCH}@${COMMIT}"
+echo "🔧 Building version: ${GIT_VERSION}"
+echo ""
+
 # Build and deploy with docker-compose
 echo "🐳 Building and starting containers..."
 docker compose up -d --build

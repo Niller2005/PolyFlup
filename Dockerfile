@@ -17,6 +17,10 @@ RUN uv sync --frozen --no-install-project --no-dev
 # Stage 2: Runner
 FROM python:3.11-slim-bookworm
 
+# Accept version info as build argument
+ARG VERSION=unknown
+ENV GIT_VERSION=${VERSION}
+
 # Set working directory
 WORKDIR /app
 

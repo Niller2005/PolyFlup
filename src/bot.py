@@ -87,7 +87,17 @@ from src.utils.websocket_manager import ws_manager
 
 
 def get_git_commit_info() -> str:
-    """Get current git commit hash and branch for debugging"""
+    """Get current git commit hash and branch for debugging
+
+    In Docker, reads from GIT_VERSION environment variable (set at build time).
+    Outside Docker, runs git commands to get current commit info.
+    """
+    # Check if running in Docker with build-time version
+    docker_version = os.environ.get("GIT_VERSION")
+    if docker_version and docker_version != "unknown":
+        return docker_version
+
+    # Fall back to git commands (for local development)
     try:
         # Get commit hash (short)
         commit = subprocess.check_output(
