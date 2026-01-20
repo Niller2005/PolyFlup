@@ -29,8 +29,34 @@ MAX_SIZE_MODE = os.getenv("MAX_SIZE_MODE", "CAP")  # CAP or MAXIMIZE
 
 # Hedge Pricing
 COMBINED_PRICE_THRESHOLD = float(
-    os.getenv("COMBINED_PRICE_THRESHOLD", "0.985")
-)  # Max combined entry+hedge price for profit (default 1.5¢ buffer)
+    os.getenv("COMBINED_PRICE_THRESHOLD", "0.97")
+)  # Max combined entry+hedge price for profit (default 3¢ buffer, increased from 1.5¢)
+
+# Adaptive Combined Price Threshold (Option C)
+ENABLE_ADAPTIVE_THRESHOLD = (
+    os.getenv("ENABLE_ADAPTIVE_THRESHOLD", "YES").upper() == "YES"
+)
+ADAPTIVE_THRESHOLD_MIN = float(
+    os.getenv("ADAPTIVE_THRESHOLD_MIN", "0.95")
+)  # Minimum threshold (5¢ buffer in worst case)
+ADAPTIVE_THRESHOLD_MAX = float(
+    os.getenv("ADAPTIVE_THRESHOLD_MAX", "0.985")
+)  # Maximum threshold (1.5¢ buffer in best case)
+ADAPTIVE_THRESHOLD_BUFFER = float(
+    os.getenv("ADAPTIVE_THRESHOLD_BUFFER", "0.02")
+)  # Extra buffer beyond spreads (2¢)
+
+# Pre-Flight Liquidity Check (Option A)
+ENABLE_LIQUIDITY_CHECK = os.getenv("ENABLE_LIQUIDITY_CHECK", "YES").upper() == "YES"
+LIQUIDITY_MIN_DEPTH_RATIO = float(
+    os.getenv("LIQUIDITY_MIN_DEPTH_RATIO", "0.5")
+)  # Need 50% of trade size in orderbook depth
+LIQUIDITY_MAX_SPREAD_PCT = float(
+    os.getenv("LIQUIDITY_MAX_SPREAD_PCT", "8.0")
+)  # Reject if spread > 8%
+LIQUIDITY_MAX_COMBINED_SPREAD_PCT = float(
+    os.getenv("LIQUIDITY_MAX_COMBINED_SPREAD_PCT", "12.0")
+)  # Reject if entry+hedge spread > 12%
 
 
 # Position Management
@@ -218,6 +244,12 @@ POLY_BUILDER_API_KEY = os.getenv("POLY_BUILDER_API_KEY", "")
 POLY_BUILDER_SECRET = os.getenv("POLY_BUILDER_SECRET", "")
 POLY_BUILDER_PASSPHRASE = os.getenv("POLY_BUILDER_PASSPHRASE", "")
 ENABLE_RELAYER_CLIENT = os.getenv("ENABLE_RELAYER_CLIENT", "YES").upper() == "YES"
+
+# Manual Web3 redemption fallback (requires MATIC for gas)
+# Only used when relayer quota is exhausted or unavailable
+ENABLE_MANUAL_REDEMPTION_FALLBACK = (
+    os.getenv("ENABLE_MANUAL_REDEMPTION_FALLBACK", "NO").upper() == "YES"
+)
 
 if not PROXY_PK or not PROXY_PK.startswith("0x"):
     print(

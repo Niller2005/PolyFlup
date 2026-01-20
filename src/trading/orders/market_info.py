@@ -203,3 +203,173 @@ def check_liquidity(token_id: str, size: float, warn_threshold: float = 0.05) ->
         log(f"⚠️  Wide spread detected: {spread:.3f} - Low liquidity!")
         return False
     return True
+
+
+def check_atomic_hedge_liquidity(
+    entry_token_id: str, hedge_token_id: str, size: float
+) -> tuple[bool, str, dict]:
+    """
+    Check if market has sufficient liquidity for atomic hedge to succeed.
+
+    Pre-flight liquidity check to prevent catastrophic emergency liquidations.
+    Checks orderbook depth, spread width, and combined spread threshold.
+
+    Args:
+        entry_token_id: Token ID for entry side
+        hedge_token_id: Token ID for hedge side
+        size: Trade size in shares
+
+    Returns:
+        tuple[bool, str, dict]:
+            - is_liquid: True if sufficient liquidity, False to skip trade
+            - skip_reason: Human-readable reason for skipping (empty if liquid)
+            - metrics: Dict with spread/depth data for logging
+    """
+    from src.config.settings import (
+        ENABLE_LIQUIDITY_CHECK,
+        LIQUIDITY_MIN_DEPTH_RATIO,
+        LIQUIDITY_MAX_SPREAD_PCT,
+        LIQUIDITY_MAX_COMBINED_SPREAD_PCT,
+    )
+    from src.utils.websocket_manager import ws_manager
+
+    # Skip check if disabled
+    if not ENABLE_LIQUIDITY_CHECK:
+        return True, "", {}
+
+    metrics = {
+        "entry_spread": None,
+        "hedge_spread": None,
+        "combined_spread": None,
+        "entry_depth": None,
+        "hedge_depth": None,
+    }
+
+    try:
+        # Get bid/ask from websocket manager (faster than API)
+        entry_bid, entry_ask = ws_manager.get_bid_ask(entry_token_id)
+        hedge_bid, hedge_ask = ws_manager.get_bid_ask(hedge_token_id)
+
+        # If websocket data unavailable, try API fallback
+        if not all([entry_bid, entry_ask, hedge_bid, hedge_ask]):
+            entry_spread_api = get_spread(entry_token_id)
+            hedge_spread_api = get_spread(hedge_token_id)
+            if entry_spread_api and hedge_spread_api:
+                metrics["entry_spread"] = entry_spread_api
+                metrics["hedge_spread"] = hedge_spread_api
+                metrics["combined_spread"] = entry_spread_api + hedge_spread_api
+            else:
+                # No price data available - allow trade (fail-open)
+                return True, "", metrics
+        else:
+            # Calculate spreads from bid/ask
+            entry_spread = entry_ask - entry_bid
+            hedge_spread = hedge_ask - hedge_bid
+            metrics["entry_spread"] = entry_spread
+            metrics["hedge_spread"] = hedge_spread
+            metrics["combined_spread"] = entry_spread + hedge_spread
+
+        # Check 1: Individual spread width (as percentage)
+        entry_spread_pct = (
+            (metrics["entry_spread"] / entry_ask) * 100 if entry_ask else 0
+        )
+        hedge_spread_pct = (
+            (metrics["hedge_spread"] / hedge_ask) * 100 if hedge_ask else 0
+        )
+
+        if entry_spread_pct > LIQUIDITY_MAX_SPREAD_PCT:
+            return (
+                False,
+                f"Entry spread too wide: {entry_spread_pct:.1f}% (max {LIQUIDITY_MAX_SPREAD_PCT}%)",
+                metrics,
+            )
+
+        if hedge_spread_pct > LIQUIDITY_MAX_SPREAD_PCT:
+            return (
+                False,
+                f"Hedge spread too wide: {hedge_spread_pct:.1f}% (max {LIQUIDITY_MAX_SPREAD_PCT}%)",
+                metrics,
+            )
+
+        # Check 2: Combined spread threshold
+        combined_spread_pct = (
+            (metrics["combined_spread"] / (entry_ask + hedge_ask)) * 100
+            if (entry_ask and hedge_ask)
+            else 0
+        )
+
+        if combined_spread_pct > LIQUIDITY_MAX_COMBINED_SPREAD_PCT:
+            return (
+                False,
+                f"Combined spread too wide: {combined_spread_pct:.1f}% (max {LIQUIDITY_MAX_COMBINED_SPREAD_PCT}%)",
+                metrics,
+            )
+
+        # Check 3: Orderbook depth (need at least LIQUIDITY_MIN_DEPTH_RATIO of trade size)
+        required_depth = size * LIQUIDITY_MIN_DEPTH_RATIO
+
+        # Get orderbook depth from CLOB API
+        try:
+            entry_book = client.get_order_book(entry_token_id)
+            hedge_book = client.get_order_book(hedge_token_id)
+
+            # Parse entry book depth
+            entry_depth = 0
+            if entry_book:
+                asks = (
+                    entry_book.get("asks", [])
+                    if isinstance(entry_book, dict)
+                    else getattr(entry_book, "asks", [])
+                )
+                # Sum top 3 levels of ask depth
+                for i, ask_level in enumerate(asks[:3]):
+                    if isinstance(ask_level, dict):
+                        entry_depth += float(ask_level.get("size", 0))
+                    elif hasattr(ask_level, "size"):
+                        entry_depth += float(ask_level.size)
+
+            # Parse hedge book depth
+            hedge_depth = 0
+            if hedge_book:
+                asks = (
+                    hedge_book.get("asks", [])
+                    if isinstance(hedge_book, dict)
+                    else getattr(hedge_book, "asks", [])
+                )
+                # Sum top 3 levels of ask depth
+                for i, ask_level in enumerate(asks[:3]):
+                    if isinstance(ask_level, dict):
+                        hedge_depth += float(ask_level.get("size", 0))
+                    elif hasattr(ask_level, "size"):
+                        hedge_depth += float(ask_level.size)
+
+            metrics["entry_depth"] = entry_depth
+            metrics["hedge_depth"] = hedge_depth
+
+            # Check if depth sufficient
+            if entry_depth < required_depth:
+                return (
+                    False,
+                    f"Entry depth insufficient: {entry_depth:.1f} shares (need {required_depth:.1f})",
+                    metrics,
+                )
+
+            if hedge_depth < required_depth:
+                return (
+                    False,
+                    f"Hedge depth insufficient: {hedge_depth:.1f} shares (need {required_depth:.1f})",
+                    metrics,
+                )
+
+        except Exception as depth_err:
+            # Orderbook API failed - log but allow trade (depth check is best-effort)
+            if not is_404_error(depth_err):
+                log(f"⚠️  Could not check orderbook depth: {depth_err}")
+
+        # All checks passed
+        return True, "", metrics
+
+    except Exception as e:
+        # Fail-open: if liquidity check crashes, allow trade
+        log(f"⚠️  Liquidity check error: {e}")
+        return True, "", metrics

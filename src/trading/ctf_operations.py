@@ -10,6 +10,7 @@ from src.config.settings import (
     POLY_BUILDER_SECRET,
     POLY_BUILDER_PASSPHRASE,
     ENABLE_RELAYER_CLIENT,
+    ENABLE_MANUAL_REDEMPTION_FALLBACK,
 )
 from src.utils.logger import log, log_error
 
@@ -213,10 +214,104 @@ def merge_hedged_position(
     return None
 
 
+def _manual_web3_redeem(
+    trade_id: int,
+    symbol: str,
+    condition_id: str,
+) -> Optional[str]:
+    """
+    Manual Web3 redemption using wallet private key (REQUIRES GAS).
+
+    This is a fallback method when the relayer quota is exhausted.
+    It requires the wallet to have MATIC for gas fees.
+
+    Args:
+        trade_id: Database ID of the trade
+        symbol: Trading symbol
+        condition_id: Condition ID from market data (bytes32)
+
+    Returns:
+        Transaction hash if successful, None otherwise
+    """
+    try:
+        web3 = get_web3_client()
+        account = Account.from_key(PROXY_PK)
+
+        # Create contract instance
+        ctf_contract = web3.eth.contract(
+            address=Web3.to_checksum_address(CTF_ADDRESS), abi=CTF_ABI
+        )
+
+        # Build redemption transaction
+        redeem_fn = ctf_contract.functions.redeemPositions(
+            Web3.to_checksum_address(USDC_ADDRESS),  # collateralToken
+            b"\x00" * 32,  # parentCollectionId (null)
+            bytes.fromhex(condition_id.replace("0x", "")),  # conditionId
+            [1, 2],  # indexSets (redeem both YES and NO)
+        )
+
+        # Estimate gas
+        try:
+            gas_estimate = redeem_fn.estimate_gas({"from": account.address})
+            gas_limit = int(gas_estimate * 1.2)  # Add 20% buffer
+        except Exception as e:
+            log_error(f"[{symbol}] #{trade_id} Gas estimation failed: {e}")
+            gas_limit = 300000  # Default fallback
+
+        # Get current gas price
+        gas_price = web3.eth.gas_price
+
+        # Build transaction
+        nonce = web3.eth.get_transaction_count(account.address)
+        tx = redeem_fn.build_transaction(
+            {
+                "from": account.address,
+                "gas": gas_limit,
+                "gasPrice": gas_price,
+                "nonce": nonce,
+                "chainId": POLYGON_CHAIN_ID,
+            }
+        )
+
+        # Sign transaction
+        signed_tx = web3.eth.account.sign_transaction(tx, PROXY_PK)
+
+        # Send transaction
+        tx_hash = web3.eth.send_raw_transaction(signed_tx.raw_transaction)
+        tx_hash_hex = tx_hash.hex()
+
+        log(
+            f"   📡 [{symbol}] #{trade_id} Manual redeem tx sent: {tx_hash_hex[:16]}..."
+        )
+
+        # Wait for confirmation
+        tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash, timeout=60)
+
+        if tx_receipt.get("status") == 1:
+            gas_used = tx_receipt.get("gasUsed", 0)
+            gas_cost_matic = web3.from_wei(gas_used * gas_price, "ether")
+            log(
+                f"✅ [{symbol}] #{trade_id} MANUAL REDEEM SUCCESS (Gas: {gas_cost_matic:.6f} MATIC)"
+            )
+            log(f"   Tx: {tx_hash_hex}")
+            return tx_hash_hex
+        else:
+            log_error(
+                f"[{symbol}] #{trade_id} Manual redeem transaction FAILED on-chain"
+            )
+            log(f"   Failed tx: {tx_hash_hex}")
+            return None
+
+    except Exception as e:
+        log_error(f"[{symbol}] #{trade_id} Manual Web3 redemption error: {e}")
+        return None
+
+
 def redeem_winning_tokens(
     trade_id: int,
     symbol: str,
     condition_id: str,
+    use_manual_fallback: bool = False,
 ) -> Optional[str]:
     """
     Redeem winning tokens after market resolution.
@@ -228,12 +323,14 @@ def redeem_winning_tokens(
         trade_id: Database ID of the trade
         symbol: Trading symbol
         condition_id: Condition ID from market data (bytes32)
+        use_manual_fallback: If True, will fallback to manual Web3 redemption if relayer fails
 
     Returns:
         Transaction hash if successful, None otherwise
     """
     # Try gasless RelayClient first
     relay_client = _get_relayer_client()
+    relayer_failed = False
 
     if relay_client:
         try:
@@ -283,7 +380,7 @@ def redeem_winning_tokens(
                             f"[{symbol}] #{trade_id} Redeem transaction FAILED on-chain (status=0)"
                         )
                         log(f"   Failed tx: {tx_hash}")
-                        return None
+                        relayer_failed = True
 
                 except Exception as confirm_err:
                     log_error(
@@ -296,29 +393,35 @@ def redeem_winning_tokens(
                 log_error(
                     f"[{symbol}] #{trade_id} Relayer redeem failed - no transaction hash returned"
                 )
-                return None
+                relayer_failed = True
         except Exception as e:
             error_str = str(e)
 
             # Check if error is due to quota exceeded (429)
             if "429" in error_str or "quota exceeded" in error_str.lower():
-                log(
-                    f"   ⚠️  [{symbol}] #{trade_id} Relayer quota exhausted, skipping redemption"
-                )
-                return None
+                log(f"   ⚠️  [{symbol}] #{trade_id} Relayer quota exhausted")
+                relayer_failed = True
+            else:
+                log_error(f"[{symbol}] #{trade_id} Relayer error: {e}")
+                relayer_failed = True
+    else:
+        # No relayer client available
+        log(f"   ⚠️  [{symbol}] #{trade_id} Relayer client unavailable")
+        relayer_failed = True
 
-            log_error(
-                f"[{symbol}] #{trade_id} Relayer error: {e} - skipping redemption"
-            )
-            return None
+    # Fallback to manual Web3 redemption if enabled and relayer failed
+    if use_manual_fallback and relayer_failed:
+        log(
+            f"   🔧 [{symbol}] #{trade_id} Attempting manual Web3 redemption (REQUIRES GAS)"
+        )
+        return _manual_web3_redeem(trade_id, symbol, condition_id)
 
-    # No relayer client available
-    log(f"   ⚠️  [{symbol}] #{trade_id} Relayer client unavailable, skipping redemption")
     return None
 
 
 def batch_redeem_winning_tokens(
     redemptions: list[tuple[int, str, str]],
+    use_manual_fallback: bool = False,
 ) -> Optional[str]:
     """
     Redeem winning tokens for multiple markets in a single batch transaction.
@@ -328,6 +431,7 @@ def batch_redeem_winning_tokens(
 
     Args:
         redemptions: List of (trade_id, symbol, condition_id) tuples to redeem
+        use_manual_fallback: If True, will fallback to individual manual redemptions if relayer fails
 
     Returns:
         Transaction hash if successful, None otherwise
@@ -344,89 +448,114 @@ def batch_redeem_winning_tokens(
 
     # Try gasless RelayClient
     relay_client = _get_relayer_client()
+    relayer_failed = False
 
     if not relay_client:
-        log(
-            "   ⚠️  [Batch Redeem] Relayer client unavailable, skipping batch redemption"
-        )
-        return None
+        log("   ⚠️  [Batch Redeem] Relayer client unavailable")
+        relayer_failed = True
+    else:
+        try:
+            from py_builder_relayer_client.models import SafeTransaction, OperationType
 
-    try:
-        from py_builder_relayer_client.models import SafeTransaction, OperationType
+            # Build list of redemption transactions
+            redeem_txs = []
+            symbols_str = ", ".join(set(sym for _, sym, _ in redemptions))
 
-        # Build list of redemption transactions
-        redeem_txs = []
-        symbols_str = ", ".join(set(sym for _, sym, _ in redemptions))
-
-        log(
-            f"🌐 [Batch Redeem] Preparing {len(redemptions)} redemptions ({symbols_str})"
-        )
-
-        for trade_id, symbol, condition_id in redemptions:
-            # Encode redeem function call for this market
-            encoded_data = _encode_redeem_positions(condition_id)
-
-            # Create SafeTransaction for this redemption
-            redeem_tx = SafeTransaction(
-                to=CTF_ADDRESS,
-                operation=OperationType.Call,
-                data=f"0x{encoded_data}",
-                value="0",
+            log(
+                f"🌐 [Batch Redeem] Preparing {len(redemptions)} redemptions ({symbols_str})"
             )
-            redeem_txs.append(redeem_tx)
-            log(f"   📦 [{symbol}] #{trade_id} added to batch")
 
-        # Execute all redemptions in one batch transaction (gasless!)
-        response = relay_client.execute(
-            redeem_txs, f"Batch redeem {len(redemptions)} markets"
+            for trade_id, symbol, condition_id in redemptions:
+                # Encode redeem function call for this market
+                encoded_data = _encode_redeem_positions(condition_id)
+
+                # Create SafeTransaction for this redemption
+                redeem_tx = SafeTransaction(
+                    to=CTF_ADDRESS,
+                    operation=OperationType.Call,
+                    data=f"0x{encoded_data}",
+                    value="0",
+                )
+                redeem_txs.append(redeem_tx)
+                log(f"   📦 [{symbol}] #{trade_id} added to batch")
+
+            # Execute all redemptions in one batch transaction (gasless!)
+            response = relay_client.execute(
+                redeem_txs, f"Batch redeem {len(redemptions)} markets"
+            )
+
+            # Check if we got a transaction hash
+            if (
+                response
+                and hasattr(response, "transaction_hash")
+                and response.transaction_hash
+            ):
+                tx_hash = response.transaction_hash
+                log(
+                    f"   📡 [Batch Redeem] Relayer submitted batch tx: {tx_hash[:16]}..."
+                )
+
+                # Wait for transaction confirmation
+                try:
+                    web3 = get_web3_client()
+                    tx_receipt = web3.eth.wait_for_transaction_receipt(
+                        tx_hash,
+                        timeout=90,  # Longer timeout for batch
+                    )
+
+                    # Check transaction status
+                    if tx_receipt.get("status") == 1:
+                        log(
+                            f"✅ [Batch Redeem] SUCCESS: {len(redemptions)} markets redeemed (GASLESS)"
+                        )
+                        log(f"   Tx: {tx_hash}")
+                        return tx_hash
+                    else:
+                        log_error(
+                            f"[Batch Redeem] Transaction FAILED on-chain (status=0)"
+                        )
+                        log(f"   Failed tx: {tx_hash}")
+                        relayer_failed = True
+
+                except Exception as confirm_err:
+                    log_error(
+                        f"[Batch Redeem] Could not confirm transaction: {confirm_err}"
+                    )
+                    log(f"   Tx (unconfirmed): {tx_hash}")
+                    return None
+            else:
+                log_error(
+                    "[Batch Redeem] Relayer failed - no transaction hash returned"
+                )
+                relayer_failed = True
+
+        except Exception as e:
+            error_str = str(e)
+
+            # Check if error is due to quota exceeded (429)
+            if "429" in error_str or "quota exceeded" in error_str.lower():
+                log("   ⚠️  [Batch Redeem] Relayer quota exhausted")
+                relayer_failed = True
+            else:
+                log_error(f"[Batch Redeem] Relayer error: {e}")
+                relayer_failed = True
+
+    # Fallback to individual manual Web3 redemptions if enabled and relayer failed
+    if use_manual_fallback and relayer_failed:
+        log(
+            f"   🔧 [Batch Redeem] Attempting individual manual redemptions (REQUIRES GAS)"
         )
 
-        # Check if we got a transaction hash
-        if (
-            response
-            and hasattr(response, "transaction_hash")
-            and response.transaction_hash
-        ):
-            tx_hash = response.transaction_hash
-            log(f"   📡 [Batch Redeem] Relayer submitted batch tx: {tx_hash[:16]}...")
+        success_count = 0
+        for trade_id, symbol, condition_id in redemptions:
+            tx_hash = _manual_web3_redeem(trade_id, symbol, condition_id)
+            if tx_hash:
+                success_count += 1
 
-            # Wait for transaction confirmation
-            try:
-                web3 = get_web3_client()
-                tx_receipt = web3.eth.wait_for_transaction_receipt(
-                    tx_hash,
-                    timeout=90,  # Longer timeout for batch
-                )
+        if success_count > 0:
+            log(
+                f"✅ [Manual Redeem] Successfully redeemed {success_count}/{len(redemptions)} trades"
+            )
+            return "manual_batch"  # Return marker for successful manual batch
 
-                # Check transaction status
-                if tx_receipt.get("status") == 1:
-                    log(
-                        f"✅ [Batch Redeem] SUCCESS: {len(redemptions)} markets redeemed (GASLESS)"
-                    )
-                    log(f"   Tx: {tx_hash}")
-                    return tx_hash
-                else:
-                    log_error(f"[Batch Redeem] Transaction FAILED on-chain (status=0)")
-                    log(f"   Failed tx: {tx_hash}")
-                    return None
-
-            except Exception as confirm_err:
-                log_error(
-                    f"[Batch Redeem] Could not confirm transaction: {confirm_err}"
-                )
-                log(f"   Tx (unconfirmed): {tx_hash}")
-                return None
-        else:
-            log_error("[Batch Redeem] Relayer failed - no transaction hash returned")
-            return None
-
-    except Exception as e:
-        error_str = str(e)
-
-        # Check if error is due to quota exceeded (429)
-        if "429" in error_str or "quota exceeded" in error_str.lower():
-            log("   ⚠️  [Batch Redeem] Relayer quota exhausted, skipping batch")
-            return None
-
-        log_error(f"[Batch Redeem] Relayer error: {e} - skipping batch")
-        return None
+    return None

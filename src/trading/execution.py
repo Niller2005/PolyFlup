@@ -859,6 +859,94 @@ def emergency_sell_position(
         return False
 
 
+def calculate_adaptive_combined_threshold(
+    entry_token_id: str, hedge_token_id: str
+) -> float:
+    """
+    Calculate combined price threshold based on current market spreads.
+
+    Dynamically adjusts threshold to balance profitability vs execution success:
+    - Tight threshold (1.5¢ edge) when spreads are narrow (liquid markets)
+    - Wide threshold (5¢ edge) when spreads are wide (illiquid markets)
+
+    Formula: 1.00 - (entry_spread + hedge_spread) - ADAPTIVE_THRESHOLD_BUFFER
+
+    Args:
+        entry_token_id: Token ID for entry side
+        hedge_token_id: Token ID for hedge side
+
+    Returns:
+        Adaptive threshold between ADAPTIVE_THRESHOLD_MIN and ADAPTIVE_THRESHOLD_MAX
+    """
+    from src.utils.websocket_manager import ws_manager
+    from src.config.settings import (
+        ENABLE_ADAPTIVE_THRESHOLD,
+        COMBINED_PRICE_THRESHOLD,
+        ADAPTIVE_THRESHOLD_MIN,
+        ADAPTIVE_THRESHOLD_MAX,
+        ADAPTIVE_THRESHOLD_BUFFER,
+    )
+
+    # If adaptive threshold disabled, use static threshold
+    if not ENABLE_ADAPTIVE_THRESHOLD:
+        return COMBINED_PRICE_THRESHOLD
+
+    try:
+        # Get current bid/ask spreads from websocket
+        entry_bid, entry_ask = ws_manager.get_bid_ask(entry_token_id)
+        hedge_bid, hedge_ask = ws_manager.get_bid_ask(hedge_token_id)
+
+        # If websocket data unavailable, fall back to static threshold
+        if not all([entry_bid, entry_ask, hedge_bid, hedge_ask]):
+            return COMBINED_PRICE_THRESHOLD
+
+        # Type assertion: all values are non-None after the check above
+        assert entry_bid is not None and entry_ask is not None
+        assert hedge_bid is not None and hedge_ask is not None
+
+        # Calculate spreads
+        entry_spread = entry_ask - entry_bid
+        hedge_spread = hedge_ask - hedge_bid
+        total_spread = entry_spread + hedge_spread
+
+        # Calculate adaptive threshold: 1.00 - spreads - buffer
+        # This ensures we leave enough room for both orders to fill
+        adaptive = 1.00 - total_spread - ADAPTIVE_THRESHOLD_BUFFER
+
+        # Clamp to configured range
+        adaptive = max(ADAPTIVE_THRESHOLD_MIN, min(ADAPTIVE_THRESHOLD_MAX, adaptive))
+
+        return round(adaptive, 3)
+
+    except Exception as e:
+        # On error, fall back to static threshold
+        from src.utils.logger import log
+
+        log(f"⚠️  Adaptive threshold calculation error: {e}")
+        return COMBINED_PRICE_THRESHOLD
+
+        # Calculate spreads
+        entry_spread = entry_ask - entry_bid
+        hedge_spread = hedge_ask - hedge_bid
+        total_spread = entry_spread + hedge_spread
+
+        # Calculate adaptive threshold: 1.00 - spreads - buffer
+        # This ensures we leave enough room for both orders to fill
+        adaptive = 1.00 - total_spread - ADAPTIVE_THRESHOLD_BUFFER
+
+        # Clamp to configured range
+        adaptive = max(ADAPTIVE_THRESHOLD_MIN, min(ADAPTIVE_THRESHOLD_MAX, adaptive))
+
+        return round(adaptive, 3)
+
+    except Exception as e:
+        # On error, fall back to static threshold
+        from src.utils.logger import log
+
+        log(f"⚠️  Adaptive threshold calculation error: {e}")
+        return COMBINED_PRICE_THRESHOLD
+
+
 def place_entry_and_hedge_atomic(
     symbol: str,
     entry_token_id: str,
@@ -893,16 +981,53 @@ def place_entry_and_hedge_atomic(
             hedge_token_id = up_id
             hedge_side = "UP"
 
+        # PRE-FLIGHT LIQUIDITY CHECK: Skip trade if market is too illiquid
+        # Prevents catastrophic emergency liquidations (40-60% losses)
+        from src.trading.orders import check_atomic_hedge_liquidity
+
+        is_liquid, skip_reason, liquidity_metrics = check_atomic_hedge_liquidity(
+            entry_token_id, hedge_token_id, entry_size
+        )
+
+        if not is_liquid:
+            log(f"   ⏭️  [{symbol}] SKIPPING TRADE: {skip_reason}")
+            if liquidity_metrics:
+                log(
+                    f"   📊 [{symbol}] Liquidity metrics: entry_spread={liquidity_metrics.get('entry_spread', 'N/A'):.3f}, "
+                    f"hedge_spread={liquidity_metrics.get('hedge_spread', 'N/A'):.3f}, "
+                    f"entry_depth={liquidity_metrics.get('entry_depth', 'N/A')}, "
+                    f"hedge_depth={liquidity_metrics.get('hedge_depth', 'N/A')}"
+                )
+            return None, None, None
+
         # CRITICAL: Use MAKER pricing with POST_ONLY for both entry and hedge
         # Strategy: Entry at MAKER (bid+2¢) + Hedge at MAKER (calculated)
         # postOnly=True ensures orders won't cross spread (maker-only)
         # Maker orders earn 0.15% rebate instead of paying 1.54% taker fee
         # Combined must be <= COMBINED_PRICE_THRESHOLD to guarantee profitability
 
-        from src.config.settings import COMBINED_PRICE_THRESHOLD
+        # ADAPTIVE THRESHOLD: Calculate based on current market spreads
+        # Tight threshold (1.5¢) in liquid markets, wide threshold (5¢) in illiquid markets
+        combined_price_threshold = calculate_adaptive_combined_threshold(
+            entry_token_id, hedge_token_id
+        )
+
+        # Log if using adaptive vs static threshold
+        from src.config.settings import (
+            COMBINED_PRICE_THRESHOLD,
+            ENABLE_ADAPTIVE_THRESHOLD,
+        )
+
+        if (
+            ENABLE_ADAPTIVE_THRESHOLD
+            and combined_price_threshold != COMBINED_PRICE_THRESHOLD
+        ):
+            log(
+                f"   🎯 [{symbol}] Using adaptive threshold: ${combined_price_threshold:.3f} (static: ${COMBINED_PRICE_THRESHOLD:.3f})"
+            )
 
         # Calculate hedge price to meet threshold
-        max_hedge_price = COMBINED_PRICE_THRESHOLD - entry_price
+        max_hedge_price = combined_price_threshold - entry_price
         hedge_price = round(max_hedge_price, 2)
         hedge_price = max(0.01, min(0.99, hedge_price))
 
@@ -910,9 +1035,9 @@ def place_entry_and_hedge_atomic(
 
         # VALIDATION: Reject if combined price exceeds threshold
         # This ensures we can profit even if pre-settlement exit fails
-        if final_combined > COMBINED_PRICE_THRESHOLD:
+        if final_combined > combined_price_threshold:
             log_error(
-                f"[{symbol}] ❌ HEDGE REJECTED: Combined price ${final_combined:.2f} > ${COMBINED_PRICE_THRESHOLD:.2f} threshold"
+                f"[{symbol}] ❌ HEDGE REJECTED: Combined price ${final_combined:.2f} > ${combined_price_threshold:.2f} threshold"
             )
             log_error(
                 f"[{symbol}] Entry @ ${entry_price:.2f} requires hedge @ ${hedge_price:.2f} = ${final_combined:.2f} combined (not profitable)"
@@ -920,7 +1045,7 @@ def place_entry_and_hedge_atomic(
             return None, None, None
 
         # Calculate edge: amount under threshold
-        edge_cents = (COMBINED_PRICE_THRESHOLD - final_combined) * 100
+        edge_cents = (combined_price_threshold - final_combined) * 100
 
         # Check if we should use POST_ONLY or switch to GTC due to repeated failures
         use_post_only = _post_only_failures.get(symbol, 0) < MAX_POST_ONLY_ATTEMPTS
@@ -1151,7 +1276,7 @@ def place_entry_and_hedge_atomic(
                                 "price": retry_hedge_price,
                                 "size": entry_size,
                                 "side": BUY,
-                                "post_only": True,
+                                "post_only": use_post_only,  # Match entry order type (POST_ONLY or GTC)
                             }
                         ]
 

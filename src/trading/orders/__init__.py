@@ -28,6 +28,7 @@ from .market_info import (
     get_bulk_spreads,
     get_server_time,
     check_liquidity,
+    check_atomic_hedge_liquidity,
     get_trades,
     get_trades_for_user,
 )
@@ -73,4 +74,6 @@ __all__ = [
     "get_enhanced_balance_allowance",
     "get_symbol_config",
     "normalize_token_id",
+    "check_liquidity",
+    "check_atomic_hedge_liquidity",
 ]

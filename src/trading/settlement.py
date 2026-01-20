@@ -143,38 +143,15 @@ def force_settle_trade(trade_id: int):
             pnl_usd = (final_price * size) - bet_usd
             roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
-            # Attempt redemption for force settle too
+            # Mark as settled (redemption will happen in batch at next window boundary)
             c.execute(
-                "SELECT merge_tx_hash, exited_early, condition_id FROM trades WHERE id = ?",
-                (trade_id,),
-            )
-            redemption_check = c.fetchone()
-
-            redeem_tx_hash = None
-            if redemption_check:
-                merge_tx, exited_early, condition_id = redemption_check
-                should_redeem = not merge_tx and not exited_early and condition_id
-
-                if should_redeem:
-                    try:
-                        from src.trading.ctf_operations import redeem_winning_tokens
-
-                        log(f"   🎫 [{symbol}] #{trade_id} Redeeming tokens...")
-                        redeem_tx_hash = redeem_winning_tokens(
-                            trade_id, symbol, condition_id
-                        )
-                    except Exception as e:
-                        log_error(f"[{symbol}] #{trade_id} Error redeeming tokens: {e}")
-
-            c.execute(
-                "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=?, scale_in_order_id=NULL, redeem_tx_hash=? WHERE id=?",
+                "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=?, scale_in_order_id=NULL WHERE id=?",
                 (
                     "FORCE_SETTLED",
                     final_price,
                     pnl_usd,
                     roi_pct,
                     now.isoformat(),
-                    redeem_tx_hash,
                     trade_id,
                 ),
             )
@@ -342,59 +319,15 @@ def check_and_settle_trades():
                     pnl_usd = (exit_value * size) - bet_usd
                     roi_pct = (pnl_usd / bet_usd) * 100 if bet_usd > 0 else 0
 
-                # NEW: Redeem winning tokens for unmerged/unexited positions
-                # Check if position needs redemption (not merged, not exited early)
+                # Mark trade as settled (redemption will happen in batch at next window boundary)
                 c.execute(
-                    "SELECT merge_tx_hash, exited_early, condition_id FROM trades WHERE id = ?",
-                    (trade_id,),
-                )
-                redemption_check = c.fetchone()
-
-                redeem_tx_hash = None
-                if redemption_check:
-                    merge_tx, exited_early, condition_id = redemption_check
-
-                    # Only redeem if:
-                    # 1. Position wasn't merged (no merge_tx_hash)
-                    # 2. Position wasn't exited early (exited_early = 0)
-                    # 3. We have condition_id stored
-                    should_redeem = not merge_tx and not exited_early and condition_id
-
-                    if should_redeem:
-                        try:
-                            from src.trading.ctf_operations import (
-                                redeem_winning_tokens,
-                            )
-
-                            log(
-                                f"   🎫 [{symbol}] #{trade_id} Redeeming winning tokens..."
-                            )
-                            redeem_tx_hash = redeem_winning_tokens(
-                                trade_id, symbol, condition_id
-                            )
-
-                            if redeem_tx_hash:
-                                log(
-                                    f"   ✅ [{symbol}] #{trade_id} Redemption successful! Tx: {redeem_tx_hash[:16]}..."
-                                )
-                            else:
-                                log(
-                                    f"   ⚠️  [{symbol}] #{trade_id} Redemption failed, tokens remain in wallet"
-                                )
-                        except Exception as e:
-                            log_error(
-                                f"[{symbol}] #{trade_id} Error redeeming tokens: {e}"
-                            )
-
-                c.execute(
-                    "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=?, scale_in_order_id=NULL, redeem_tx_hash=? WHERE id=?",
+                    "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=?, scale_in_order_id=NULL WHERE id=?",
                     (
                         "RESOLVED",
                         final_price,
                         pnl_usd,
                         roi_pct,
                         now.isoformat(),
-                        redeem_tx_hash,
                         trade_id,
                     ),
                 )
@@ -497,8 +430,14 @@ def redeem_recent_settled_trades():
     - Unverified tier: 100 transactions/day
     - With 96 trades/day max (4 symbols × 4 windows/hour × 24 hours)
     - Batch redemption saves significant transaction quota
+
+    Fallback Strategy:
+    - Primary: Gasless relayer (no MATIC required)
+    - Fallback: Manual Web3 redemption (requires MATIC for gas)
+    - Fallback enabled via ENABLE_MANUAL_REDEMPTION_FALLBACK setting
     """
     from src.trading.ctf_operations import batch_redeem_winning_tokens
+    from src.config.settings import ENABLE_MANUAL_REDEMPTION_FALLBACK
 
     with db_connection() as conn:
         c = conn.cursor()
@@ -576,7 +515,9 @@ def redeem_recent_settled_trades():
                 f"   📦 Executing batch redemption for {len(redemption_batch)} trade(s)"
             )
 
-            redeem_tx_hash = batch_redeem_winning_tokens(redemption_batch)
+            redeem_tx_hash = batch_redeem_winning_tokens(
+                redemption_batch, use_manual_fallback=ENABLE_MANUAL_REDEMPTION_FALLBACK
+            )
 
             if redeem_tx_hash:
                 # Update all trades in batch with the same tx hash
