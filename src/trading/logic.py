@@ -26,7 +26,7 @@ from src.trading.strategy import calculate_confidence, bfxd_allows_trade
 from src.data.market_data import validate_price_movement_for_trade
 from src.trading.orders import get_clob_client
 
-MIN_SIZE = 6.0
+MIN_SIZE = 5.0
 
 # Rate-limit "Cannot hedge" messages (symbol -> last_log_time)
 _last_hedge_skip_log: Dict[str, float] = {}
