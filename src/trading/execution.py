@@ -1430,18 +1430,27 @@ def place_entry_and_hedge_atomic(
 
                         # Get fresh hedge pricing (slightly more aggressive to ensure fill)
                         from src.utils.websocket_manager import ws_manager
+                        from decimal import Decimal, ROUND_HALF_UP
 
                         hedge_bid, hedge_ask = ws_manager.get_bid_ask(hedge_token_id)
 
                         # If no websocket data, use original price + 1¢
                         if not hedge_bid or not hedge_ask or hedge_ask < 0.02:
-                            gtc_hedge_price = min(0.99, hedge_price + 0.01)
+                            gtc_hedge_price = float(
+                                Decimal(str(min(0.99, hedge_price + 0.01))).quantize(
+                                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                                )
+                            )
                             log(
                                 f"   📊 [{symbol}] Using fallback pricing: ${gtc_hedge_price:.2f}"
                             )
                         else:
                             # Use ask price - 1¢ to cross spread but not overpay
-                            gtc_hedge_price = round(hedge_ask - 0.01, 2)
+                            gtc_hedge_price = float(
+                                Decimal(str(hedge_ask - 0.01)).quantize(
+                                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                                )
+                            )
                             gtc_hedge_price = max(
                                 0.01, min(0.99, gtc_hedge_price)
                             )  # Clamp to valid range
@@ -1455,7 +1464,11 @@ def place_entry_and_hedge_atomic(
                             log(
                                 f"   ⚠️  [{symbol}] GTC hedge price ${gtc_hedge_price:.2f} + entry ${entry_price:.2f} = ${combined_with_gtc:.2f} > $0.99 - adjusting"
                             )
-                            gtc_hedge_price = round(0.98 - entry_price, 2)
+                            gtc_hedge_price = float(
+                                Decimal(str(0.98 - entry_price)).quantize(
+                                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                                )
+                            )
                             gtc_hedge_price = max(0.01, min(0.99, gtc_hedge_price))
                             log(
                                 f"   🔧 [{symbol}] Adjusted GTC hedge to ${gtc_hedge_price:.2f} (combined ${entry_price + gtc_hedge_price:.2f})"
