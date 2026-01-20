@@ -4,6 +4,7 @@ import time
 import os
 import sys
 import fcntl
+import subprocess
 from typing import Optional, List, Tuple
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -83,6 +84,37 @@ from src.trading.position_manager import (
 from src.utils.notifications import process_notifications, init_ws_callbacks
 from src.trading.settlement import check_and_settle_trades
 from src.utils.websocket_manager import ws_manager
+
+
+def get_git_commit_info() -> str:
+    """Get current git commit hash and branch for debugging"""
+    try:
+        # Get commit hash (short)
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+
+        # Get branch name
+        branch = subprocess.check_output(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+
+        # Check if there are uncommitted changes
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+
+        dirty = " (uncommitted changes)" if status else ""
+
+        return f"{branch}@{commit}{dirty}"
+    except Exception:
+        return "unknown"
 
 
 def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
@@ -205,6 +237,9 @@ def main():
     setup_api_creds()
     init_database()
 
+    # Get git commit info for debugging
+    git_info = get_git_commit_info()
+
     # Set initial log window if markets are defined
     if MARKETS:
         try:
@@ -218,6 +253,7 @@ def main():
     else:
         log("🚀 Starting PolyFlup Trading Bot (Modular Version)...")
 
+    log(f"🔧 Version: {git_info}")
     log(
         f"📊 ADX System: {'INTEGRATED' if ADX_ENABLED else 'DISABLED'} (period={ADX_PERIOD}, interval={ADX_INTERVAL})"
     )
