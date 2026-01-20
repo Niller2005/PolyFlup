@@ -305,11 +305,6 @@ def main():
     log("🔍 Performing initial position check...")
     check_open_positions(user_address=addr, verbose=True, check_orders=True)
 
-    # Launch background task to redeem old trades
-    from src.trading.background_redemption import start_background_redemption
-
-    start_background_redemption()
-
     # Launch background task to monitor pre-settlement exit opportunities
     from src.trading.pre_settlement_exit import start_pre_settlement_monitor
 
@@ -349,12 +344,6 @@ def main():
                     log("")
                     log(f"🪟  NEW WINDOW: {range_str}")
                     last_window_logged = w_start
-
-                    # Auto-redeem winning tokens from recently settled trades
-                    # Run ONLY at window boundaries (every 15 minutes) to avoid spam
-                    from src.trading.settlement import redeem_recent_settled_trades
-
-                    redeem_recent_settled_trades()
 
             is_verbose_cycle = now_ts - last_verbose_log >= 60
             is_order_check_cycle = now_ts - last_order_check >= 10
