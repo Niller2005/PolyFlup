@@ -94,6 +94,11 @@ ENABLE_CTF_MERGE = (
     os.getenv("ENABLE_CTF_MERGE", "NO").upper() == "YES"
 )  # Merge hedged positions immediately to free capital
 
+# Phase 2: WebSocket Order Fill Monitoring
+ENABLE_WEBSOCKET_MONITORING = (
+    os.getenv("ENABLE_WEBSOCKET_MONITORING", "NO").upper() == "YES"
+)  # Use WebSocket fill notifications instead of polling (75-90% faster)
+
 # Unfilled Order Management (separate from stop loss)
 CANCEL_UNFILLED_ORDERS = os.getenv("CANCEL_UNFILLED_ORDERS", "NO").upper() == "YES"
 UNFILLED_CANCEL_THRESHOLD = float(

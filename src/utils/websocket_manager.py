@@ -37,6 +37,11 @@ class WebSocketManager:
         self.subscribed_tokens: List[str] = []
         self.subscription_queue: asyncio.Queue = asyncio.Queue()
 
+        # Order fill tracking for async waiting (Phase 2 WebSocket integration)
+        self.order_fill_events: Dict[str, asyncio.Event] = {}  # order_id -> Event
+        self.order_fill_data: Dict[str, dict] = {}  # order_id -> order data
+        self._order_fill_lock = threading.Lock()  # Thread-safe access from sync code
+
     def start(self):
         """Start the WebSocket manager in background threads"""
         if self._running:
@@ -247,11 +252,31 @@ class WebSocketManager:
 
             elif data.get("type") == "order":
                 ev, order = data.get("event"), data.get("order", {})
-                # Log order events for debugging
-                order_id = (
-                    order.get("id", "Unknown")[:10] if order.get("id") else "Unknown"
+                order_id = order.get("id", "")
+                order_id_short = (
+                    order_id[:10] if order_id and len(order_id) > 10 else order_id
                 )
-                log(f"📡 WebSocket ORDER event: {ev} | Order ID: {order_id}")
+
+                # Log order events for debugging
+                log(f"📡 WebSocket ORDER event: {ev} | Order ID: {order_id_short}")
+
+                # Phase 2: Trigger waiting coroutines for order fills
+                if ev and ev.lower() == "fill" and order_id:
+                    with self._order_fill_lock:
+                        # Check if anyone is waiting for this order
+                        if order_id in self.order_fill_events:
+                            # Store order data
+                            self.order_fill_data[order_id] = order
+                            # Trigger the event
+                            event = self.order_fill_events[order_id]
+                            # Use call_soon_threadsafe since we might be in a different thread
+                            if self._loop:
+                                self._loop.call_soon_threadsafe(event.set)
+                            log(
+                                f"   🎯 WebSocket fill event triggered for {order_id_short}"
+                            )
+
+                # Call registered callbacks (for notifications.py integration)
                 for cb in self.callbacks["order"]:
                     try:
                         cb(ev, order)
@@ -378,6 +403,175 @@ class WebSocketManager:
             return outcome_data.get("down_wins")
 
         return None
+
+    async def wait_for_order_fill(
+        self, order_id: str, timeout: float = 120
+    ) -> Optional[dict]:
+        """
+        Wait for a specific order to fill via WebSocket notification.
+
+        This is a Phase 2 optimization to eliminate polling delays.
+        Instead of checking get_order() every 5 seconds, we wait for
+        the WebSocket "fill" event to arrive and immediately return.
+
+        Args:
+            order_id: The order ID to wait for
+            timeout: Maximum seconds to wait (default 120)
+
+        Returns:
+            Order data dict when filled, or None on timeout
+
+        Example:
+            # Wait for order to fill with 30s timeout
+            order_data = await ws_manager.wait_for_order_fill(order_id, timeout=30)
+            if order_data:
+                print(f"Order filled: {order_data['size_matched']}")
+            else:
+                print("Timeout - order not filled")
+        """
+        if not self._loop or not self._running:
+            log(f"⚠️  WebSocket not running, cannot wait for order {order_id[:10]} fill")
+            return None
+
+        # Create event for this order
+        event = asyncio.Event()
+        with self._order_fill_lock:
+            self.order_fill_events[order_id] = event
+
+        try:
+            # Wait for event to be set (by _process_single_message when fill arrives)
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+
+            # Event was set, retrieve the order data
+            with self._order_fill_lock:
+                return self.order_fill_data.pop(order_id, None)
+
+        except asyncio.TimeoutError:
+            # Timeout reached, order not filled
+            return None
+
+        finally:
+            # Cleanup event registration
+            with self._order_fill_lock:
+                self.order_fill_events.pop(order_id, None)
+                self.order_fill_data.pop(order_id, None)
+
+    async def wait_for_orders_fill(
+        self, order_ids: List[str], timeout: float = 120, require_all: bool = True
+    ) -> Dict[str, Optional[dict]]:
+        """
+        Wait for multiple orders to fill via WebSocket notifications.
+
+        This is optimized for atomic hedging where we place entry + hedge
+        simultaneously and need to wait for both to fill.
+
+        Args:
+            order_ids: List of order IDs to wait for
+            timeout: Maximum seconds to wait (default 120)
+            require_all: If True, wait for ALL orders to fill (default True)
+                        If False, return as soon as ANY order fills
+
+        Returns:
+            Dict mapping order_id -> order_data (or None if not filled)
+
+        Example:
+            # Wait for both entry and hedge to fill
+            results = await ws_manager.wait_for_orders_fill(
+                [entry_order_id, hedge_order_id],
+                timeout=120,
+                require_all=True
+            )
+
+            entry_data = results.get(entry_order_id)
+            hedge_data = results.get(hedge_order_id)
+
+            if entry_data and hedge_data:
+                print("Both orders filled!")
+            else:
+                print("Timeout or partial fill")
+        """
+        if not self._loop or not self._running:
+            log("⚠️  WebSocket not running, cannot wait for order fills")
+            return {order_id: None for order_id in order_ids}
+
+        # Create events for all orders
+        events = {}
+        with self._order_fill_lock:
+            for order_id in order_ids:
+                event = asyncio.Event()
+                self.order_fill_events[order_id] = event
+                events[order_id] = event
+
+        try:
+            start_time = time.time()
+            filled_orders = {}
+
+            if require_all:
+                # Wait for ALL orders to fill
+                while len(filled_orders) < len(order_ids):
+                    elapsed = time.time() - start_time
+                    remaining_timeout = timeout - elapsed
+
+                    if remaining_timeout <= 0:
+                        # Timeout reached
+                        break
+
+                    # Wait for any remaining order to fill
+                    pending_ids = [oid for oid in order_ids if oid not in filled_orders]
+                    pending_events = [events[oid] for oid in pending_ids]
+
+                    try:
+                        # Wait for first event to trigger
+                        done, pending = await asyncio.wait(
+                            [asyncio.create_task(e.wait()) for e in pending_events],
+                            timeout=remaining_timeout,
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+
+                        # Check which orders filled
+                        with self._order_fill_lock:
+                            for order_id in pending_ids:
+                                if events[order_id].is_set():
+                                    filled_orders[order_id] = self.order_fill_data.get(
+                                        order_id
+                                    )
+
+                    except asyncio.TimeoutError:
+                        break
+
+            else:
+                # Wait for ANY order to fill (return_when=FIRST_COMPLETED)
+                try:
+                    done, pending = await asyncio.wait(
+                        [asyncio.create_task(e.wait()) for e in events.values()],
+                        timeout=timeout,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    # Collect all filled orders
+                    with self._order_fill_lock:
+                        for order_id in order_ids:
+                            if events[order_id].is_set():
+                                filled_orders[order_id] = self.order_fill_data.get(
+                                    order_id
+                                )
+
+                except asyncio.TimeoutError:
+                    pass
+
+            # Build result dict (None for unfilled orders)
+            result = {}
+            for order_id in order_ids:
+                result[order_id] = filled_orders.get(order_id)
+
+            return result
+
+        finally:
+            # Cleanup all event registrations
+            with self._order_fill_lock:
+                for order_id in order_ids:
+                    self.order_fill_events.pop(order_id, None)
+                    self.order_fill_data.pop(order_id, None)
 
     def register_callback(self, event_type: str, callback: Callable):
         """Register a function to be called on WSS events"""

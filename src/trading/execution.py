@@ -105,6 +105,64 @@ def record_post_only_result(symbol: str, success: bool) -> None:
             )
 
 
+def _wait_for_orders_hybrid(
+    order_ids: list, timeout: float, symbol: str
+) -> Dict[str, Optional[dict]]:
+    """
+    Hybrid monitoring: Try WebSocket first, fall back to polling.
+
+    Phase 2 WebSocket integration - uses WebSocket for instant notifications
+    when available, falls back to polling for reliability.
+
+    Args:
+        order_ids: List of order IDs to monitor
+        timeout: Maximum seconds to wait
+        symbol: Trading symbol (for logging)
+
+    Returns:
+        Dict mapping order_id -> order_data (or None if not filled)
+    """
+    from src.config.settings import ENABLE_WEBSOCKET_MONITORING
+    from src.utils.websocket_manager import ws_manager
+
+    # Try WebSocket path if enabled and running
+    if ENABLE_WEBSOCKET_MONITORING and ws_manager._running:
+        try:
+            from src.trading.orders.async_monitoring import wait_for_batch_fill_sync
+
+            log(f"   🎯 [{symbol}] Using WebSocket monitoring")
+            results = wait_for_batch_fill_sync(
+                order_ids,
+                timeout=timeout,
+                require_all=True,
+                fallback_to_polling=False,  # We handle fallback here
+            )
+
+            # Check if any fills detected
+            filled_count = sum(1 for data in results.values() if data is not None)
+            if filled_count > 0:
+                return results  # WebSocket detected fills!
+
+            # WebSocket timed out, but might have missed notifications
+            # Fall through to polling to verify
+            log(f"   ⚠️  [{symbol}] WebSocket timeout, verifying with polling...")
+
+        except Exception as e:
+            log(f"   ⚠️  [{symbol}] WebSocket error: {e}, falling back to polling")
+
+    # Polling fallback - always verify final state with get_order()
+    results = {}
+    for order_id in order_ids:
+        try:
+            order_data = get_order(order_id)
+            results[order_id] = order_data
+        except Exception as e:
+            log(f"   ⚠️  [{symbol}] Error getting order {order_id[:10]}: {e}")
+            results[order_id] = None
+
+    return results
+
+
 def _record_exit_price(
     entry_order_id: Optional[str], exit_price: float, symbol: str
 ) -> None:
@@ -639,25 +697,37 @@ def emergency_sell_position(
                     f"   ⏱️  [{symbol}] GTC fallback placed at ${attempt_price:.2f}, waiting 10s..."
                 )
 
-                # Poll order status during wait period (check every second)
-                for elapsed in range(1, 11):  # 10 second wait for GTC
-                    time.sleep(1)
+                # Phase 2: Hybrid WebSocket/polling monitoring for GTC fill
+                try:
+                    from src.trading.orders.async_monitoring import (
+                        wait_for_order_fill_sync,
+                    )
+                    from src.config.settings import ENABLE_WEBSOCKET_MONITORING
+                    from src.utils.websocket_manager import ws_manager
 
-                    try:
+                    if ENABLE_WEBSOCKET_MONITORING and ws_manager._running:
+                        # Try WebSocket first (instant notification)
+                        log(f"   🎯 [{symbol}] Monitoring GTC fill via WebSocket...")
+                        order_status = wait_for_order_fill_sync(
+                            order_id, timeout=10, fallback_to_polling=False
+                        )
+                    else:
+                        # Polling fallback
                         order_status = get_order(order_id)
-                        if order_status:
-                            filled_size = float(order_status.get("size_matched", 0))
-                            if filled_size >= (size - 0.01):
-                                log(
-                                    f"   ✅ [{symbol}] GTC fallback filled after {elapsed}s: {size:.2f} @ ${attempt_price:.2f} (ID: {order_id[:10]})"
-                                )
-                                # Record exit price in database for P&L tracking
-                                _record_exit_price(
-                                    entry_order_id, attempt_price, symbol
-                                )
-                                return True
-                    except Exception as poll_err:
-                        log(f"   ⚠️  [{symbol}] Error checking order status: {poll_err}")
+                        time.sleep(10)  # Wait 10s like before
+
+                    if order_status:
+                        filled_size = float(order_status.get("size_matched", 0))
+                        if filled_size >= (size - 0.01):
+                            log(
+                                f"   ✅ [{symbol}] GTC fallback filled: {size:.2f} @ ${attempt_price:.2f} (ID: {order_id[:10]})"
+                            )
+                            # Record exit price in database for P&L tracking
+                            _record_exit_price(entry_order_id, attempt_price, symbol)
+                            return True
+
+                except Exception as ws_err:
+                    log(f"   ⚠️  [{symbol}] Error monitoring GTC order: {ws_err}")
 
                 # GTC didn't fill - continue to final fallback
                 log(
@@ -877,25 +947,39 @@ def emergency_sell_position(
                     f"   ⏱️  [{symbol}] Waiting {wait_seconds}s for GTC order to fill..."
                 )
 
-                # Poll order status during wait period (check every second)
-                for elapsed in range(1, wait_seconds + 1):
-                    time.sleep(1)
+                # Phase 2: Hybrid WebSocket/polling monitoring for GTC fill
+                try:
+                    from src.trading.orders.async_monitoring import (
+                        wait_for_order_fill_sync,
+                    )
+                    from src.config.settings import ENABLE_WEBSOCKET_MONITORING
+                    from src.utils.websocket_manager import ws_manager
 
-                    try:
+                    if ENABLE_WEBSOCKET_MONITORING and ws_manager._running:
+                        # Try WebSocket first (instant notification)
+                        log(
+                            f"   🎯 [{symbol}] Monitoring emergency sell via WebSocket..."
+                        )
+                        order_status = wait_for_order_fill_sync(
+                            order_id, timeout=wait_seconds, fallback_to_polling=False
+                        )
+                    else:
+                        # Polling fallback
                         order_status = get_order(order_id)
-                        if order_status:
-                            filled_size = float(order_status.get("size_matched", 0))
-                            if filled_size >= (size - 0.01):
-                                log(
-                                    f"   ✅ [{symbol}] Emergency sell filled after {elapsed}s: {size:.2f} @ ${attempt_price:.2f} (ID: {order_id[:10]})"
-                                )
-                                # Record exit price in database for P&L tracking
-                                _record_exit_price(
-                                    entry_order_id, attempt_price, symbol
-                                )
-                                return True
-                    except Exception as poll_err:
-                        log(f"   ⚠️  [{symbol}] Error checking order status: {poll_err}")
+                        time.sleep(wait_seconds)
+
+                    if order_status:
+                        filled_size = float(order_status.get("size_matched", 0))
+                        if filled_size >= (size - 0.01):
+                            log(
+                                f"   ✅ [{symbol}] Emergency sell filled: {size:.2f} @ ${attempt_price:.2f} (ID: {order_id[:10]})"
+                            )
+                            # Record exit price in database for P&L tracking
+                            _record_exit_price(entry_order_id, attempt_price, symbol)
+                            return True
+
+                except Exception as ws_err:
+                    log(f"   ⚠️  [{symbol}] Error monitoring emergency sell: {ws_err}")
 
                 # Order didn't fill in time - will cancel and try next price
                 log(
@@ -1446,9 +1530,15 @@ def place_entry_and_hedge_atomic(
             elapsed += HEDGE_POLL_INTERVAL_SECONDS
 
             try:
-                # Check both orders
-                entry_status = get_order(entry_order_id)
-                hedge_status = get_order(hedge_order_id)
+                # Phase 2: Hybrid WebSocket/polling monitoring
+                # Try WebSocket first (instant), fall back to polling (reliable)
+                results = _wait_for_orders_hybrid(
+                    [entry_order_id, hedge_order_id],
+                    timeout=HEDGE_POLL_INTERVAL_SECONDS,  # Check every 5s
+                    symbol=symbol,
+                )
+                entry_status = results.get(entry_order_id)
+                hedge_status = results.get(hedge_order_id)
 
                 entry_filled_size = 0.0
                 hedge_filled_size = 0.0
