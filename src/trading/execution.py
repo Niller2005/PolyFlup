@@ -11,7 +11,6 @@ from src.trading.orders import (
     get_balance_allowance,
     get_clob_client,
     cancel_order,
-    place_limit_order,
     BUY,
     SELL,
     MIN_ORDER_SIZE,
@@ -405,7 +404,6 @@ def emergency_sell_position(
         # Urgency adapts based on time remaining in window
         if orderbook_available and best_bid:
             from src.config.settings import (
-                EMERGENCY_SELL_ENABLE_PROGRESSIVE,
                 EMERGENCY_SELL_WAIT_SHORT,
                 EMERGENCY_SELL_WAIT_MEDIUM,
                 EMERGENCY_SELL_WAIT_LONG,
@@ -419,27 +417,27 @@ def emergency_sell_position(
                 # Goal: Maximize recovery value, accept slower fills
                 attempts = [
                     ("best bid (FOK)", best_bid, 0, "FOK"),
-                    (f"bid - $0.01 (GTC 10s)", max(0.01, best_bid - 0.01), 10, "GTC"),
-                    (f"bid - $0.02 (GTC 10s)", max(0.01, best_bid - 0.02), 10, "GTC"),
-                    (f"bid - $0.03 (GTC 12s)", max(0.01, best_bid - 0.03), 12, "GTC"),
-                    (f"bid - $0.05 (GTC 15s)", max(0.01, best_bid - 0.05), 15, "GTC"),
-                    (f"bid - $0.10 (GTC 20s)", max(0.01, best_bid - 0.10), 20, "GTC"),
-                    (f"$0.30 (GTC 20s)", 0.30, 20, "GTC"),
-                    (f"$0.20 (GTC 15s)", 0.20, 15, "GTC"),
-                    (f"$0.15 (GTC 15s)", 0.15, 15, "GTC"),
+                    ("bid - $0.01 (GTC 10s)", max(0.01, best_bid - 0.01), 10, "GTC"),
+                    ("bid - $0.02 (GTC 10s)", max(0.01, best_bid - 0.02), 10, "GTC"),
+                    ("bid - $0.03 (GTC 12s)", max(0.01, best_bid - 0.03), 12, "GTC"),
+                    ("bid - $0.05 (GTC 15s)", max(0.01, best_bid - 0.05), 15, "GTC"),
+                    ("bid - $0.10 (GTC 20s)", max(0.01, best_bid - 0.10), 20, "GTC"),
+                    ("$0.30 (GTC 20s)", 0.30, 20, "GTC"),
+                    ("$0.20 (GTC 15s)", 0.20, 15, "GTC"),
+                    ("$0.15 (GTC 15s)", 0.15, 15, "GTC"),
                 ]
             elif urgency_level == "BALANCED":
                 # Mid window (300-600s): Moderate drops, balanced waits
                 # Goal: Balance recovery value with liquidation speed
                 attempts = [
                     ("best bid (FOK)", best_bid, 0, "FOK"),
-                    (f"bid - $0.01 (GTC 6s)", max(0.01, best_bid - 0.01), 6, "GTC"),
-                    (f"bid - $0.02 (GTC 6s)", max(0.01, best_bid - 0.02), 6, "GTC"),
-                    (f"bid - $0.05 (GTC 8s)", max(0.01, best_bid - 0.05), 8, "GTC"),
-                    (f"bid - $0.10 (GTC 10s)", max(0.01, best_bid - 0.10), 10, "GTC"),
-                    (f"$0.30 (GTC 10s)", 0.30, 10, "GTC"),
-                    (f"$0.20 (GTC 10s)", 0.20, 10, "GTC"),
-                    (f"$0.15 (GTC 10s)", 0.15, 10, "GTC"),
+                    ("bid - $0.01 (GTC 6s)", max(0.01, best_bid - 0.01), 6, "GTC"),
+                    ("bid - $0.02 (GTC 6s)", max(0.01, best_bid - 0.02), 6, "GTC"),
+                    ("bid - $0.05 (GTC 8s)", max(0.01, best_bid - 0.05), 8, "GTC"),
+                    ("bid - $0.10 (GTC 10s)", max(0.01, best_bid - 0.10), 10, "GTC"),
+                    ("$0.30 (GTC 10s)", 0.30, 10, "GTC"),
+                    ("$0.20 (GTC 10s)", 0.20, 10, "GTC"),
+                    ("$0.15 (GTC 10s)", 0.15, 10, "GTC"),
                 ]
             else:  # AGGRESSIVE (default)
                 # Late window (<300s) or unknown: Rapid drops, short waits
@@ -637,9 +635,9 @@ def emergency_sell_position(
                         20,
                         "GTC",
                     ),
-                    (f"$0.30 (GTC 20s)", 0.30, 20, "GTC"),
-                    (f"$0.20 (GTC 15s)", 0.20, 15, "GTC"),
-                    (f"$0.15 (GTC 15s)", 0.15, 15, "GTC"),
+                    ("$0.30 (GTC 20s)", 0.30, 20, "GTC"),
+                    ("$0.20 (GTC 15s)", 0.20, 15, "GTC"),
+                    ("$0.15 (GTC 15s)", 0.15, 15, "GTC"),
                 ]
             elif urgency_level == "BALANCED":
                 attempts = [
@@ -673,9 +671,9 @@ def emergency_sell_position(
                         10,
                         "GTC",
                     ),
-                    (f"$0.30 (GTC 10s)", 0.30, 10, "GTC"),
-                    (f"$0.20 (GTC 10s)", 0.20, 10, "GTC"),
-                    (f"$0.15 (GTC 10s)", 0.15, 10, "GTC"),
+                    ("$0.30 (GTC 10s)", 0.30, 10, "GTC"),
+                    ("$0.20 (GTC 10s)", 0.20, 10, "GTC"),
+                    ("$0.15 (GTC 10s)", 0.15, 10, "GTC"),
                 ]
             else:  # AGGRESSIVE
                 attempts = [
@@ -1098,14 +1096,6 @@ def place_entry_and_hedge_atomic(
         entry_result = results[0]
         hedge_result = results[1]
 
-        # DEBUG: Log API responses to understand success/failure detection
-        log(
-            f"   🐛 [{symbol}] DEBUG {entry_side} result: success={entry_result.get('success')}, order_id={entry_result.get('order_id')}, error={entry_result.get('error')}"
-        )
-        log(
-            f"   🐛 [{symbol}] DEBUG {hedge_side} result: success={hedge_result.get('success')}, order_id={hedge_result.get('order_id')}, error={hedge_result.get('error')}"
-        )
-
         entry_success = entry_result.get("success")
         hedge_success = hedge_result.get("success")
 
@@ -1113,12 +1103,11 @@ def place_entry_and_hedge_atomic(
         entry_error = entry_result.get("error", "")
         hedge_error = hedge_result.get("error", "")
 
-        post_only_crossed = False
+        # Track POST_ONLY crossing failures for diagnostics
         if (
             "order crosses book" in entry_error.lower()
             or "order crosses book" in hedge_error.lower()
         ):
-            post_only_crossed = True
             _post_only_failures[symbol] = _post_only_failures.get(symbol, 0) + 1
             log(
                 f"   🚨 [{symbol}] POST_ONLY crossing detected (failure #{_post_only_failures[symbol]})"
@@ -1580,7 +1569,6 @@ def place_entry_and_hedge_atomic(
                     from src.utils.websocket_manager import ws_manager
                     from src.config.settings import (
                         EMERGENCY_SELL_HOLD_IF_WINNING,
-                        EMERGENCY_SELL_PRICE_TOLERANCE_PCT,
                         EMERGENCY_SELL_MIN_PROFIT_CENTS,
                     )
 
@@ -1789,7 +1777,6 @@ def place_entry_and_hedge_atomic(
                     from src.utils.websocket_manager import ws_manager
                     from src.config.settings import (
                         EMERGENCY_SELL_HOLD_IF_WINNING,
-                        EMERGENCY_SELL_PRICE_TOLERANCE_PCT,
                         EMERGENCY_SELL_MIN_PROFIT_CENTS,
                     )
 
@@ -1930,7 +1917,8 @@ def place_entry_and_hedge_atomic(
                                 log_error(
                                     f"   🔒 [{symbol}] Cannot emergency sell - position ORPHANED (too small to sell)"
                                 )
-                                # TODO: Mark this trade in DB as orphaned/partial for tracking
+                                # Note: Orphaned positions (<5 shares) are held through resolution
+                                # Future enhancement: Add database tracking for orphaned positions
                             else:
                                 log(
                                     f"   💥 [{symbol}] Emergency selling partial {entry_side} position ({final_entry_filled_size:.2f} shares)"

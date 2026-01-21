@@ -5,7 +5,6 @@ import os
 import sys
 import fcntl
 import subprocess
-from typing import Optional, List, Tuple
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from eth_account import Account
@@ -14,64 +13,29 @@ from src.config.settings import (
     PROXY_PK,
     FUNDER_PROXY,
     MIN_EDGE,
-    CONTRARIAN_THRESHOLD,
-    MAX_SPREAD,
-    WINDOW_DELAY_SEC,
     MAX_ENTRY_LATENESS_SEC,
     ADX_ENABLED,
     ADX_PERIOD,
     ADX_INTERVAL,
     BET_PERCENT,
-    CONFIDENCE_SCALING_FACTOR,
     ENABLE_HEDGED_REVERSAL,
-    ENABLE_MOMENTUM_FILTER,
-    ENABLE_ORDER_FLOW,
-    ENABLE_DIVERGENCE,
-    ENABLE_VWM,
-    ENABLE_BFXD,
 )
 
 from src.utils.logger import log, log_error, send_discord, set_log_window
 from src.utils.web3_utils import get_balance
 from src.data.database import (
     init_database,
-    save_trade,
     generate_statistics,
-    get_total_exposure,
     has_trade_for_window,
-    has_side_for_window,
 )
 from src.data.market_data import (
-    get_token_ids,
-    get_current_slug,
     get_window_times,
     format_window_range,
-    get_funding_bias,
-    get_window_start_price,
-    get_current_spot_price,
-)
-from src.trading import (
-    calculate_confidence,
-    bfxd_allows_trade,
-    execute_trade,
-    _determine_trade_side,
-    _calculate_bet_size,
-    _prepare_trade_params,
-    log_skipped_symbols_summary,
 )
 
 
 from src.trading.orders import (
     setup_api_creds,
-    place_order,
-    place_batch_orders,
-    get_clob_client,
-    get_bulk_spreads,
-    get_spread,
-    get_order,
-    check_liquidity,
-    BUY,
-    SELL,
 )
 from src.trading.position_manager import (
     check_open_positions,
@@ -143,7 +107,7 @@ def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
             )
             row = c.fetchone()
             if row and row[0]:
-                is_reversal = row[0]
+                # Fetch side and window_start for reversal tracking
                 side = row[1]
                 window_start = row[2]
 
@@ -258,7 +222,7 @@ def main():
             range_str = format_window_range(w_start, w_end)
             log(f"🚀 Starting PolyFlup Trading Bot | Window: {range_str}")
         except Exception as e:
-            log(f"🚀 Starting PolyFlup Trading Bot (Modular Version)...")
+            log("🚀 Starting PolyFlup Trading Bot (Modular Version)...")
             log_error(f"Error setting initial log window: {e}")
     else:
         log("🚀 Starting PolyFlup Trading Bot (Modular Version)...")
@@ -326,7 +290,8 @@ def main():
     if MARKETS:
         try:
             last_window_logged, _ = get_window_times(MARKETS[0])
-        except:
+        except Exception:
+            # Silently ignore window time fetch errors on startup
             pass
 
     while True:
