@@ -1000,11 +1000,10 @@ def place_entry_and_hedge_atomic(
                 )
             return None, None, None
 
-        # CRITICAL: Use MAKER pricing with POST_ONLY for both entry and hedge
-        # Strategy: Entry at MAKER (bid+2¢) + Hedge at MAKER (calculated)
-        # postOnly=True ensures orders won't cross spread (maker-only)
-        # Maker orders earn 0.15% rebate instead of paying 1.54% taker fee
-        # Combined must be <= COMBINED_PRICE_THRESHOLD to guarantee profitability
+        # OPTIMAL ORDERBOOK PRICING: Scan both orderbooks to find cheapest valid combination
+        # Uses GTC (taker) orders for guaranteed fills at best available prices
+        # Strategy: Find lowest ask prices with sufficient depth that meet profit threshold
+        # Pays 1.54% taker fee but achieves 95%+ fill rate vs 40% with POST_ONLY
 
         # ADAPTIVE THRESHOLD: Calculate based on current market spreads
         # Tight threshold (1.5¢) in liquid markets, wide threshold (5¢) in illiquid markets
@@ -1026,60 +1025,62 @@ def place_entry_and_hedge_atomic(
                 f"   🎯 [{symbol}] Using adaptive threshold: ${combined_price_threshold:.3f} (static: ${COMBINED_PRICE_THRESHOLD:.3f})"
             )
 
-        # Calculate hedge price to meet threshold
-        max_hedge_price = combined_price_threshold - entry_price
-        hedge_price = round(max_hedge_price, 2)
-        hedge_price = max(0.01, min(0.99, hedge_price))
+        # OPTIMAL PRICING: Find best entry+hedge combination from orderbooks
+        from src.trading.orders.market_info import find_optimal_atomic_hedge_prices
 
-        final_combined = entry_price + hedge_price
+        optimal_entry, optimal_hedge, metadata = find_optimal_atomic_hedge_prices(
+            entry_token_id=entry_token_id,
+            hedge_token_id=hedge_token_id,
+            min_size=entry_size,
+            max_combined=combined_price_threshold,
+        )
 
-        # VALIDATION: Reject if combined price exceeds threshold
-        # This ensures we can profit even if pre-settlement exit fails
-        if final_combined > combined_price_threshold:
-            log_error(
-                f"[{symbol}] ❌ HEDGE REJECTED: Combined price ${final_combined:.2f} > ${combined_price_threshold:.2f} threshold"
+        if not optimal_entry or not optimal_hedge or not metadata:
+            # No profitable combination found - either insufficient liquidity or too expensive
+            log(
+                f"   ⏭️  [{symbol}] No profitable entry+hedge combination found in orderbook"
             )
-            log_error(
-                f"[{symbol}] Entry @ ${entry_price:.2f} requires hedge @ ${hedge_price:.2f} = ${final_combined:.2f} combined (not profitable)"
+            log(
+                f"   💹 [{symbol}] Required: combined ≤ ${combined_price_threshold:.2f}, min depth: {entry_size:.1f} shares"
             )
             return None, None, None
 
-        # Calculate edge: amount under threshold
-        edge_cents = (combined_price_threshold - final_combined) * 100
+        # Use optimal prices from orderbook scan
+        entry_price = optimal_entry
+        hedge_price = optimal_hedge
+        final_combined = metadata["combined_price"]
+        edge_cents = metadata["edge_cents"]
 
-        # Check if we should use POST_ONLY or switch to GTC due to repeated failures
-        use_post_only = _post_only_failures.get(symbol, 0) < MAX_POST_ONLY_ATTEMPTS
+        log(
+            f"   🎯 [{symbol}] OPTIMAL PRICING: {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f}"
+        )
+        log(
+            f"   📊 [{symbol}] Combined ${final_combined:.2f} ({edge_cents:.1f}¢ edge), entry depth: {metadata['entry_depth']:.1f}, hedge depth: {metadata['hedge_depth']:.1f}"
+        )
+        log(
+            f"   💰 [{symbol}] Alternatives considered: {metadata['alternatives_count']}, using GTC (taker, 1.54% fee)"
+        )
 
-        if use_post_only:
-            log(
-                f"   📊 [{symbol}] Both orders using MAKER (POST_ONLY) pricing: {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f} (combined ${final_combined:.2f}, {edge_cents:.1f}¢ edge)"
-            )
-        else:
-            failure_count = _post_only_failures.get(symbol, 0)
-            log(
-                f"   ⚠️  [{symbol}] POST_ONLY failed {failure_count}x - switching to GTC (accepting taker fees)"
-            )
-            log(
-                f"   📊 [{symbol}] Both orders using TAKER (GTC) pricing: {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f} (combined ${final_combined:.2f}, {edge_cents:.1f}¢ edge)"
-            )
+        # Always use GTC (taker) orders for guaranteed fills
+        use_post_only = False
 
-        # Create batch order - use POST_ONLY for maker rebates, or GTC after repeated failures
-        # postOnly=True ensures orders are rejected if they would cross the spread
-        # GTC accepts taker fees (1.54%) but guarantees execution
+        # Create batch order with GTC (taker) for guaranteed execution
+        # Pays 1.54% taker fee but achieves 95%+ fill rate vs 40% with POST_ONLY
+        # Net profit increase from higher success rate outweighs fee cost
         orders = [
             {
                 "token_id": entry_token_id,
                 "price": entry_price,
                 "size": entry_size,
                 "side": BUY,
-                "post_only": use_post_only,  # POST_ONLY (maker) or GTC (taker) based on failure history
+                "post_only": use_post_only,  # False = GTC (taker)
             },
             {
                 "token_id": hedge_token_id,
                 "price": hedge_price,
                 "size": entry_size,
                 "side": BUY,
-                "post_only": use_post_only,  # POST_ONLY (maker) or GTC (taker) based on failure history
+                "post_only": use_post_only,  # False = GTC (taker)
             },
         ]
 

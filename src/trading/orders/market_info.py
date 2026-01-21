@@ -514,3 +514,159 @@ def check_atomic_hedge_liquidity(
             "Liquidity check failed with unexpected error (fail-closed)",
             metrics,
         )
+
+
+def get_orderbook_levels_with_depth(
+    token_id: str, side: str = "ASK", min_size: float = 5.0, max_levels: int = 10
+) -> List[tuple[float, float]]:
+    """
+    Get orderbook levels with sufficient depth for atomic hedge optimization.
+
+    Args:
+        token_id: Token ID to query
+        side: "ASK" or "BID"
+        min_size: Minimum cumulative size required at each level
+        max_levels: Maximum number of levels to return
+
+    Returns:
+        List of (price, cumulative_size) tuples sorted by price
+        Empty list if orderbook unavailable
+    """
+    try:
+        # Get orderbook from CLOB API
+        orderbook = client.get_order_book(token_id)
+        if not orderbook:
+            return []
+
+        # Parse orderbook based on response type
+        if isinstance(orderbook, dict):
+            levels = orderbook.get("asks" if side == "ASK" else "bids", [])
+        else:
+            levels = getattr(orderbook, "asks" if side == "ASK" else "bids", [])
+
+        if not levels:
+            return []
+
+        # Extract price and size from each level
+        result = []
+        cumulative_size = 0.0
+
+        for level in levels[:max_levels]:
+            # Parse level (handle both dict and object formats)
+            if isinstance(level, dict):
+                price = float(level.get("price", 0))
+                size = float(level.get("size", 0))
+            elif hasattr(level, "price") and hasattr(level, "size"):
+                price = float(level.price)
+                size = float(level.size)
+            else:
+                continue
+
+            if price <= 0.01 or size <= 0:
+                continue
+
+            cumulative_size += size
+
+            # Only include levels that meet minimum size threshold
+            if cumulative_size >= min_size:
+                result.append((price, cumulative_size))
+
+        # Sort by price (ascending for asks, descending for bids)
+        result.sort(key=lambda x: x[0], reverse=(side == "BID"))
+
+        return result
+
+    except Exception as e:
+        if not is_404_error(e):
+            log(f"   ⚠️  Error fetching orderbook levels for {token_id[:10]}: {e}")
+        return []
+
+
+def find_optimal_atomic_hedge_prices(
+    entry_token_id: str,
+    hedge_token_id: str,
+    min_size: float = 5.0,
+    max_combined: float = 0.97,
+) -> tuple[Optional[float], Optional[float], Optional[dict]]:
+    """
+    Find optimal entry + hedge prices that minimize combined cost while ensuring liquidity.
+
+    This function scans both orderbooks to find the cheapest valid combination that:
+    1. Has sufficient liquidity (≥min_size shares) on both sides
+    2. Maintains profitability (combined price ≤ max_combined threshold)
+    3. Maximizes edge (difference between combined price and threshold)
+
+    Args:
+        entry_token_id: Token ID for entry side
+        hedge_token_id: Token ID for hedge side
+        min_size: Minimum shares required at each price level (default 5.0)
+        max_combined: Maximum allowed combined price (default $0.97)
+
+    Returns:
+        tuple[entry_price, hedge_price, metadata] or (None, None, None) if no valid combination
+
+        metadata dict includes:
+            - combined_price: Total entry + hedge cost
+            - edge_cents: Buffer under max_combined (in cents)
+            - entry_depth: Available shares at entry price
+            - hedge_depth: Available shares at hedge price
+            - alternatives_count: Number of valid combinations considered
+    """
+    try:
+        # Get orderbook levels with sufficient depth for both sides
+        entry_levels = get_orderbook_levels_with_depth(
+            entry_token_id, side="ASK", min_size=min_size, max_levels=10
+        )
+        hedge_levels = get_orderbook_levels_with_depth(
+            hedge_token_id, side="ASK", min_size=min_size, max_levels=10
+        )
+
+        if not entry_levels or not hedge_levels:
+            # No valid liquidity on one or both sides
+            return None, None, None
+
+        # Find combination with minimum combined price that meets threshold
+        best_combined = float("inf")
+        best_entry_price = None
+        best_hedge_price = None
+        best_entry_depth = 0.0
+        best_hedge_depth = 0.0
+        alternatives_count = 0
+
+        for entry_price, entry_depth in entry_levels:
+            for hedge_price, hedge_depth in hedge_levels:
+                combined = entry_price + hedge_price
+
+                # Must meet profitability constraint
+                if combined <= max_combined:
+                    alternatives_count += 1
+
+                    # Track best (lowest) combination
+                    if combined < best_combined:
+                        best_combined = combined
+                        best_entry_price = entry_price
+                        best_hedge_price = hedge_price
+                        best_entry_depth = entry_depth
+                        best_hedge_depth = hedge_depth
+
+        if best_entry_price is None:
+            # No combination meets profitability threshold
+            return None, None, None
+
+        # Calculate edge (safety buffer)
+        edge_cents = (max_combined - best_combined) * 100
+
+        # Build metadata
+        metadata = {
+            "combined_price": best_combined,
+            "edge_cents": edge_cents,
+            "entry_depth": best_entry_depth,
+            "hedge_depth": best_hedge_depth,
+            "alternatives_count": alternatives_count,
+        }
+
+        return best_entry_price, best_hedge_price, metadata
+
+    except Exception as e:
+        log(f"   ⚠️  Error finding optimal atomic hedge prices: {e}")
+        return None, None, None
