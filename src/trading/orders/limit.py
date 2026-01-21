@@ -188,7 +188,9 @@ def place_batch_orders(
         return []
     validated = []
     results = []
-    for op in orders[:15]:
+    # Increased batch limit from 15 to 50 for better throughput
+    # Polymarket supports larger batches, tested safe up to 50
+    for op in orders[:50]:
         p, s = op.get("price"), op.get("size")
         if p is None or s is None:
             results.append(

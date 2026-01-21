@@ -20,7 +20,89 @@ from src.data.market_data import get_token_ids
 # Track POST_ONLY failures per symbol to switch to GTC after repeated crossing
 # Key: symbol, Value: consecutive failure count
 _post_only_failures: Dict[str, int] = {}
+_last_post_only_attempt: Dict[str, float] = {}  # Timestamp of last attempt per symbol
+_trade_count_since_post_only: Dict[str, int] = {}  # Trades since switching to GTC
+
 MAX_POST_ONLY_ATTEMPTS = 3  # Switch to GTC after this many failures
+POST_ONLY_RESET_TIMEOUT = 300  # seconds (5 minutes) - reset counter if market settles
+POST_ONLY_RETRY_INTERVAL = 10  # Try POST_ONLY every 10th trade after threshold
+
+
+def should_use_post_only(symbol: str) -> bool:
+    """
+    Determine if POST_ONLY should be used for this symbol based on failure history.
+
+    Smart retry logic:
+    - Use POST_ONLY if under failure threshold
+    - Reset counter if 5+ minutes elapsed (market likely settled)
+    - Test POST_ONLY every 10th trade after threshold (auto-recovery)
+
+    Args:
+        symbol: Trading symbol
+
+    Returns:
+        bool: True if POST_ONLY should be used, False for GTC
+    """
+    import time
+
+    # Check if enough time has passed to reset counter (market settled)
+    last_attempt = _last_post_only_attempt.get(symbol, 0)
+    if last_attempt and (time.time() - last_attempt) > POST_ONLY_RESET_TIMEOUT:
+        _post_only_failures[symbol] = 0
+        _trade_count_since_post_only[symbol] = 0
+        log(
+            f"   🔄 [{symbol}] POST_ONLY failure counter reset (market settled after 5min)"
+        )
+
+    failures = _post_only_failures.get(symbol, 0)
+
+    # Under threshold: use POST_ONLY
+    if failures < MAX_POST_ONLY_ATTEMPTS:
+        _last_post_only_attempt[symbol] = time.time()
+        return True
+
+    # Over threshold: test POST_ONLY periodically for auto-recovery
+    trade_count = _trade_count_since_post_only.get(symbol, 0)
+    if trade_count % POST_ONLY_RETRY_INTERVAL == 0:
+        log(
+            f"   🔄 [{symbol}] Testing POST_ONLY again (periodic retry, failures: {failures})"
+        )
+        _last_post_only_attempt[symbol] = time.time()
+        return True
+
+    # Default: use GTC (taker)
+    return False
+
+
+def record_post_only_result(symbol: str, success: bool) -> None:
+    """
+    Record the result of a POST_ONLY order attempt.
+
+    Args:
+        symbol: Trading symbol
+        success: True if both orders placed successfully, False if crossed
+    """
+    if success:
+        # Reset counter on success
+        _post_only_failures[symbol] = 0
+        _trade_count_since_post_only[symbol] = 0
+        log(f"   ✅ [{symbol}] POST_ONLY success - earning maker rebate (0.15%)")
+    else:
+        # Increment failure counter
+        _post_only_failures[symbol] = _post_only_failures.get(symbol, 0) + 1
+        _trade_count_since_post_only[symbol] = (
+            _trade_count_since_post_only.get(symbol, 0) + 1
+        )
+        failures = _post_only_failures[symbol]
+
+        if failures >= MAX_POST_ONLY_ATTEMPTS:
+            log(
+                f"   🔄 [{symbol}] Switching to GTC (taker) after {failures} POST_ONLY failures"
+            )
+        else:
+            log(
+                f"   ⚠️  [{symbol}] POST_ONLY crossing failure #{failures}/{MAX_POST_ONLY_ATTEMPTS}"
+            )
 
 
 def _record_exit_price(
@@ -439,85 +521,54 @@ def emergency_sell_position(
             # Define TIME-AWARE pricing strategy based on urgency level
             # Format: (price_description, price_value, wait_seconds, order_type)
             if urgency_level == "PATIENT":
-                # Early window (>600s): Small drops, long waits
-                # Goal: Maximize recovery value, accept slower fills
+                # Early window (>600s): Small drops, instant FOK feedback
+                # Goal: Maximize recovery value with fast iteration
+                # FOK = Fill-Or-Kill: executes immediately or rejects (no wait/cancel needed)
                 attempts = [
                     ("best bid (FOK)", best_bid, 0, "FOK"),
-                    ("bid - $0.01 (GTC 10s)", max(0.01, best_bid - 0.01), 10, "GTC"),
-                    ("bid - $0.02 (GTC 10s)", max(0.01, best_bid - 0.02), 10, "GTC"),
-                    ("bid - $0.03 (GTC 12s)", max(0.01, best_bid - 0.03), 12, "GTC"),
-                    ("bid - $0.05 (GTC 15s)", max(0.01, best_bid - 0.05), 15, "GTC"),
-                    ("bid - $0.10 (GTC 20s)", max(0.01, best_bid - 0.10), 20, "GTC"),
-                    ("$0.30 (GTC 20s)", 0.30, 20, "GTC"),
-                    ("$0.20 (GTC 15s)", 0.20, 15, "GTC"),
-                    ("$0.15 (GTC 15s)", 0.15, 15, "GTC"),
+                    ("bid - $0.01 (FOK)", max(0.01, best_bid - 0.01), 0, "FOK"),
+                    ("bid - $0.02 (FOK)", max(0.01, best_bid - 0.02), 0, "FOK"),
+                    ("bid - $0.03 (FOK)", max(0.01, best_bid - 0.03), 0, "FOK"),
+                    ("bid - $0.05 (FOK)", max(0.01, best_bid - 0.05), 0, "FOK"),
+                    ("bid - $0.10 (FOK)", max(0.01, best_bid - 0.10), 0, "FOK"),
+                    ("$0.30 (FOK)", 0.30, 0, "FOK"),
+                    ("$0.20 (FOK)", 0.20, 0, "FOK"),
+                    ("$0.15 (FOK)", 0.15, 0, "FOK"),
+                    ("$0.10 (GTC fallback)", 0.10, 0, "GTC"),  # Final GTC fallback
                 ]
             elif urgency_level == "BALANCED":
-                # Mid window (300-600s): Moderate drops, balanced waits
+                # Mid window (300-600s): Moderate drops, FOK for speed
                 # Goal: Balance recovery value with liquidation speed
                 attempts = [
                     ("best bid (FOK)", best_bid, 0, "FOK"),
-                    ("bid - $0.01 (GTC 6s)", max(0.01, best_bid - 0.01), 6, "GTC"),
-                    ("bid - $0.02 (GTC 6s)", max(0.01, best_bid - 0.02), 6, "GTC"),
-                    ("bid - $0.05 (GTC 8s)", max(0.01, best_bid - 0.05), 8, "GTC"),
-                    ("bid - $0.10 (GTC 10s)", max(0.01, best_bid - 0.10), 10, "GTC"),
-                    ("$0.30 (GTC 10s)", 0.30, 10, "GTC"),
-                    ("$0.20 (GTC 10s)", 0.20, 10, "GTC"),
-                    ("$0.15 (GTC 10s)", 0.15, 10, "GTC"),
+                    ("bid - $0.01 (FOK)", max(0.01, best_bid - 0.01), 0, "FOK"),
+                    ("bid - $0.02 (FOK)", max(0.01, best_bid - 0.02), 0, "FOK"),
+                    ("bid - $0.05 (FOK)", max(0.01, best_bid - 0.05), 0, "FOK"),
+                    ("bid - $0.10 (FOK)", max(0.01, best_bid - 0.10), 0, "FOK"),
+                    ("$0.30 (FOK)", 0.30, 0, "FOK"),
+                    ("$0.20 (FOK)", 0.20, 0, "FOK"),
+                    ("$0.15 (FOK)", 0.15, 0, "FOK"),
+                    ("$0.10 (GTC fallback)", 0.10, 0, "GTC"),
                 ]
             else:  # AGGRESSIVE (default)
-                # Late window (<300s) or unknown: Rapid drops, short waits
-                # Goal: Ensure liquidation before resolution, accept lower prices
+                # Late window (<300s) or unknown: Rapid FOK attempts
+                # Goal: Ensure liquidation before resolution with fast iteration
                 attempts = [
                     ("best bid (FOK)", best_bid, 0, "FOK"),
-                    (
-                        f"bid - $0.01 (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
-                        max(0.01, best_bid - 0.01),
-                        EMERGENCY_SELL_WAIT_SHORT,
-                        "GTC",
-                    ),
-                    (
-                        f"bid - $0.02 (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
-                        max(0.01, best_bid - 0.02),
-                        EMERGENCY_SELL_WAIT_SHORT,
-                        "GTC",
-                    ),
-                    (
-                        f"bid - $0.05 (GTC {EMERGENCY_SELL_WAIT_MEDIUM}s)",
-                        max(0.01, best_bid - 0.05),
-                        EMERGENCY_SELL_WAIT_MEDIUM,
-                        "GTC",
-                    ),
-                    (
-                        f"bid - $0.10 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                        max(0.01, best_bid - 0.10),
-                        EMERGENCY_SELL_WAIT_LONG,
-                        "GTC",
-                    ),
-                    (
-                        f"$0.30 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                        0.30,
-                        EMERGENCY_SELL_WAIT_LONG,
-                        "GTC",
-                    ),
-                    (
-                        f"$0.20 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                        0.20,
-                        EMERGENCY_SELL_WAIT_LONG,
-                        "GTC",
-                    ),
-                    (
-                        f"$0.15 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                        0.15,
-                        EMERGENCY_SELL_WAIT_LONG,
-                        "GTC",
-                    ),
+                    ("bid - $0.01 (FOK)", max(0.01, best_bid - 0.01), 0, "FOK"),
+                    ("bid - $0.02 (FOK)", max(0.01, best_bid - 0.02), 0, "FOK"),
+                    ("bid - $0.05 (FOK)", max(0.01, best_bid - 0.05), 0, "FOK"),
+                    ("bid - $0.10 (FOK)", max(0.01, best_bid - 0.10), 0, "FOK"),
+                    ("$0.30 (FOK)", 0.30, 0, "FOK"),
+                    ("$0.20 (FOK)", 0.20, 0, "FOK"),
+                    ("$0.15 (FOK)", 0.15, 0, "FOK"),
+                    ("$0.10 (GTC fallback)", 0.10, 0, "GTC"),
                 ]
 
             last_order_id = None
 
             # EMERGENCY SELL TIMEOUT: Prevent excessive blocking during high volatility
-            MAX_EMERGENCY_SELL_TIME = 45  # seconds
+            MAX_EMERGENCY_SELL_TIME = 20  # seconds (reduced from 45s due to FOK speed)
             emergency_start_time = time.time()
 
             for attempt_name, attempt_price, wait_seconds, order_type in attempts:
@@ -529,7 +580,7 @@ def emergency_sell_position(
                     )
                     break
 
-                # Cancel previous GTC order before placing new one
+                # Cancel previous GTC order before placing new one (FOK orders auto-reject, no cancel needed)
                 if last_order_id and order_type == "GTC":
                     try:
                         cancel_order(last_order_id)
@@ -559,9 +610,15 @@ def emergency_sell_position(
                 )
 
                 if not result.get("success"):
-                    log(
-                        f"   ⚠️  [{symbol}] Order placement failed: {result.get('error', 'unknown')}"
-                    )
+                    # FOK rejection is normal - just means no takers at this price
+                    if order_type == "FOK":
+                        log(
+                            f"   ⏭️  [{symbol}] FOK rejected at ${attempt_price:.2f} - trying next price"
+                        )
+                    else:
+                        log(
+                            f"   ⚠️  [{symbol}] Order placement failed: {result.get('error', 'unknown')}"
+                        )
                     continue
 
                 order_id = result.get("order_id", "unknown")
@@ -569,21 +626,21 @@ def emergency_sell_position(
 
                 # FOK orders either fill immediately or fail - no need to wait
                 if order_type == "FOK":
-                    # Check if filled (FOK returns success only if filled)
+                    # Success = filled (FOK only returns success if completely filled)
                     log(
-                        f"   ✅ [{symbol}] Emergency sell filled: {size:.2f} @ ${attempt_price:.2f} ({attempt_name}) (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
+                        f"   ✅ [{symbol}] Emergency sell filled instantly: {size:.2f} @ ${attempt_price:.2f} ({attempt_name}) (ID: {order_id[:10] if order_id != 'unknown' else order_id})"
                     )
                     # Record exit price in database for P&L tracking
                     _record_exit_price(entry_order_id, attempt_price, symbol)
                     return True
 
-                # GTC orders need time to be taken - wait and check status
+                # GTC fallback order - place and wait briefly
                 log(
-                    f"   ⏱️  [{symbol}] Waiting {wait_seconds}s for GTC order to fill..."
+                    f"   ⏱️  [{symbol}] GTC fallback placed at ${attempt_price:.2f}, waiting 10s..."
                 )
 
                 # Poll order status during wait period (check every second)
-                for elapsed in range(1, wait_seconds + 1):
+                for elapsed in range(1, 11):  # 10 second wait for GTC
                     time.sleep(1)
 
                     try:
@@ -592,7 +649,7 @@ def emergency_sell_position(
                             filled_size = float(order_status.get("size_matched", 0))
                             if filled_size >= (size - 0.01):
                                 log(
-                                    f"   ✅ [{symbol}] Emergency sell filled after {elapsed}s: {size:.2f} @ ${attempt_price:.2f} (ID: {order_id[:10]})"
+                                    f"   ✅ [{symbol}] GTC fallback filled after {elapsed}s: {size:.2f} @ ${attempt_price:.2f} (ID: {order_id[:10]})"
                                 )
                                 # Record exit price in database for P&L tracking
                                 _record_exit_price(
@@ -602,9 +659,9 @@ def emergency_sell_position(
                     except Exception as poll_err:
                         log(f"   ⚠️  [{symbol}] Error checking order status: {poll_err}")
 
-                # Order didn't fill in time - will cancel and try next price
+                # GTC didn't fill - continue to final fallback
                 log(
-                    f"   ⏰ [{symbol}] Order at ${attempt_price:.2f} not filled after {wait_seconds}s"
+                    f"   ⏰ [{symbol}] GTC fallback at ${attempt_price:.2f} not filled after 10s"
                 )
 
             # Cancel last attempt before final fallback
@@ -634,7 +691,7 @@ def emergency_sell_position(
             # Start at entry_price and work down since we're selling
             reference_price = min(0.99, max(0.01, entry_price))
 
-            # TIME-AWARE fallback pricing (same strategy as orderbook-based)
+            # TIME-AWARE fallback pricing (FOK for fast iteration)
             if urgency_level == "PATIENT":
                 attempts = [
                     (
@@ -644,38 +701,39 @@ def emergency_sell_position(
                         "FOK",
                     ),
                     (
-                        f"${reference_price - 0.01:.2f} (GTC 10s)",
+                        f"${reference_price - 0.01:.2f} (FOK)",
                         max(0.01, reference_price - 0.01),
-                        10,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
                     (
-                        f"${reference_price - 0.02:.2f} (GTC 10s)",
+                        f"${reference_price - 0.02:.2f} (FOK)",
                         max(0.01, reference_price - 0.02),
-                        10,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
                     (
-                        f"${reference_price - 0.03:.2f} (GTC 12s)",
+                        f"${reference_price - 0.03:.2f} (FOK)",
                         max(0.01, reference_price - 0.03),
-                        12,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
                     (
-                        f"${reference_price - 0.05:.2f} (GTC 15s)",
+                        f"${reference_price - 0.05:.2f} (FOK)",
                         max(0.01, reference_price - 0.05),
-                        15,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
                     (
-                        f"${reference_price - 0.10:.2f} (GTC 20s)",
+                        f"${reference_price - 0.10:.2f} (FOK)",
                         max(0.01, reference_price - 0.10),
-                        20,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
-                    ("$0.30 (GTC 20s)", 0.30, 20, "GTC"),
-                    ("$0.20 (GTC 15s)", 0.20, 15, "GTC"),
-                    ("$0.15 (GTC 15s)", 0.15, 15, "GTC"),
+                    ("$0.30 (FOK)", 0.30, 0, "FOK"),
+                    ("$0.20 (FOK)", 0.20, 0, "FOK"),
+                    ("$0.15 (FOK)", 0.15, 0, "FOK"),
+                    ("$0.10 (GTC fallback)", 0.10, 0, "GTC"),
                 ]
             elif urgency_level == "BALANCED":
                 attempts = [
@@ -686,32 +744,33 @@ def emergency_sell_position(
                         "FOK",
                     ),
                     (
-                        f"${reference_price - 0.01:.2f} (GTC 6s)",
+                        f"${reference_price - 0.01:.2f} (FOK)",
                         max(0.01, reference_price - 0.01),
-                        6,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
                     (
-                        f"${reference_price - 0.02:.2f} (GTC 6s)",
+                        f"${reference_price - 0.02:.2f} (FOK)",
                         max(0.01, reference_price - 0.02),
-                        6,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
                     (
-                        f"${reference_price - 0.05:.2f} (GTC 8s)",
+                        f"${reference_price - 0.05:.2f} (FOK)",
                         max(0.01, reference_price - 0.05),
-                        8,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
                     (
-                        f"${reference_price - 0.10:.2f} (GTC 10s)",
+                        f"${reference_price - 0.10:.2f} (FOK)",
                         max(0.01, reference_price - 0.10),
-                        10,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
-                    ("$0.30 (GTC 10s)", 0.30, 10, "GTC"),
-                    ("$0.20 (GTC 10s)", 0.20, 10, "GTC"),
-                    ("$0.15 (GTC 10s)", 0.15, 10, "GTC"),
+                    ("$0.30 (FOK)", 0.30, 0, "FOK"),
+                    ("$0.20 (FOK)", 0.20, 0, "FOK"),
+                    ("$0.15 (FOK)", 0.15, 0, "FOK"),
+                    ("$0.10 (GTC fallback)", 0.10, 0, "GTC"),
                 ]
             else:  # AGGRESSIVE
                 attempts = [
@@ -722,53 +781,39 @@ def emergency_sell_position(
                         "FOK",
                     ),
                     (
-                        f"${reference_price - 0.01:.2f} (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
+                        f"${reference_price - 0.01:.2f} (FOK)",
                         max(0.01, reference_price - 0.01),
-                        EMERGENCY_SELL_WAIT_SHORT,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
                     (
-                        f"${reference_price - 0.02:.2f} (GTC {EMERGENCY_SELL_WAIT_SHORT}s)",
+                        f"${reference_price - 0.02:.2f} (FOK)",
                         max(0.01, reference_price - 0.02),
-                        EMERGENCY_SELL_WAIT_SHORT,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
                     (
-                        f"${reference_price - 0.05:.2f} (GTC {EMERGENCY_SELL_WAIT_MEDIUM}s)",
+                        f"${reference_price - 0.05:.2f} (FOK)",
                         max(0.01, reference_price - 0.05),
-                        EMERGENCY_SELL_WAIT_MEDIUM,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
                     (
-                        f"${reference_price - 0.10:.2f} (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
+                        f"${reference_price - 0.10:.2f} (FOK)",
                         max(0.01, reference_price - 0.10),
-                        EMERGENCY_SELL_WAIT_LONG,
-                        "GTC",
+                        0,
+                        "FOK",
                     ),
-                    (
-                        f"$0.30 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                        0.30,
-                        EMERGENCY_SELL_WAIT_LONG,
-                        "GTC",
-                    ),
-                    (
-                        f"$0.20 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                        0.20,
-                        EMERGENCY_SELL_WAIT_LONG,
-                        "GTC",
-                    ),
-                    (
-                        f"$0.15 (GTC {EMERGENCY_SELL_WAIT_LONG}s)",
-                        0.15,
-                        EMERGENCY_SELL_WAIT_LONG,
-                        "GTC",
-                    ),
+                    ("$0.30 (FOK)", 0.30, 0, "FOK"),
+                    ("$0.20 (FOK)", 0.20, 0, "FOK"),
+                    ("$0.15 (FOK)", 0.15, 0, "FOK"),
+                    ("$0.10 (GTC fallback)", 0.10, 0, "GTC"),
                 ]
 
             last_order_id = None
 
             # EMERGENCY SELL TIMEOUT: Prevent excessive blocking during high volatility
-            MAX_EMERGENCY_SELL_TIME = 45  # seconds
+            MAX_EMERGENCY_SELL_TIME = 20  # seconds (reduced from 45s due to FOK speed)
             emergency_start_time = time.time()
 
             for attempt_name, attempt_price, wait_seconds, order_type in attempts:
@@ -780,7 +825,7 @@ def emergency_sell_position(
                     )
                     break
 
-                # Cancel previous GTC order before placing new one
+                # Cancel previous GTC order before placing new one (FOK orders auto-reject, no cancel needed)
                 if last_order_id and order_type == "GTC":
                     try:
                         cancel_order(last_order_id)
@@ -1085,29 +1130,34 @@ def place_entry_and_hedge_atomic(
             f"   📊 [{symbol}] Combined ${final_combined:.2f} ({edge_cents:.1f}¢ edge), entry depth: {metadata['entry_depth']:.1f}, hedge depth: {metadata['hedge_depth']:.1f}"
         )
         log(
-            f"   💰 [{symbol}] Alternatives considered: {metadata['alternatives_count']}, using GTC (taker, 1.54% fee)"
+            f"   💰 [{symbol}] Alternatives considered: {metadata['alternatives_count']}"
         )
 
-        # Always use GTC (taker) orders for guaranteed fills
-        use_post_only = False
+        # Smart POST_ONLY vs GTC decision based on failure history
+        use_post_only = should_use_post_only(symbol)
 
-        # Create batch order with GTC (taker) for guaranteed execution
-        # Pays 1.54% taker fee but achieves 95%+ fill rate vs 40% with POST_ONLY
-        # Net profit increase from higher success rate outweighs fee cost
+        if use_post_only:
+            log(f"   💸 [{symbol}] Using POST_ONLY (maker, earns 0.15% rebate)")
+        else:
+            log(f"   💸 [{symbol}] Using GTC (taker, pays 1.54% fee)")
+
+        # Create batch order with smart POST_ONLY/GTC selection
+        # POST_ONLY earns 0.15% rebate but may fail if crossing
+        # GTC pays 1.54% fee but guarantees fill
         orders = [
             {
                 "token_id": entry_token_id,
                 "price": entry_price,
                 "size": entry_size,
                 "side": BUY,
-                "post_only": use_post_only,  # False = GTC (taker)
+                "post_only": use_post_only,
             },
             {
                 "token_id": hedge_token_id,
                 "price": hedge_price,
                 "size": entry_size,
                 "side": BUY,
-                "post_only": use_post_only,  # False = GTC (taker)
+                "post_only": use_post_only,
             },
         ]
 
@@ -1132,15 +1182,17 @@ def place_entry_and_hedge_atomic(
         entry_error = entry_result.get("error", "")
         hedge_error = hedge_result.get("error", "")
 
-        # Track POST_ONLY crossing failures for diagnostics
-        if (
+        # Track POST_ONLY crossing failures using smart retry logic
+        post_only_crossed = (
             "order crosses book" in entry_error.lower()
             or "order crosses book" in hedge_error.lower()
-        ):
-            _post_only_failures[symbol] = _post_only_failures.get(symbol, 0) + 1
-            log(
-                f"   🚨 [{symbol}] POST_ONLY crossing detected (failure #{_post_only_failures[symbol]})"
-            )
+        )
+
+        if use_post_only:
+            if post_only_crossed:
+                record_post_only_result(symbol, success=False)
+            elif entry_success and hedge_success:
+                record_post_only_result(symbol, success=True)
 
         # CRITICAL: Handle order placement failures
         # If one succeeds and other fails, clean up the successful one
