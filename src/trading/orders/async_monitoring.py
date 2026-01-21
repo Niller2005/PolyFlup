@@ -70,6 +70,11 @@ def wait_for_order_fill_sync(
             log(
                 f"   ⚠️  WebSocket not running for {order_id_short}, falling back to polling"
             )
+            # Phase 3A (B2): Track fallback to polling
+            with ws_manager._metrics_lock:
+                ws_manager.health_metrics["order_fill_monitoring"][
+                    "fallback_to_polling"
+                ] += 1
             return _poll_order_fill(order_id, timeout)
         else:
             log(
@@ -108,6 +113,11 @@ def wait_for_order_fill_sync(
         # Fall back to polling if WebSocket fails
         if fallback_to_polling:
             log(f"   🔄 Falling back to polling for {order_id_short}")
+            # Phase 3A (B2): Track fallback to polling
+            with ws_manager._metrics_lock:
+                ws_manager.health_metrics["order_fill_monitoring"][
+                    "fallback_to_polling"
+                ] += 1
             return _poll_order_fill(order_id, timeout)
         else:
             return None

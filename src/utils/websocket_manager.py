@@ -42,6 +42,35 @@ class WebSocketManager:
         self.order_fill_data: Dict[str, dict] = {}  # order_id -> order data
         self._order_fill_lock = threading.Lock()  # Thread-safe access from sync code
 
+        # Phase 3A (B2): WebSocket Health Monitoring
+        self.health_metrics = {
+            "market_connection": {
+                "status": "disconnected",  # connected|disconnected|reconnecting
+                "last_connected_at": None,
+                "last_disconnected_at": None,
+                "total_connections": 0,
+                "total_disconnections": 0,
+                "messages_received": 0,
+                "last_message_at": None,
+            },
+            "user_connection": {
+                "status": "disconnected",
+                "last_connected_at": None,
+                "last_disconnected_at": None,
+                "total_connections": 0,
+                "total_disconnections": 0,
+                "messages_received": 0,
+                "last_message_at": None,
+            },
+            "order_fill_monitoring": {
+                "orders_tracked": 0,
+                "fills_detected": 0,
+                "timeouts": 0,
+                "fallback_to_polling": 0,
+            },
+        }
+        self._metrics_lock = threading.Lock()  # Thread-safe access to health_metrics
+
     def start(self):
         """Start the WebSocket manager in background threads"""
         if self._running:
@@ -65,8 +94,11 @@ class WebSocketManager:
         self.subscription_queue = asyncio.Queue()
         try:
             # We run both market and user connections in parallel tasks
+            # Phase 3A (B2): Add health logger loop
             self._loop.run_until_complete(
-                asyncio.gather(self._market_loop(), self._user_loop())
+                asyncio.gather(
+                    self._market_loop(), self._user_loop(), self._health_logger_loop()
+                )
             )
         except Exception as e:
             if self._running:
@@ -80,6 +112,16 @@ class WebSocketManager:
                 async with websockets.connect(
                     url, ping_interval=10, ping_timeout=10
                 ) as ws:
+                    # Phase 3A (B2): Track successful connection
+                    with self._metrics_lock:
+                        self.health_metrics["market_connection"]["status"] = "connected"
+                        self.health_metrics["market_connection"][
+                            "last_connected_at"
+                        ] = time.time()
+                        self.health_metrics["market_connection"][
+                            "total_connections"
+                        ] += 1
+
                     log(f"✅ WebSocket connected to Market Channel")
                     if self.subscribed_tokens:
                         await self._subscribe_market(ws, self.subscribed_tokens)
@@ -99,6 +141,16 @@ class WebSocketManager:
                         if exc is not None:
                             raise exc
             except Exception as e:
+                # Phase 3A (B2): Track disconnection
+                with self._metrics_lock:
+                    self.health_metrics["market_connection"]["status"] = "disconnected"
+                    self.health_metrics["market_connection"]["last_disconnected_at"] = (
+                        time.time()
+                    )
+                    self.health_metrics["market_connection"][
+                        "total_disconnections"
+                    ] += 1
+
                 if self._running:
                     log_error(
                         f"Market WebSocket lost: {e}. Reconnecting in 5s...",
@@ -122,6 +174,14 @@ class WebSocketManager:
                 async with websockets.connect(
                     url, ping_interval=10, ping_timeout=10
                 ) as ws:
+                    # Phase 3A (B2): Track successful connection
+                    with self._metrics_lock:
+                        self.health_metrics["user_connection"]["status"] = "connected"
+                        self.health_metrics["user_connection"]["last_connected_at"] = (
+                            time.time()
+                        )
+                        self.health_metrics["user_connection"]["total_connections"] += 1
+
                     log(f"✅ WebSocket connected to User Channel")
                     auth_data = {
                         "apiKey": api_key,
@@ -144,6 +204,14 @@ class WebSocketManager:
                         if exc is not None:
                             raise exc
             except Exception as e:
+                # Phase 3A (B2): Track disconnection
+                with self._metrics_lock:
+                    self.health_metrics["user_connection"]["status"] = "disconnected"
+                    self.health_metrics["user_connection"]["last_disconnected_at"] = (
+                        time.time()
+                    )
+                    self.health_metrics["user_connection"]["total_disconnections"] += 1
+
                 if self._running:
                     log_error(
                         f"User WebSocket lost: {e}. Reconnecting in 5s...",
@@ -207,7 +275,30 @@ class WebSocketManager:
         if not isinstance(data, dict):
             return
         try:
+            # Phase 3A (B2): Track message reception by channel type
             event_type = data.get("event_type")
+            msg_type = data.get("type")
+
+            # Update metrics based on message type
+            with self._metrics_lock:
+                if msg_type == "order":
+                    # User channel message (order events)
+                    self.health_metrics["user_connection"]["messages_received"] += 1
+                    self.health_metrics["user_connection"]["last_message_at"] = (
+                        time.time()
+                    )
+                elif event_type in [
+                    "book",
+                    "price_change",
+                    "best_bid_ask",
+                    "last_trade_price",
+                ]:
+                    # Market channel message (price updates)
+                    self.health_metrics["market_connection"]["messages_received"] += 1
+                    self.health_metrics["market_connection"]["last_message_at"] = (
+                        time.time()
+                    )
+
             if event_type in [
                 "book",
                 "price_change",
@@ -433,6 +524,10 @@ class WebSocketManager:
             log(f"⚠️  WebSocket not running, cannot wait for order {order_id[:10]} fill")
             return None
 
+        # Phase 3A (B2): Track order monitoring
+        with self._metrics_lock:
+            self.health_metrics["order_fill_monitoring"]["orders_tracked"] += 1
+
         # Create event for this order
         event = asyncio.Event()
         with self._order_fill_lock:
@@ -444,9 +539,15 @@ class WebSocketManager:
 
             # Event was set, retrieve the order data
             with self._order_fill_lock:
+                # Phase 3A (B2): Track successful fill detection
+                with self._metrics_lock:
+                    self.health_metrics["order_fill_monitoring"]["fills_detected"] += 1
                 return self.order_fill_data.pop(order_id, None)
 
         except asyncio.TimeoutError:
+            # Phase 3A (B2): Track timeout
+            with self._metrics_lock:
+                self.health_metrics["order_fill_monitoring"]["timeouts"] += 1
             # Timeout reached, order not filled
             return None
 
@@ -572,6 +673,65 @@ class WebSocketManager:
                 for order_id in order_ids:
                     self.order_fill_events.pop(order_id, None)
                     self.order_fill_data.pop(order_id, None)
+
+    async def _health_logger_loop(self):
+        """
+        Phase 3A (B2): Periodic health metrics logging.
+
+        Logs WebSocket connection health every 5 minutes to help diagnose
+        connectivity issues and monitor Phase 2 WebSocket monitoring performance.
+        """
+        while self._running:
+            await asyncio.sleep(300)  # 5 minutes
+
+            if not self._running:
+                break
+
+            with self._metrics_lock:
+                market = self.health_metrics["market_connection"].copy()
+                user = self.health_metrics["user_connection"].copy()
+                fills = self.health_metrics["order_fill_monitoring"].copy()
+
+            # Calculate status indicators
+            market_status = "🟢" if market["status"] == "connected" else "🔴"
+            user_status = "🟢" if user["status"] == "connected" else "🔴"
+
+            # Calculate fill success rate
+            fills_total = fills["orders_tracked"]
+            fills_detected = fills["fills_detected"]
+            fills_timeout = fills["timeouts"]
+            fallbacks = fills["fallback_to_polling"]
+
+            success_rate = (
+                (fills_detected / fills_total * 100) if fills_total > 0 else 0
+            )
+            fallback_rate = (fallbacks / fills_total * 100) if fills_total > 0 else 0
+
+            log(
+                f"📊 WebSocket Health Report:\n"
+                f"   Market Channel: {market_status} {market['status']} "
+                f"(msgs: {market['messages_received']}, reconnects: {market['total_disconnections']})\n"
+                f"   User Channel: {user_status} {user['status']} "
+                f"(msgs: {user['messages_received']}, reconnects: {user['total_disconnections']})\n"
+                f"   Order Monitoring: {fills_detected}/{fills_total} fills detected "
+                f"({success_rate:.1f}% success, {fallback_rate:.1f}% fallback, {fills_timeout} timeouts)"
+            )
+
+    def get_health_metrics(self) -> dict:
+        """
+        Phase 3A (B2): Get current health metrics (thread-safe).
+
+        Returns a snapshot of connection health and order monitoring statistics.
+        Used by health API endpoint and alerting system.
+        """
+        with self._metrics_lock:
+            return {
+                "market_connection": self.health_metrics["market_connection"].copy(),
+                "user_connection": self.health_metrics["user_connection"].copy(),
+                "order_fill_monitoring": self.health_metrics[
+                    "order_fill_monitoring"
+                ].copy(),
+            }
 
     def register_callback(self, event_type: str, callback: Callable):
         """Register a function to be called on WSS events"""
