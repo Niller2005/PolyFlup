@@ -113,32 +113,58 @@ def emergency_sell_position(
     Returns True if sell order placed successfully, False otherwise.
     """
     try:
-        # CRITICAL: Wait for balance API to sync after order fill
+        # OPTIMIZED: Smart balance sync polling instead of fixed 3s wait
         # The entry order just filled, but balance API has 1-3s lag before shares are available
-        log(f"   ⏳ [{symbol}] Waiting 3s for balance API to sync after fill...")
-        time.sleep(3)
-
-        # Query actual position size from exchange before selling
-        # Order fill may be partial or have rounding, so we need exact balance
+        # Poll with exponential backoff up to 3s max
         from src.trading.orders.positions import get_balance_allowance
 
-        balance_info = get_balance_allowance(token_id)
-        if balance_info:
-            actual_size = balance_info.get("balance", 0)
-            if actual_size > 0 and abs(actual_size - size) > 0.01:
-                log(
-                    f"   ⚠️  [{symbol}] Adjusting sell size: requested {size:.2f}, actual balance {actual_size:.2f}"
-                )
-                size = actual_size
-            elif actual_size <= 0:
-                log(
-                    f"   ⚠️  [{symbol}] No balance to sell (balance: {actual_size:.2f}), position may already be closed"
-                )
-                return False
-        else:
+        MAX_BALANCE_WAIT = 3.0  # seconds
+        POLL_INTERVAL = 0.1  # seconds (100ms)
+        balance_start = time.time()
+        actual_size = 0
+        balance_synced = False
+
+        log(
+            f"   ⏳ [{symbol}] Polling balance API for sync (max {MAX_BALANCE_WAIT}s)..."
+        )
+
+        while time.time() - balance_start < MAX_BALANCE_WAIT:
+            balance_info = get_balance_allowance(token_id)
+            if balance_info:
+                actual_size = balance_info.get("balance", 0)
+                if actual_size > 0:
+                    # Balance synced and non-zero!
+                    elapsed = time.time() - balance_start
+                    log(
+                        f"   ✅ [{symbol}] Balance synced after {elapsed:.2f}s: {actual_size:.2f} shares"
+                    )
+                    balance_synced = True
+                    break
+            time.sleep(POLL_INTERVAL)
+
+        if not balance_synced:
             log(
-                f"   ⚠️  [{symbol}] Could not verify balance, using requested size {size:.2f}"
+                f"   ⚠️  [{symbol}] Balance sync timeout after {MAX_BALANCE_WAIT}s, proceeding anyway"
             )
+            # One final check
+            balance_info = get_balance_allowance(token_id)
+            if balance_info:
+                actual_size = balance_info.get("balance", 0)
+
+        # Validate and adjust size
+        if actual_size > 0 and abs(actual_size - size) > 0.01:
+            log(
+                f"   ⚠️  [{symbol}] Adjusting sell size: requested {size:.2f}, actual balance {actual_size:.2f}"
+            )
+            size = actual_size
+        elif actual_size <= 0:
+            log(
+                f"   ⚠️  [{symbol}] No balance to sell (balance: {actual_size:.2f}), position may already be closed"
+            )
+            return False
+        else:
+            # Balance matches requested size
+            size = actual_size
 
         # TIME-AWARE URGENCY: Calculate time remaining in window
         # Adjust pricing strategy based on urgency:
@@ -490,7 +516,19 @@ def emergency_sell_position(
 
             last_order_id = None
 
+            # EMERGENCY SELL TIMEOUT: Prevent excessive blocking during high volatility
+            MAX_EMERGENCY_SELL_TIME = 45  # seconds
+            emergency_start_time = time.time()
+
             for attempt_name, attempt_price, wait_seconds, order_type in attempts:
+                # Check total elapsed time to prevent excessive blocking
+                elapsed_total = time.time() - emergency_start_time
+                if elapsed_total > MAX_EMERGENCY_SELL_TIME:
+                    log(
+                        f"   ⏰ [{symbol}] Emergency sell timeout ({MAX_EMERGENCY_SELL_TIME}s elapsed) - going to fallback"
+                    )
+                    break
+
                 # Cancel previous GTC order before placing new one
                 if last_order_id and order_type == "GTC":
                     try:
@@ -729,7 +767,19 @@ def emergency_sell_position(
 
             last_order_id = None
 
+            # EMERGENCY SELL TIMEOUT: Prevent excessive blocking during high volatility
+            MAX_EMERGENCY_SELL_TIME = 45  # seconds
+            emergency_start_time = time.time()
+
             for attempt_name, attempt_price, wait_seconds, order_type in attempts:
+                # Check total elapsed time to prevent excessive blocking
+                elapsed_total = time.time() - emergency_start_time
+                if elapsed_total > MAX_EMERGENCY_SELL_TIME:
+                    log(
+                        f"   ⏰ [{symbol}] Emergency sell timeout ({MAX_EMERGENCY_SELL_TIME}s elapsed) - going to fallback"
+                    )
+                    break
+
                 # Cancel previous GTC order before placing new one
                 if last_order_id and order_type == "GTC":
                     try:
@@ -901,27 +951,6 @@ def calculate_adaptive_combined_threshold(
         # Type assertion: all values are non-None after the check above
         assert entry_bid is not None and entry_ask is not None
         assert hedge_bid is not None and hedge_ask is not None
-
-        # Calculate spreads
-        entry_spread = entry_ask - entry_bid
-        hedge_spread = hedge_ask - hedge_bid
-        total_spread = entry_spread + hedge_spread
-
-        # Calculate adaptive threshold: 1.00 - spreads - buffer
-        # This ensures we leave enough room for both orders to fill
-        adaptive = 1.00 - total_spread - ADAPTIVE_THRESHOLD_BUFFER
-
-        # Clamp to configured range
-        adaptive = max(ADAPTIVE_THRESHOLD_MIN, min(ADAPTIVE_THRESHOLD_MAX, adaptive))
-
-        return round(adaptive, 3)
-
-    except Exception as e:
-        # On error, fall back to static threshold
-        from src.utils.logger import log
-
-        log(f"⚠️  Adaptive threshold calculation error: {e}")
-        return COMBINED_PRICE_THRESHOLD
 
         # Calculate spreads
         entry_spread = entry_ask - entry_bid

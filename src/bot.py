@@ -385,10 +385,21 @@ def main():
             log("\n⛔ Bot stopped by user")
             generate_statistics()
             break
-        except Exception as e:
-            log_error(f"Critical error: {e}")
-            send_discord(f"❌ Error: {e}")
+        except (
+            ConnectionError,
+            TimeoutError,
+            OSError,
+        ) as e:
+            # Recoverable network/connection errors - retry after delay
+            log_error(f"Recoverable error: {e}")
+            send_discord(f"⚠️  Warning: {e} (will retry)")
             time.sleep(60)
+        except Exception as e:
+            # Unexpected critical error - log and crash for visibility
+            log_error(f"FATAL ERROR: {e}")
+            send_discord(f"🚨 FATAL: {e} - Bot crashed!")
+            generate_statistics()
+            raise  # Re-raise to crash the bot
 
 
 if __name__ == "__main__":
