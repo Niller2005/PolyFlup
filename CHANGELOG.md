@@ -9,8 +9,9 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
-### In Progress
-- Documentation updates for atomic hedging strategy (v0.6.0)
+---
+
+## [0.7.0] - 2026-10-27
 
 ### Breaking
 - **CLOB V2 migration**: Replaced `py-clob-client` (V1, rejected by production since 2026-04-28) with `py-clob-client-v2>=1.2.0`. Order, market-info, notification and scoring modules import from `py_clob_client_v2`.
