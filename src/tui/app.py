@@ -103,6 +103,7 @@ class Dashboard:
         self.paused = False
         self.loaded_at: Optional[datetime] = None
         self.compact = False
+        self.show_log = False  # 'l' toggles a full-screen log page
 
     # ---- data -------------------------------------------------------------
     def reload(self) -> None:
@@ -360,6 +361,7 @@ class Dashboard:
         return Text.assemble(
             (" q", f"bold {CYAN}"), (" quit  ", DIM), ("r", f"bold {CYAN}"), (" refresh  ", DIM),
             ("p", f"bold {CYAN}"), (" pause  ", DIM),
+            ("l", f"bold {CYAN}"), (" dashboard  " if self.show_log else " log  ", DIM),
             ("1", f"bold {GREEN}"), (" cons ", DIM), ("2", f"bold {CYAN}"), (" bal ", DIM), ("3", f"bold {RED}"), (" aggr ", DIM), ("0", f"bold {YELLOW}"), (" custom  ", DIM), (f"│ db {self.db_path.name} @ {loaded}  │ every {self.refresh:g}s ", DIM), state,
         )
 
@@ -374,6 +376,13 @@ class Dashboard:
                 Layout(self.footer(), size=1),
             )
             return root
+        if self.show_log:
+            root.split_column(
+                Layout(self.header(), size=3, name="header"),
+                Layout(self.log_panel(max(3, height - 7))),
+                Layout(self.footer(), size=1, name="footer"),
+            )
+            return root
         root.split_column(
             Layout(self.header(), size=3, name="header"),
             Layout(name="top", ratio=5),
@@ -386,8 +395,7 @@ class Dashboard:
         else:
             right.update(self.stats())
         root["top"].split_row(Layout(self.positions(), ratio=3), right)
-        bottom_h = max(3, (height - 4) * 4 // 9 - 2)
-        root["bottom"].split_row(Layout(self.recent(), ratio=3), Layout(self.log_panel(bottom_h), ratio=2))
+        root["bottom"].update(self.recent())
         return root
 
 
@@ -436,6 +444,8 @@ def run(db_path: Path, log_path: Path, refresh: float = 1.0, once: bool = False,
             force.set()
         elif k == "p":
             dash.paused = not dash.paused
+        elif k == "l":
+            dash.show_log = not dash.show_log
         elif k in profiles.HOTKEYS:
             try:
                 profiles.request_profile(str(dash.db_path), profiles.HOTKEYS[k])

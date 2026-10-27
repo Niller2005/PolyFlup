@@ -9,7 +9,7 @@ description: Operational commands, environment configuration, and deployment for
 ```bash
 uv run polyflup.py      # Run bot
 uv run polyflup.py --paper  # Paper trading (simulated fills on live books, trades_paper.db, no keys needed)
-uv run tui.py           # Terminal dashboard (read-only): q quit, r refresh, p pause; --db PATH, --once, --no-wallet
+uv run tui.py           # Terminal dashboard (read-only): q quit, r refresh, p pause, l toggle log page; --db PATH, --once, --no-wallet
 uv run check_db.py      # Check database
 uv run migrate_db.py    # Run migrations
 uv sync                 # Install dependencies (pyproject.toml + uv.lock)

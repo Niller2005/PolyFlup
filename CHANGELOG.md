@@ -9,6 +9,9 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+- TUI: the log moved to its own page (`l` toggles); the dashboard gives the freed space to Recent trades.
+
 ---
 
 ## [0.7.2] - 2026-10-28
