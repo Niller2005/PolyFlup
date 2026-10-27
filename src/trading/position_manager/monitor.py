@@ -170,9 +170,21 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                 # Display position (only log if verbose or significant change)
                 if verbose:
                     hedge_status = "🛡️ HEDGED" if is_hed else "⚠️  UNHEDGED"
+                    pnl_txt = f"PnL: {p_usd_val:+.2f}$ ({p_pct_val:+.1f}%)"
+                    if is_hed:
+                        # With both legs held the result is locked in; the entry token's mark alone
+                        # (e.g. -90% on the losing leg) says nothing about the pair.
+                        c.execute(
+                            "SELECT hedge_order_price, COALESCE(exited_early, 0), COALESCE(hedge_exited_early, 0) FROM trades WHERE id = ?",
+                            (tid,),
+                        )
+                        hrow = c.fetchone()
+                        if hrow and hrow[0] and not hrow[1] and not hrow[2]:
+                            locked = (1.0 - entry - hrow[0]) * size
+                            pnl_txt = f"🔒 locked {locked:+.2f}$ (entry leg mark {p_usd_val:+.2f}$)"
                     log(
                         f"📊 [{sym}] #{tid} {side} {size:.1f} @ ${entry:.2f} → ${cur_p:.2f} ({p_chg_val:+.1f}%) | "
-                        f"PnL: {p_usd_val:+.2f}$ ({p_pct_val:+.1f}%) | {hedge_status} | {t_left_str} left"
+                        f"{pnl_txt} | {hedge_status} | {t_left_str} left"
                     )
 
     except Exception as e:

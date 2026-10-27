@@ -9,6 +9,9 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+- Position log line for hedged pairs shows the locked result instead of the entry leg's mark (a pair with a -90% entry leg is not a -90% position).
+
 ---
 
 ## [0.7.1] - 2026-10-27
