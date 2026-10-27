@@ -10,6 +10,7 @@ and this project uses semantic versioning.
 ## [Unreleased]
 
 ### Fixed
+- Hedge-timeout "hold" now also requires the entry leg's current bid to be >= $0.50; held legs bought at 0.48/0.30 whose market had already moved to ~0.27 both lost >90%.
 - Position log line for hedged pairs shows the locked result instead of the entry leg's mark (a pair with a -90% entry leg is not a -90% position).
 
 ---

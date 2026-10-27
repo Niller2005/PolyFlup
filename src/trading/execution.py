@@ -2053,10 +2053,26 @@ def place_entry_and_hedge_atomic(
                             EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD,
                         )
 
+                        # The stored confidence is from entry time. Holding is only sensible if the
+                        # market still prices the entry leg as the likely winner (bid >= 50c); XRP/BTC
+                        # holds at bids of ~0.28/0.26 both went to ~0.01.
+                        cur_entry_bid, _ = _book_top(entry_token_id, fresh=True)
+                        market_agrees = bool(cur_entry_bid and cur_entry_bid >= 0.50)
                         if (
                             final_hedge_filled_size <= 0.01
                             and confidence is not None
                             and confidence >= EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD
+                            and not market_agrees
+                        ):
+                            log(
+                                f"   🧭 [{symbol}] Signal says hold ({confidence:.1%}) but {entry_side} bid is "
+                                f"{('$%.2f' % cur_entry_bid) if cur_entry_bid else 'n/a'} (<$0.50): market disagrees - selling"
+                            )
+                        if (
+                            final_hedge_filled_size <= 0.01
+                            and confidence is not None
+                            and confidence >= EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD
+                            and market_agrees
                         ):
                             # High confidence trade with complete hedge failure
                             # Trust the signal and HOLD entry position
