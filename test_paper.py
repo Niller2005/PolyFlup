@@ -23,6 +23,7 @@ def fresh(book=None):
     dbc.DB_FILE = path
     paper._book = lambda token: (list(BOOK["bids"]), list(BOOK["asks"])) if book is None else book
     paper._market_for = lambda token: ("btc-updown-5m-1", "Up")
+    paper._market_cache.clear()  # slug lookups are cached per token
     return path
 
 
@@ -113,6 +114,7 @@ def test_extreme_price_before_window_end_is_not_a_resolution():
 
     fresh()
     paper._market_for = lambda token: (f"btc-updown-5m-{int(time.time()) + 600}", "Up")  # window still open
+    paper._market_cache.clear()
     paper.place_order(TOKEN, 0.50, 5.0, "BUY", "FAK")
 
     class R:
