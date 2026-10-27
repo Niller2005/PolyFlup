@@ -158,6 +158,19 @@ uv run python -c "import sqlite3; conn = sqlite3.connect('trades.db'); c = conn.
 | 5 | Add last_scale_in_at column | ✅ | 2025-12 |
 | 6 | Add signal score columns for calibration | ✅ | 2026-01 |
 | 7 | Add Bayesian comparison columns for A/B testing | ✅ | 2026-01 |
+| 8 | Add hedge order tracking columns (`hedge_order_id`, `hedge_order_price`, `is_hedged`) | ✅ | 2026-01 |
+| 9 | Add CTF merge tracking columns (`condition_id`, `merge_tx_hash`) | ✅ | 2026-01 |
+| 10 | Add `redeem_tx_hash` | ✅ | 2026-01 |
+| 11 | Add hedge exit tracking (`hedge_exit_price`, `hedge_exited_early`) | ✅ | 2026-01 |
+| 12 | Create `shadow_signals` table for late-window evaluations | ✅ | 2026-10 |
+
+### Migration 012: shadow_signals
+
+One row per late-window evaluation: `ts, symbol, slug, window_end, seconds_left, side, token_id, strike, spot, source (chainlink|binance), z, dist_pct, p_model, p_emp, p_use, ask, fee, ev, decision, reason`, plus `won` / `resolved_at` filled in after the market resolves. Read it with `uv run analyze_strategy.py`.
+
+### Runtime tables (not migrations)
+- `bot_state(key, value, updated_at)`: created at startup; holds `risk_profile` (requested) and `risk_profile_applied`.
+- `paper_account`, `paper_orders`, `paper_positions`, `paper_fills`: created on first use in `trades_paper.db` only.
 
 ### Migration 006: Signal Score Columns
 

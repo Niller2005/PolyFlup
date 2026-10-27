@@ -369,24 +369,40 @@ Bias = UP
 
 ---
 
-## Dynamic Scale-In Mechanism
+## Scale-In (removed)
 
-The bot includes an intelligent scale-in mechanism that adds to winning positions as they approach expiry. This allows the bot to maximize profit on high-conviction trades while minimizing risk early in the window.
+The dynamic scale-in mechanism was removed with the move to atomic hedging: adding to one side would create unhedged exposure. The `SCALE_IN_*`, `EXIT_*` and reward-optimisation settings no longer exist.
 
-### Tiered Entry Timing
+---
 
-Instead of a fixed timer, the scale-in window is dynamically determined by the trade's confidence and current price:
+## Position Sizing
 
-- **Aggressive (High Confidence)**: If confidence $\ge 90\%$ and price $\ge \$0.80$, the bot can scale in as early as **12 minutes** before expiry.
-- **Moderate**: If confidence $\ge 80\%$ and price $\ge \$0.70$, scale-in begins at **10 minutes**.
-- **Default**: The standard scale-in window is **7.5 minutes** (450s) for any winning position meeting the minimum price threshold (default \$0.60).
+```
+available  = wallet cash − cash reserved by entries still being placed
+exposure   = cost of open positions (entry + hedge for hedged pairs)
+equity     = wallet cash + exposure
+headroom   = MAX_EXPOSURE_PERCENT% of equity − exposure − reserved
+allocation = min(BET_PERCENT% of available, headroom)      (≤ MAX_SIZE shares)
+```
 
-### Scale-In Logic
+Each new entry is smaller as cash is used and no entry can push exposure over the cap (`src/trading/exposure.py`). With `KELLY_SIZING=YES` the fraction comes from Kelly instead:
+- **Pairs**: gain `MIN_NET_EDGE` with probability `1 − q`, lose `KELLY_LEG_LOSS` with probability `q` (leg-fail rate `KELLY_LEG_FAIL_RATE`): `f* = (1−q)/loss − q/gain`. With a 1¢ edge and a 4¢ loss this is zero above about 17% leg failures, so **Kelly refuses pairs until the leg-fail rate is measured below that**.
+- **Late-window bets**: `f* = (p − cost)/(1 − cost)` with `cost = ask + fee` and `p` reduced by `KELLY_PROB_HAIRCUT`.
+Both use `KELLY_FRACTION` of full Kelly (default ¼), capped at `KELLY_MAX_FRACTION`. A Kelly stake below the 5-share minimum is skipped, never rounded up. Risk profiles scale all of this ([RISK_PROFILES.md](RISK_PROFILES.md)).
 
-1. **Verification**: The bot ensures the position is already in profit (Price > `SCALE_IN_MIN_PRICE`).
-2. **Timing**: Checks if the remaining time in the 15-minute window is within the dynamically calculated threshold.
-3. **Multiplier**: Applies `SCALE_IN_MULTIPLIER` (default 1.5x) to the base bet size for the additional entry.
-4. **Safety**: Only scales in if no other active orders are pending for that market.
+---
+
+## Late-Window Conviction Mode
+
+In the last `LATE_WINDOW_SECONDS` of a window the side ahead of the strike usually wins:
+
+```
+z      = ln(spot/strike) / (σ₁ₘ · √(seconds_left/60))
+p_use  = min(Φ(|z|), measured hold rate for that |z| bucket)
+EV/sh  = p_use − ask − 0.07·ask·(1 − ask)
+```
+
+Strike and spot come from the Chainlink feed Polymarket resolves on (PolyBolt `price.crypto.twap`/`price.crypto`, authenticated with the CLOB API credentials); without it Binance is used with a doubled distance filter because of basis risk. A 7-day Binance study of the T-60s leader gave hold rates of about 65–73% for |z| < 0.5, 85% for 0.5–1, 92–94% for 1–1.5, 97% for 1.5–2 and ≥ 99% above 2. Every evaluation is written to `shadow_signals` and resolved against the real outcome; orders are placed only with `LATE_WINDOW_LIVE=YES`. Judge it with `uv run analyze_strategy.py` (≥ 100 resolved ENTER signals with positive realized EV before going live).
 
 ---
 
@@ -403,29 +419,26 @@ Traditional single-side entries expose the bot to directional risk. By placing b
 - **No unhedged positions**: Eliminates the risk of holding a single-side position
 - **Immediate hedging**: No delay between entry and hedge placement
 
+### Fee Model (CLOB V2)
+
+Taker fee per share: `0.07 × p × (1 − p)` in pUSD, for BUY and SELL. Makers pay nothing and share a 20% rebate pool. At p=0.50 that is 1.75¢ per share per taker leg (3.5% of notional); it falls toward the extremes (0.7% at p=0.90). Live order books show best asks summing to 1.00–1.02, so a taker pair below 0.97 almost never exists and, near 50/50, two taker legs lose money even at 0.97.
+
 ### Execution Flow
 
-1. **Signal Calculation**: Strategy generates confidence and bias (UP/DOWN)
-2. **Price Determination**: 
-   - **Entry side**: Uses best bid (MAKER pricing)
-   - **Hedge side**: Calculated to ensure combined price ≤ `COMBINED_PRICE_THRESHOLD` (default $0.99)
-3. **Batch Order Placement**: Both orders submitted simultaneously via batch API
-   - **POST_ONLY by default**: Orders join the book to earn maker rebates (0.15%)
-   - **Smart fallback**: After 3 POST_ONLY failures, switches to GTC (accepts 1.54% taker fees)
-4. **Fill Monitoring**: Polls order status every 5 seconds for up to 120 seconds
-5. **Outcome Handling**:
-   - **Both fill**: Trade recorded, profit structure locked in
-   - **One fills**: Emergency liquidation triggered (see below)
-   - **Neither fills**: Both orders cancelled immediately
+1. **Signal Calculation**: confidence and bias pick the entry side.
+2. **Pricing** (`place_entry_and_hedge_atomic`):
+   - **Taker pair** from the ask side, only if `1 − a − b − fee(a) − fee(b) ≥ MIN_NET_EDGE`.
+   - Otherwise a **maker pair**: POST_ONLY bids on both legs from a fresh order book, only while both bids lie in `[MAKER_PAIR_PRICE_BAND, 1 − band]` (a lopsided book means the window is decided).
+   - If neither has the required net edge the trade is skipped.
+3. **Batch Order Placement**: both orders go out together; maker orders never cross the book.
+4. **Fill Monitoring**: polls every 5s for up to `HEDGE_FILL_TIMEOUT_SECONDS` (scaled to the window: 90s on 15m, 30s on 5m).
+5. **Trailing**: once one leg has filled, the other is cancelled and re-quoted at the best bid (plus up to `TRAIL_MAX_TICKS` as time passes). The price never exceeds `1 − filled − MIN_NET_EDGE`, so the lock only improves or stays at the minimum.
+6. **Leg risk**: if the cap makes trailing impossible, a taker hedge is bought only when its net result beats both selling the filled leg and holding it (market-implied value); otherwise the resting order stays until the timeout.
+7. **Outcome**: both filled → trade saved with the final (trailed) prices; one filled → emergency liquidation (below); neither → both cancelled.
 
-### POST_ONLY → GTC Fallback
+### POST_ONLY and failures
 
-The bot tracks POST_ONLY failures per symbol:
-- **First 3 attempts**: Uses POST_ONLY orders (maker rebates)
-- **After 3 failures**: Switches to GTC orders (taker fees)
-- **Reset on success**: Counter resets to 0 after successful atomic placement
-
-This prevents repeated crossing errors while preserving the opportunity to earn maker rebates when market conditions allow.
+Maker orders are priced at or below the best bid so they rest instead of crossing. A crossing rejection (market moved between quote and post) triggers a retry capped one tick below the ask. The retry's price is what gets saved with the trade.
 
 ### Combined Price Threshold
 

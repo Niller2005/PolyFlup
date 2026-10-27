@@ -69,13 +69,13 @@ src/trading/
 
 2. **Order Type Selection**:
    - **First 3 attempts**: POST_ONLY (maker rebates)
-   - **After 3 failures**: GTC (taker fees)
+   - **Taker pair only if** its net edge after fees is ≥ `MIN_NET_EDGE`; otherwise a maker pair at the bids
 
 3. **Batch Submission**:
    - Both orders submitted simultaneously via batch API
    - Prevents race conditions and guarantees atomic placement
 
-4. **Fill Monitoring** (120-second timeout):
+4. **Fill Monitoring** (`HEDGE_FILL_TIMEOUT_SECONDS`, 90s on 15m / 30s on 5m windows; the second leg trails the market once the first fills):
    - Polls every 5 seconds
    - Tracks fill status for both orders
 
@@ -120,7 +120,7 @@ src/trading/
 #### Outcome D: Neither Order Fills (Timeout)
 - **Immediate action**: Cancel both orders
 - No positions held, no risk
-- POST_ONLY failure counter incremented (switch to GTC after 3 failures)
+- POST_ONLY crossing rejection: retry one tick below the ask
 
 ---
 
@@ -207,7 +207,7 @@ ELSE:
 
 **Inputs**:
 - `symbol`: Market symbol (BTC, ETH, XRP, SOL)
-- `balance`: Available USDC balance
+- `balance`: Available pUSD balance
 - `verbose`: Logging level
 
 **Outputs**:
@@ -362,7 +362,7 @@ PRE_SETTLEMENT_CHECK_INTERVAL=30
    ↓
    Select order type:
    - POST_ONLY (first 3 attempts) → maker rebates
-   - GTC (after 3 failures) → taker fees
+   - GTC taker pair only when profitable after `0.07·p·(1−p)` fees
    ↓
    Submit batch order (both orders simultaneously)
    ↓
@@ -451,22 +451,17 @@ This eliminates unhedged positions and guarantees a profit structure when both o
    - If DOWN wins: Profit = $1.00 - $0.46 = $0.54, Loss = $0.52, Net = $0.02
 
 2. **No Unhedged Positions**: Eliminates directional risk
-3. **Maker Rebates**: POST_ONLY orders earn 0.15% rebates (default)
+3. **Maker Rebates**: POST_ONLY orders pay no fee and share a 20% rebate pool of taker fees
 4. **Immediate Hedging**: No delay between entry and hedge placement
 
-### POST_ONLY → GTC Fallback
+### Taker vs maker pairs
 
-The bot tracks POST_ONLY failures per symbol to adapt to market conditions:
+| Mode | When | Fees | Notes |
+|------|------|------|-------|
+| Taker pair (asks) | net edge after `0.07·p·(1−p)` per leg ≥ `MIN_NET_EDGE` | pays both legs | rare: asks usually sum above 1.00 |
+| Maker pair (bids, POST_ONLY) | taker pair not profitable, both bids in the price band | none (+ rebate share) | the second leg trails the market after the first fills |
 
-| Attempt | Order Type | Fee Structure | Goal |
-|---------|-----------|---------------|------|
-| 1-3 | POST_ONLY | +0.15% rebate | Earn maker rebates |
-| 4+ | GTC | -1.54% taker fee | Ensure fills |
-
-- **Success**: Counter resets to 0
-- **Failure**: Counter increments, switches to GTC after 3 failures
-
-This prevents repeated crossing errors while preserving maker rebate opportunities.
+If one leg fills first the other is re-quoted every poll (best bid, capped at `1 − filled − MIN_NET_EDGE`). A taker hedge is used only when it beats flattening or holding.
 
 ### Combined Price Threshold
 
@@ -763,7 +758,7 @@ Resolution: DOWN loses
 **Outcome**:
 - Both orders cancelled immediately
 - No positions held, no risk
-- POST_ONLY failure counter incremented (switch to GTC after 3 failures)
+- POST_ONLY crossing rejection: retry one tick below the ask
 
 **Example**:
 ```
@@ -811,7 +806,7 @@ The PolyFlup position flow lifecycle with atomic hedging is a sophisticated risk
 
 1. **Signal Generation**: Multi-source confidence calculation (Binance + Polymarket)
 2. **Atomic Placement**: Simultaneous entry+hedge pairs with guaranteed profit structure
-3. **Fill Monitoring**: 120-second timeout with immediate cancellation
+3. **Fill Monitoring**: window-scaled timeout with immediate cancellation
 4. **Pre-Settlement Exit**: Confidence-driven early exit of losing side (T-180s to T-45s)
 5. **Emergency Liquidation**: Time-aware pricing adapts to remaining time
 6. **Resolution**: Complete pairs maximize profit, partial fills recover capital
@@ -819,7 +814,7 @@ The PolyFlup position flow lifecycle with atomic hedging is a sophisticated risk
 **Key Design Principles**:
 - **No Unhedged Positions**: Every trade is an atomic pair
 - **Guaranteed Profitability**: Combined price ≤ $0.99 ensures edge
-- **Adaptive Execution**: POST_ONLY → GTC fallback, time-aware liquidation
+- **Adaptive Execution**: fee-aware taker/maker pairs, trailing second leg, EV-based leg-risk handling, time-aware liquidation
 - **Smart Recovery**: MIN_ORDER_SIZE handling, pre-settlement optimization
 - **Risk Minimization**: Immediate cancellation, progressive pricing
 

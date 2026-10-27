@@ -155,6 +155,21 @@ tail -f logs/trades_2025.log
 
 ---
 
+## Try It Without Money: Paper Trading
+
+```bash
+uv run polyflup.py --paper     # simulated account on live order books (no keys needed)
+uv run tui.py --paper          # watch it
+```
+Uses `trades_paper.db` and `logs/trades_paper.log` (delete the DB to reset; `PAPER_STARTING_BALANCE`, default 1000). `MARKETS_PAPER` in `.env` replaces `MARKETS` in paper mode, e.g. to add `BTC-5M,ETH-5M`. Maker fills are approximated (`PAPER_MAKER_FILL_MODE=cross` conservative, `touch` optimistic).
+
+## Terminal Dashboard & Risk Profiles
+
+```bash
+uv run tui.py                  # q quit, r refresh, p pause
+```
+Keys `1` / `2` / `3` / `0` switch the running bot between **conservative**, **balanced**, **aggressive** and **custom** (your `.env` values) within about 2 seconds, no restart. Set the startup profile with `RISK_PROFILE` in `.env`. Profile contents: [RISK_PROFILES.md](RISK_PROFILES.md).
+
 ## Common Commands
 
 ### Bot Control
