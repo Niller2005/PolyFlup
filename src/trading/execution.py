@@ -1604,6 +1604,89 @@ def place_entry_and_hedge_atomic(
             )
             return False
 
+        trail_state = {"since": None, "last": 0.0, "capped": False, "moves": 0}
+
+        def _trail_unfilled_leg(
+            entry_done: bool, hedge_done: bool, entry_got: float, hedge_got: float
+        ) -> None:
+            """One leg filled: follow the market with the other leg to get the best lock.
+
+            The unfilled leg is re-quoted at best bid (+ up to TRAIL_MAX_TICKS as time passes),
+            never above `1 - filled_price - MIN_NET_EDGE`, so the lock stays >= MIN_NET_EDGE.
+            """
+            nonlocal entry_order_id, hedge_order_id, entry_price, hedge_price
+            from src.config.settings import (
+                ENABLE_TRAILING,
+                MIN_NET_EDGE,
+                TRAIL_MAX_TICKS,
+                TRAIL_MIN_REPRICE_SECONDS,
+            )
+            from src.trading.edge import trail_target
+
+            if not ENABLE_TRAILING or not use_post_only or entry_done == hedge_done:
+                return
+            trailing_entry = hedge_done  # hedge filled first -> move the entry leg
+            if (entry_got if trailing_entry else hedge_got) > 0.01:
+                return  # partially filled: leave it alone
+            now = time.time()
+            if trail_state["since"] is None:
+                trail_state["since"] = now
+            if now - trail_state["last"] < TRAIL_MIN_REPRICE_SECONDS:
+                return
+
+            leg = entry_side if trailing_entry else hedge_side
+            filled_side = hedge_side if trailing_entry else entry_side
+            filled_price = hedge_price if trailing_entry else entry_price
+            cur_price = entry_price if trailing_entry else hedge_price
+            token = entry_token_id if trailing_entry else hedge_token_id
+            old_id = entry_order_id if trailing_entry else hedge_order_id
+
+            bid, ask = _book_top(token, fresh=True)
+            if not bid or not ask:
+                return
+            waited = now - trail_state["since"]
+            step = max(1.0, HEDGE_FILL_TIMEOUT_SECONDS / (TRAIL_MAX_TICKS + 1))
+            ticks = min(TRAIL_MAX_TICKS, int(waited // step))
+            target, cap = trail_target(filled_price, bid, ask, ticks, MIN_NET_EDGE)
+            trail_state["last"] = now
+
+            if bid > cap + 1e-9 and not trail_state["capped"]:
+                trail_state["capped"] = True
+                log(
+                    f"   🎣 [{symbol}] Trail capped: {leg} best bid ${bid:.2f} is above the ${cap:.2f} cap ({filled_side} filled @ ${filled_price:.2f}, min lock {MIN_NET_EDGE * 100:.1f}¢) - cannot chase"
+                )
+            if target is None or abs(target - cur_price) < 0.005:
+                return
+
+            log(
+                f"   🎣 [{symbol}] Trailing {leg}: {filled_side} filled @ ${filled_price:.2f} → cap ${cap:.2f} | bid ${bid:.2f} ask ${ask:.2f} | ${cur_price:.2f} → ${target:.2f} (lock {(1 - filled_price - target) * 100:+.1f}¢)"
+            )
+            cancel_order(old_id)
+            matched = float((get_order(old_id) or {}).get("size_matched") or 0)
+            if matched > 0.01:  # filled while we were repricing: keep it, next poll sees the fill
+                log(f"   ✅ [{symbol}] {leg} filled during reprice - keeping it")
+                return
+            res = place_batch_orders(
+                [{"token_id": token, "price": target, "size": entry_size, "side": BUY, "post_only": True}]
+            )
+            if not (res and res[0].get("success") and res[0].get("order_id")):
+                log(f"   ⚠️  [{symbol}] Trail reprice failed ({res[0].get('error') if res else 'no response'}) - restoring ${cur_price:.2f}")
+                res = place_batch_orders(
+                    [{"token_id": token, "price": cur_price, "size": entry_size, "side": BUY, "post_only": True}]
+                )
+                target = cur_price
+                if not (res and res[0].get("success") and res[0].get("order_id")):
+                    log_error(f"[{symbol}] Could not restore {leg} order after trail failure")
+                    return
+            new_id = res[0]["order_id"]
+            trail_state["moves"] += 1
+            if trailing_entry:
+                entry_order_id, entry_price = new_id, target
+                entry_result["order_id"] = new_id
+            else:
+                hedge_order_id, hedge_price = new_id, target
+                hedge_result["order_id"] = new_id
+
         while elapsed < HEDGE_FILL_TIMEOUT_SECONDS:
             time.sleep(HEDGE_POLL_INTERVAL_SECONDS)
             elapsed += HEDGE_POLL_INTERVAL_SECONDS
@@ -1637,6 +1720,14 @@ def place_entry_and_hedge_atomic(
                         f"   ✅ [{symbol}] Both orders filled after {elapsed}s - trade complete!"
                     )
                     both_filled = True
+                    # Status was captured at placement ("live"); mark filled so the saved trade
+                    # syncs its real (possibly trailed) fill price from the exchange
+                    entry_result["status"] = "MATCHED"
+                    hedge_result["status"] = "MATCHED"
+                    if trail_state["moves"]:
+                        log(
+                            f"   🎣 [{symbol}] Locked {(1 - entry_price - hedge_price) * 100:+.1f}¢/sh after {trail_state['moves']} trail move(s): {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f}"
+                        )
 
                     # Reset POST_ONLY failure counter on successful atomic placement
                     if symbol in _post_only_failures:
@@ -1647,6 +1738,10 @@ def place_entry_and_hedge_atomic(
                         )
 
                     break
+
+                _trail_unfilled_leg(
+                    entry_filled, hedge_filled, entry_filled_size, hedge_filled_size
+                )
 
                 # GTC FALLBACK: If entry filled but hedge not after 30s, switch hedge to GTC
                 # This pays taker fee (~$0.04) but prevents emergency liquidation loss (~$1.90)

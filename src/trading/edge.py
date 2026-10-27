@@ -156,3 +156,18 @@ def scaled_kelly(full_kelly: float, fraction: float, cap: float) -> float:
 def meets_edge(net_edge: float, minimum: float) -> bool:
     """`net_edge >= minimum` tolerant of float noise (1 - 0.55 - 0.44 is 0.00999..., not 0.01)."""
     return net_edge >= minimum - 1e-9
+
+
+def trail_target(
+    filled_price: float, best_bid: float, best_ask: float, ticks: int, min_edge: float
+):
+    """Price to rest the still-unfilled leg at after the other leg filled at `filled_price`.
+
+    Returns (target, cap) or (None, cap) if no valid price exists.
+      cap     the most we may pay and still lock `min_edge` (1 - filled - min_edge)
+      target  best bid + `ticks` ticks, never above the cap and never crossing the ask
+    Staying at/near the bid gives the best lock; more ticks buy fill probability.
+    """
+    cap = round(1.0 - filled_price - min_edge + 1e-9, 2)
+    target = min(cap, round(best_bid + ticks * TICK, 2), round(best_ask - TICK, 2))
+    return (target if target >= TICK else None), cap

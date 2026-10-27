@@ -124,6 +124,17 @@ def test_shadow_table_migration_and_resolution_sql():
     assert conn.execute("SELECT won FROM shadow_signals").fetchone()[0] == 0
 
 
+def test_trail_target_follows_bid_within_cap():
+    from src.trading.edge import trail_target
+
+    # UP filled at 0.72 -> DOWN may cost at most 1-0.72-0.01 = 0.27
+    assert trail_target(0.72, 0.25, 0.26, 0, 0.01) == (0.25, 0.27)  # join best bid: best lock
+    assert trail_target(0.72, 0.25, 0.30, 2, 0.01) == (0.27, 0.27)  # escalates, capped at 0.27
+    assert trail_target(0.72, 0.30, 0.31, 0, 0.01) == (0.27, 0.27)  # market ran away: rest at the cap
+    assert trail_target(0.72, 0.25, 0.26, 2, 0.01) == (0.25, 0.27)  # never crosses the ask (0.26-0.01)
+    assert trail_target(0.995, 0.01, 0.02, 0, 0.01)[0] is None  # nothing left to pay
+
+
 def test_meets_edge_tolerates_float_noise():
     from src.trading.edge import meets_edge
 

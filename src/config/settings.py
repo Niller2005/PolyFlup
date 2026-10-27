@@ -71,6 +71,13 @@ KELLY_PROB_HAIRCUT = float(
     os.getenv("KELLY_PROB_HAIRCUT", "0.02")
 )  # Subtracted from the late-window win probability before sizing (model error)
 
+# Trailing: after one leg of a maker pair fills, re-quote the other leg to follow the market
+ENABLE_TRAILING = os.getenv("ENABLE_TRAILING", "YES").upper() == "YES"
+TRAIL_MAX_TICKS = int(
+    os.getenv("TRAIL_MAX_TICKS", "2")
+)  # Ticks above best bid the trailing leg may escalate to as time passes (never above the MIN_NET_EDGE cap)
+TRAIL_MIN_REPRICE_SECONDS = int(os.getenv("TRAIL_MIN_REPRICE_SECONDS", "5"))
+
 # Late-window conviction mode: when the leading side is far from the strike near close
 LATE_WINDOW_ENABLED = (
     os.getenv("LATE_WINDOW_ENABLED", "YES").upper() == "YES"
@@ -387,10 +394,12 @@ BINANCE_FUNDING_MAP = {
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.makedirs(f"{BASE_DIR}/logs", exist_ok=True)
-LOG_FILE = f"{BASE_DIR}/logs/{'trades_paper' if PAPER_TRADING else 'trades_2025'}.log"
+# POLYFLUP_DB_NAME runs an isolated instance (own DB, log and lock), e.g. an experiment next to a live paper bot
+DB_NAME = os.getenv("POLYFLUP_DB_NAME") or ("trades_paper" if PAPER_TRADING else "trades")
+LOG_FILE = f"{BASE_DIR}/logs/{'trades_paper' if PAPER_TRADING else 'trades_2025'}{'' if DB_NAME in ('trades', 'trades_paper') else '_' + DB_NAME}.log"
 ERROR_LOG_FILE = f"{BASE_DIR}/logs/errors.log"
 # Database Configuration
-DB_FILE = f"{BASE_DIR}/{'trades_paper' if PAPER_TRADING else 'trades'}.db"
+DB_FILE = f"{BASE_DIR}/{DB_NAME}.db"
 REPORTS_DIR = f"{BASE_DIR}/logs/reports"
 os.makedirs(REPORTS_DIR, exist_ok=True)
 

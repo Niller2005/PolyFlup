@@ -162,7 +162,9 @@ def launch_entries(symbols: list, balance: float, verbose: bool = True) -> int:
 def main():
     """Main bot loop"""
     # PID lock to prevent duplicate processes
-    lock_file = "/tmp/polyflup_paper.lock" if PAPER_TRADING else "/tmp/polyflup.lock"
+    from src.config.settings import DB_NAME
+
+    lock_file = f"/tmp/polyflup_{DB_NAME}.lock"
     try:
         f = open(lock_file, "w")
         fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
