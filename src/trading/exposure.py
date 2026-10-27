@@ -20,13 +20,13 @@ _local = threading.local()
 
 
 def open_exposure_usd() -> float:
-    """Cost basis of unsettled positions: entry + hedge for hedged pairs, entry otherwise."""
+    """Cost basis of unsettled legs still held: entry + hedge for hedged pairs (a sold leg drops out)."""
     with db_connection() as conn:
         row = conn.execute(
             """SELECT COALESCE(SUM(
-                   CASE WHEN COALESCE(is_hedged, 0) = 1 AND COALESCE(hedge_order_price, 0) > 0
-                             AND COALESCE(exited_early, 0) = 0 AND COALESCE(hedge_exited_early, 0) = 0
-                        THEN size * (entry_price + hedge_order_price)
+                   CASE WHEN COALESCE(is_hedged, 0) = 1 AND COALESCE(hedge_order_price, 0) > 0 THEN
+                            size * (CASE WHEN COALESCE(exited_early, 0) = 0 THEN entry_price ELSE 0 END
+                                    + CASE WHEN COALESCE(hedge_exited_early, 0) = 0 THEN hedge_order_price ELSE 0 END)
                         WHEN COALESCE(exited_early, 0) = 1 THEN 0
                         ELSE COALESCE(bet_usd, 0) END), 0)
                FROM trades WHERE settled = 0"""

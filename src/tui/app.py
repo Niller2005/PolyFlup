@@ -256,7 +256,7 @@ class Dashboard:
             syms.add_row(Text(s.symbol, style="bold"), str(s.trades),
                          pct(s.wins / s.trades if s.trades else None, 0), money(s.pnl))
 
-        curve = Text.assemble(("equity  ", DIM), sparkline(self.snap.equity_curve, 36))
+        curve = Text.assemble(("settled  ", DIM), sparkline(self.snap.equity_curve, 36))
         if self.snap.equity_curve:
             curve.append(f"  {self.snap.equity_curve[-1]:+,.2f}", style=GREEN if self.snap.equity_curve[-1] >= 0 else RED)
         return Panel(Group(table, syms, curve), title="[bold]Performance[/]", box=box.ROUNDED, border_style=CYAN)
@@ -291,6 +291,21 @@ class Dashboard:
         start = self.snap.paper_start or 0.0
         cash = self.snap.paper_cash or 0.0
         parts.append(Text.assemble(("cash ", DIM), f"{cash:,.2f}", ("  start ", DIM), f"{start:,.2f}"))
+        # Account result = cash + holdings at the market - start. The trades table only holds paired
+        # trades, so leg-out losses and fees show up here and nowhere else.
+        held = 0.0
+        for h in self.snap.paper_holdings:
+            mid = self.feed.mid(h.token_id)
+            held += h.size * (mid if mid is not None else h.avg_price)
+        account = cash + held - start
+        trades_pnl = self.snap.periods[-1].pnl if self.snap.periods else 0.0
+        parts.append(
+            Text.assemble(
+                ("account P&L ", DIM), money(account),
+                ("  settled trades ", DIM), money(trades_pnl),
+                ("  other ", DIM), money(account - trades_pnl),
+            )
+        )
         return Panel(Group(*parts), title=f"[bold]Paper account[/] ({len(self.snap.paper_orders)} orders)", box=box.ROUNDED, border_style="yellow1")
 
     def recent(self) -> Panel:

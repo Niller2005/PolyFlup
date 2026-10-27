@@ -330,7 +330,7 @@ def check_and_settle_trades():
 
                 # Mark trade as settled (redemption will happen in batch at next window boundary)
                 c.execute(
-                    "UPDATE trades SET final_outcome=?, exit_price=?, pnl_usd=?, roi_pct=?, settled=1, settled_at=?, scale_in_order_id=NULL WHERE id=?",
+                    "UPDATE trades SET final_outcome=?, exit_price=CASE WHEN COALESCE(exited_early, 0) = 1 AND exit_price IS NOT NULL THEN exit_price ELSE ? END, pnl_usd=?, roi_pct=?, settled=1, settled_at=?, scale_in_order_id=NULL WHERE id=?",
                     (
                         "RESOLVED",
                         final_price,

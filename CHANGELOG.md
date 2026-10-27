@@ -11,6 +11,21 @@ and this project uses semantic versioning.
 
 ---
 
+## [0.7.1] - 2026-10-27
+
+### Fixed
+- **Pre-settlement exit sold-leg attribution**: when the hedge leg was the winner, the sale of the losing *entry* leg was booked as a hedge sale (the check compared the losing side with the already-swapped winning side, so it never matched). Consequences: wrong PnL in the TUI and settlement, position sync marking the trade `SYNC_MISSING` with PnL 0, and the surviving hedge leg being adopted as a separate trade (its full payout counted as profit). The sale is now recorded against the leg that was sold.
+- **Pre-settlement "combined entry"**: after the winner swap the hedge price was added to itself (`$1.32/pair`), so expected-profit logs and the "not a good hedge" warning were wrong.
+- **Position sync** no longer marks a trade `SYNC_MISSING` when its entry leg was sold on purpose (`exited_early`).
+- **Exposure sizing** counts only legs still held (a sold leg drops out, the other leg stays exposed).
+- **Settlement** keeps the recorded early-exit price instead of overwriting it with the resolution price.
+- **Migration 13** repairs existing rows with that signature (reopens the trade as an entry exit, removes the adopted duplicate) so settlement recomputes their PnL.
+
+### Changed
+- **TUI**: the paper panel shows account P&L (cash + holdings at market − start) next to settled-trade PnL; the difference is leg-out losses and fees, which never become trade rows. The sparkline is labelled "settled".
+
+---
+
 ## [0.7.0] - 2026-10-27
 
 ### Breaking

@@ -42,11 +42,14 @@ def test_hedged_pair_counts_both_legs_and_settled_is_ignored():
         [
             (0, 10, 0.64, 6.4, 1, 0.35, 0, 0),  # hedged: 10 * 0.99 = 9.9
             (0, 10, 0.50, 5.0, 0, None, 0, 0),  # unhedged: just the entry cost
-            (0, 10, 0.50, 5.0, 1, 0.40, 1, 0),  # entry sold early: no longer exposed
+            (0, 10, 0.50, 5.0, 1, 0.40, 1, 0),  # entry sold: only the held hedge leg (4.0) is exposed
+            (0, 10, 0.50, 5.0, 1, 0.40, 0, 1),  # hedge sold: only the held entry leg (5.0) is exposed
+            (0, 10, 0.50, 5.0, 1, 0.40, 1, 1),  # both sold: nothing
+            (0, 10, 0.50, 5.0, 0, None, 1, 0),  # unhedged entry sold: nothing
             (1, 10, 0.50, 5.0, 1, 0.40, 0, 0),  # settled
         ]
     )
-    assert abs(exposure.open_exposure_usd() - 14.9) < 1e-9
+    assert abs(exposure.open_exposure_usd() - (9.9 + 5.0 + 4.0 + 5.0)) < 1e-9
 
 
 def test_allocation_scales_with_available_cash():

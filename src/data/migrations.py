@@ -270,6 +270,42 @@ def migration_012_create_shadow_signals_table(conn: Any) -> None:
     log("    ✓ shadow_signals table ready")
 
 
+def migration_013_repair_misattributed_hedge_exits(conn: Any) -> None:
+    """Fix trades whose *entry* leg was sold pre-settlement but booked as a hedge sale.
+
+    The old exit code compared the losing side with the (possibly swapped) winning side, so a sold
+    entry was recorded in hedge_exit_price/hedge_exited_early. Position sync then saw the entry
+    token gone, marked the trade SYNC_MISSING with PnL 0 and adopted the surviving hedge leg as a
+    separate trade. That signature is rewritten here: the sale becomes an entry exit, the trade is
+    reopened so settlement recomputes its PnL, and the adopted duplicate of the hedge leg is removed.
+    """
+    c = conn.cursor()
+    c.execute(
+        """SELECT id, slug, side, hedge_exit_price FROM trades
+           WHERE is_hedged = 1 AND final_outcome = 'SYNC_MISSING'
+             AND COALESCE(hedge_exited_early, 0) = 1 AND COALESCE(exited_early, 0) = 0
+             AND hedge_exit_price IS NOT NULL"""
+    )
+    broken = c.fetchall()
+    for trade_id, slug, side, sold_at in broken:
+        c.execute(
+            """DELETE FROM trades WHERE slug = ? AND side != ? AND is_hedged = 0
+                 AND COALESCE(order_id, '') = '' AND COALESCE(hedge_order_id, '') = ''
+                 AND final_outcome IN ('ADOPTED', 'RESOLVED')""",
+            (slug, side),
+        )
+        removed = c.rowcount
+        c.execute(
+            """UPDATE trades SET exited_early = 1, exit_price = ?, hedge_exited_early = 0,
+                   hedge_exit_price = NULL, settled = 0, final_outcome = NULL, pnl_usd = NULL,
+                   roi_pct = NULL, settled_at = NULL WHERE id = ?""",
+            (sold_at, trade_id),
+        )
+        log(f"    ✓ #{trade_id} entry exit @ ${sold_at:.2f} restored ({removed} adopted duplicate(s) removed)")
+    if not broken:
+        log("    ✓ no mis-attributed exits found")
+
+
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
     (2, "Verify timestamp column", migration_002_add_created_at_column),
@@ -318,6 +354,11 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
         12,
         "Create shadow_signals table for late-window conviction evaluation",
         migration_012_create_shadow_signals_table,
+    ),
+    (
+        13,
+        "Repair entry exits that were booked as hedge exits",
+        migration_013_repair_misattributed_hedge_exits,
     ),
 ]
 

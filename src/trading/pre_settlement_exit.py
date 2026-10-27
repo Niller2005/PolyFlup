@@ -87,6 +87,20 @@ def _get_token_price_from_api(token_id: str, symbol: str) -> Optional[float]:
         return None
 
 
+def exit_order_id(
+    losing_side: str,
+    entry_side: str,
+    entry_order_id: Optional[str],
+    hedge_order_id: Optional[str],
+) -> Optional[str]:
+    """Order id that identifies the leg being sold, for exit-price bookkeeping.
+
+    The sold leg is the trade's entry when the losing side equals the entry side, else the hedge.
+    Comparing against the *winning* side (possibly swapped to the hedge) is always false.
+    """
+    return entry_order_id if losing_side == entry_side else hedge_order_id
+
+
 def _get_losing_side_token_id(symbol: str, winning_side: str, slug: str):
     """
     Get the token_id for the losing (opposite) side of an unhedged position.
@@ -252,6 +266,11 @@ def check_pre_settlement_exits():
                 # Skip if already processed
                 if trade_id in _processed_trade_ids:
                     continue
+
+                # `winning_side`/`winning_token_id` start as the trade's own entry leg and may
+                # be swapped below when the hedge leg is the winner; remember what the entry was.
+                entry_side = winning_side
+                winning_entry_price = entry_price  # cost basis of whichever leg ends up winning
 
                 # Calculate time remaining until window close
                 window_end_dt = (
@@ -501,7 +520,7 @@ def check_pre_settlement_exits():
                         winning_token_id = hedge_token_id
                         winning_side = "DOWN" if winning_side == "UP" else "UP"
                         winning_price = hedge_current_price
-                        entry_price = hedge_price if hedge_price else 0.50
+                        winning_entry_price = hedge_price if hedge_price else 0.50
 
                         # Confidence is already symmetric - no need to flip
                         # High confidence means the market is decisive, regardless of direction
@@ -548,7 +567,7 @@ def check_pre_settlement_exits():
                         winning_side,
                         confidence,
                         winning_price,
-                        entry_price,
+                        winning_entry_price,
                         min_confidence=required_confidence,
                         is_hedged=True,
                     )
@@ -687,10 +706,11 @@ def check_pre_settlement_exits():
                 )
 
                 # Determine which order_id to pass for exit price tracking
-                # If losing_side == winning_side (original entry side), we're selling entry
-                # If losing_side != winning_side, we're selling the hedge
-                order_id_for_exit = (
-                    entry_order_id if losing_side == winning_side else hedge_order_id
+                # losing_side is always the opposite of winning_side, so compare it with the
+                # trade's entry side: selling the entry leg must be recorded as an ENTRY exit,
+                # otherwise the sale is booked against the hedge and PnL/sync go wrong.
+                order_id_for_exit = exit_order_id(
+                    losing_side, entry_side, entry_order_id, hedge_order_id
                 )
 
                 success = emergency_sell_position(

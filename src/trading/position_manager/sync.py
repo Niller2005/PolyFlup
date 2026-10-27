@@ -191,8 +191,15 @@ def sync_positions_with_exchange(user_address: str):
                         )
                 else:
                     # Trade is open in DB but not on exchange
-                    c.execute("SELECT timestamp FROM trades WHERE id = ?", (trade_id,))
+                    c.execute(
+                        "SELECT timestamp, COALESCE(exited_early, 0) FROM trades WHERE id = ?",
+                        (trade_id,),
+                    )
                     ts_row = c.fetchone()
+                    if ts_row and ts_row[1]:
+                        # Entry leg was sold on purpose (pre-settlement/emergency exit): the
+                        # trade stays open until its hedge resolves, it is not missing.
+                        continue
                     if ts_row:
                         try:
                             trade_ts = datetime.fromisoformat(ts_row[0])
