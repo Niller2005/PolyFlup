@@ -64,6 +64,19 @@ def fmt_left(seconds: Optional[float]) -> Text:
     return Text(f"{m:02d}:{s:02d}", style=style)
 
 
+def hedge_status(p: "OpenPosition") -> Text:
+    """Which legs are still held: both (hedged), only the entry, or one sold early."""
+    if p.entry_sold and p.hedge_sold:
+        return Text("both sold", style=DIM)
+    if p.entry_sold:
+        return Text("entry sold", style=YELLOW)
+    if p.hedge_sold:
+        return Text("hedge sold", style=YELLOW)
+    if p.is_hedged:
+        return Text(f"✓ +{p.hedge_side}", style=f"bold {GREEN}")
+    return Text("⚠ UNHEDGED", style=f"bold {RED}")
+
+
 def sparkline(values: List[float], width: int) -> Text:
     if not values:
         return Text("no settled trades yet", style=DIM)
@@ -146,10 +159,11 @@ class Dashboard:
         table = Table(box=box.SIMPLE_HEAD, expand=True, header_style=f"bold {DIM}", pad_edge=False)
         columns = [
             ("#", "right"), ("Sym", "left"), ("Side", "left"), ("Size", "right"),
-            ("Entry", "right"), ("Mid", "right"), ("PnL $", "right"), ("PnL %", "right"),
+            ("Entry", "right"), ("Hedge", "right"), ("Lock¢", "right"), ("Status", "left"),
+            ("Mid", "right"), ("PnL $", "right"), ("PnL %", "right"),
             ("Exit", "center"), ("Left", "right"),
         ]
-        hidden = {"PnL %", "Exit"} if self.compact else set()
+        hidden = {"PnL %", "Exit", "Hedge", "Lock¢", "Size"} if self.compact else set()
         keep = [name not in hidden for name, _ in columns]
         for (name, justify), shown in zip(columns, keep):
             if shown:
@@ -174,6 +188,9 @@ class Dashboard:
                 side_text(p.side),
                 f"{p.size:,.2f}",
                 f"{p.entry_price:.3f}",
+                f"{p.hedge_price:.3f}" if p.hedge_price else Text("—", style=DIM),
+                Text("—", style=DIM) if p.locked_edge is None else Text(f"{p.locked_edge * 100:+.1f}", style=GREEN if p.locked_edge > 0 else RED),
+                hedge_status(p),
                 f"{mid:.3f}" if mid is not None else Text("…", style=DIM),
                 money(pnl),
                 Text("—", style=DIM) if pnl_pct is None else Text(f"{pnl_pct * 100:+.1f}%", style=GREEN if pnl_pct > 0 else RED if pnl_pct < 0 else DIM),

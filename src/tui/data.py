@@ -37,6 +37,21 @@ class OpenPosition:
     has_exit_order: bool
     scaled_in: bool
     is_reversal: bool
+    is_hedged: bool = False
+    hedge_price: Optional[float] = None
+    entry_sold: bool = False  # entry leg exited early (stop loss / pre-settlement)
+    hedge_sold: bool = False  # hedge leg exited early
+
+    @property
+    def hedge_side(self) -> str:
+        return {"UP": "DOWN", "DOWN": "UP"}.get(self.side, "?")
+
+    @property
+    def locked_edge(self) -> Optional[float]:
+        """Guaranteed profit per share if both legs are held to resolution."""
+        if self.is_hedged and self.hedge_price and not (self.entry_sold or self.hedge_sold):
+            return 1.0 - self.entry_price - self.hedge_price
+        return None
 
 
 @dataclass
@@ -218,10 +233,14 @@ def load_snapshot(db_path: Path, recent_limit: int = 12, curve_len: int = 40) ->
         if not has_trades:
             snap.note = "Waiting for the bot to create the trades table (start it with `uv run polyflup.py`)"
             return snap
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(trades)")}
+        opt = lambda name, default="NULL": name if name in cols else f"{default} AS {name}"  # older DBs
         for r in conn.execute(
-            """
+            f"""
             SELECT id, symbol, side, size, entry_price, bet_usd, token_id, window_end,
-                   limit_sell_order_id, scaled_in, is_reversal
+                   limit_sell_order_id, scaled_in, is_reversal,
+                   {opt("is_hedged", "0")}, {opt("hedge_order_price")},
+                   {opt("exited_early", "0")}, {opt("hedge_exited_early", "0")}
             FROM trades WHERE settled = 0 ORDER BY id DESC
             """
         ):
@@ -238,6 +257,10 @@ def load_snapshot(db_path: Path, recent_limit: int = 12, curve_len: int = 40) ->
                     has_exit_order=bool(r["limit_sell_order_id"]),
                     scaled_in=bool(r["scaled_in"]),
                     is_reversal=bool(r["is_reversal"]),
+                    is_hedged=bool(r["is_hedged"]),
+                    hedge_price=r["hedge_order_price"],
+                    entry_sold=bool(r["exited_early"]),
+                    hedge_sold=bool(r["hedge_exited_early"]),
                 )
             )
 
