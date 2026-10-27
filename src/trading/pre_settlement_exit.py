@@ -37,6 +37,7 @@ from src.utils.logger import log, log_error
 from src.utils.websocket_manager import ws_manager
 from src.config.settings import (
     ENABLE_PRE_SETTLEMENT_EXIT,
+    PRE_SETTLEMENT_EXIT_HEDGED,
     PRE_SETTLEMENT_EXIT_SECONDS,
     PRE_SETTLEMENT_MIN_CONFIDENCE,
     PRE_SETTLEMENT_CHECK_INTERVAL,
@@ -265,6 +266,11 @@ def check_pre_settlement_exits():
 
                 # Skip if already processed
                 if trade_id in _processed_trade_ids:
+                    continue
+
+                # A hedged pair already locks its profit: selling the losing leg only trades the
+                # lock for the market's flip probability less fees (see PRE_SETTLEMENT_EXIT_HEDGED).
+                if is_hedged and not PRE_SETTLEMENT_EXIT_HEDGED:
                     continue
 
                 # `winning_side`/`winning_token_id` start as the trade's own entry leg and may

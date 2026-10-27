@@ -31,6 +31,7 @@ from src.config.settings import (
     LATE_WINDOW_EVAL_INTERVAL,
     LATE_WINDOW_LIVE,
     LATE_WINDOW_MIN_DISTANCE_PCT,
+    LATE_WINDOW_MAX_DISAGREEMENT,
     LATE_WINDOW_MIN_EV,
     LATE_WINDOW_SECONDS,
     MARKETS,
@@ -118,6 +119,11 @@ def _prices(symbol: str, window_start: datetime) -> Optional[Tuple[float, float,
     return None
 
 
+def market_disagrees(p_use: float, ask: float) -> bool:
+    """True when the ask is far below our probability; there the market has been right, not us."""
+    return p_use - ask > LATE_WINDOW_MAX_DISAGREEMENT
+
+
 def evaluate(symbol: str, now: Optional[datetime] = None) -> Optional[dict]:
     """One evaluation for a market key; None when outside the evaluation window."""
     now = now or datetime.now(tz=ZoneInfo("America/New_York"))
@@ -162,6 +168,8 @@ def evaluate(symbol: str, now: Optional[datetime] = None) -> Optional[dict]:
         row.update(decision="SKIP", reason="no ask / priced out")
     elif dist_pct < min_dist:
         row.update(decision="SKIP", reason=f"too close to strike ({dist_pct:.3f}% < {min_dist:.3f}%, {source})")
+    elif market_disagrees(p_use, ask):
+        row.update(decision="SKIP", reason=f"market disagrees (ask {ask:.2f} << p {p_use:.2f})")
     elif row["ev"] < LATE_WINDOW_MIN_EV:
         row.update(decision="SKIP", reason=f"EV {row['ev'] * 100:+.1f}¢ < {LATE_WINDOW_MIN_EV * 100:.1f}¢")
     else:

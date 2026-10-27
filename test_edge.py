@@ -175,6 +175,20 @@ def test_pair_kelly_depends_on_leg_fail_rate():
     assert pair_kelly_fraction(0.01, 0.0, 0.04) > pair_kelly_fraction(0.01, 0.10, 0.04)
 
 
+def test_late_window_skips_when_ask_is_far_below_our_probability():
+    from src.trading.late_window import market_disagrees
+
+    assert market_disagrees(0.80, 0.30)  # 23 of 24 such entries lost
+    assert not market_disagrees(0.80, 0.70)
+    assert not market_disagrees(0.60, 0.93)  # market more confident than us: not a disagreement
+
+
+def test_hedged_pairs_are_not_exited_early_by_default():
+    from src.config import settings
+
+    assert settings.PRE_SETTLEMENT_EXIT_HEDGED is False
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

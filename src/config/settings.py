@@ -103,6 +103,9 @@ LATE_WINDOW_LIVE = (
 LATE_WINDOW_SECONDS = int(
     os.getenv("LATE_WINDOW_SECONDS", "90")
 )  # Evaluate during the last N seconds of a window
+# Skip a late-window entry when the ask is more than this below our probability: that gap
+# means the market knows something the strike/z estimate does not (23 of 24 such ENTERs lost).
+LATE_WINDOW_MAX_DISAGREEMENT = float(os.getenv("LATE_WINDOW_MAX_DISAGREEMENT", "0.15"))
 LATE_WINDOW_MIN_EV = float(
     os.getenv("LATE_WINDOW_MIN_EV", "0.015")
 )  # Min net EV per share (after taker fee) to enter
@@ -235,6 +238,9 @@ EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD = float(
 # Pre-Settlement Exit Strategy for Unhedged Positions
 # Pre-Settlement Exit Strategy - Progressive timing with decreasing confidence requirements
 # Sell losing side of hedged/unhedged position before window close to extract additional value
+# Selling the losing leg of a hedged pair before resolution gives up the locked profit for the
+# market's own flip probability minus fee and spread: it lost ~$99 vs holding in the 2026-10-27 run.
+PRE_SETTLEMENT_EXIT_HEDGED = os.getenv("PRE_SETTLEMENT_EXIT_HEDGED", "NO").upper() == "YES"
 ENABLE_PRE_SETTLEMENT_EXIT = (
     os.getenv("ENABLE_PRE_SETTLEMENT_EXIT", "YES").upper() == "YES"
 )  # Enable pre-settlement exit strategy

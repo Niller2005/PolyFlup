@@ -9,6 +9,20 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+---
+
+## [0.7.2] - 2026-10-28
+
+### Changed
+- **Hedged pairs are no longer sold early** (`PRE_SETTLEMENT_EXIT_HEDGED=NO`): in the paper run the pre-settlement exit cost about $99 against holding (4 flips); unhedged positions keep the exit.
+- **Late-window entries are skipped when the market disagrees** (`LATE_WINDOW_MAX_DISAGREEMENT=0.15`): 23 of 24 shadow ENTERs with a much cheaper ask than our probability lost.
+- Hedge-timeout hold requires the entry leg's bid >= $0.50.
+
+### Added
+- `docs/ANALYSIS_2026-10-27.md` and analysis scripts in the `strategy-analysis` skill.
+
+---
+
 ### Fixed
 - Hedge-timeout "hold" now also requires the entry leg's current bid to be >= $0.50; held legs bought at 0.48/0.30 whose market had already moved to ~0.27 both lost >90%.
 - Position log line for hedged pairs shows the locked result instead of the entry leg's mark (a pair with a -90% entry leg is not a -90% position).
