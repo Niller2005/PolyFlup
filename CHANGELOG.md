@@ -10,6 +10,7 @@ and this project uses semantic versioning.
 ## [Unreleased]
 
 ### Changed
+- TUI layout: Performance and the Paper account span the full right column; Recent trades moved under Open positions on the left.
 - TUI: `m` opens a risk-profile dialog (↑/↓ or j/k, Enter applies, Esc cancels); 1/2/3/0 still work.
 - TUI: the log moved to its own page (`l` toggles); the dashboard gives the freed space to Recent trades.
 

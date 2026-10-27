@@ -413,17 +413,18 @@ class Dashboard:
             return root
         root.split_column(
             Layout(self.header(), size=3, name="header"),
-            Layout(name="top", ratio=5),
-            Layout(name="bottom", ratio=4),
+            Layout(name="body"),
             Layout(self.footer(), size=1, name="footer"),
         )
+        # left: positions over recent trades; right: performance + paper account at full height
+        left = Layout(ratio=3)
+        left.split_column(Layout(self.positions(), ratio=3), Layout(self.recent(), ratio=2))
         right = Layout(ratio=2)
         if self.snap.paper_cash is not None:
-            right.split_column(Layout(self.stats(), ratio=3), Layout(self.paper_panel(), ratio=3))
+            right.split_column(Layout(self.stats(), ratio=1), Layout(self.paper_panel(), ratio=1))
         else:
             right.update(self.stats())
-        root["top"].split_row(Layout(self.positions(), ratio=3), right)
-        root["bottom"].update(self.recent())
+        root["body"].split_row(left, right)
         return root
 
 
