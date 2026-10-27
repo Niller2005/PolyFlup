@@ -48,6 +48,8 @@ grep -a "#12 " logs/window_*.log          # follow one trade across windows (quo
 ```
 Key log phrases: `Maker pair:` / `Maker pair skipped` (entry decision), `Trail capped` / `Trailing` (second leg), `Leg-risk EV/sh` (taker vs flatten vs hold), `TIMEOUT: Both orders not filled` + `CRITICAL: ... timed out` (leg-out), `Confidence too low ... emergency selling` / `HOLDING ... despite hedge timeout` (leg-out resolution), `PRE-SETTLEMENT EXIT OPPORTUNITY` / `Confidence too low for hedged exit` (late exit), `PAPER maker fill|settled|SELL`, `Syncing positions` / `SYNC_MISSING` / `Adopting untracked`.
 
+Also: `pair_outcomes.py [log]` (leg-out rate by symbol/combined price/fill timing, sold-leg losses) and `slug_pnl.py [db]` (true PnL per market window from fills, classifying pairs vs leg-outs).
+
 ## 4. Key ratios to compute
 - **Leg-out rate** = `CRITICAL: ... timed out` / (those + `Both orders filled`). Break-even is ~17-20% (pair edge +1-2c vs ~4c loss per leg-out); measured ~50% on paper.
 - **Decision mix** after a timeout: sold vs held (grep above) and the PnL of each; stored confidence is entry-time and stale - compare with the bid at decision time.
