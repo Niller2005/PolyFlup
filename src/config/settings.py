@@ -322,7 +322,7 @@ if WINDOW_DELAY_SEC > 300:
     WINDOW_DELAY_SEC = 300
 
 # Markets: BTC (15m, default) or BTC-5M for 5-minute windows, e.g. MARKETS=BTC,ETH,BTC-5M,ETH-5M
-MARKETS_ENV = os.getenv("MARKETS", "BTC,ETH,XRP,SOL")
+MARKETS_ENV = (os.getenv("MARKETS_PAPER") if PAPER_TRADING else None) or os.getenv("MARKETS", "BTC,ETH,XRP,SOL")
 MARKETS = []
 for _entry in (m for m in MARKETS_ENV.split(",") if m.strip()):
     _key = parse_market(_entry).key
