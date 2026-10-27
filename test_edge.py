@@ -124,6 +124,15 @@ def test_shadow_table_migration_and_resolution_sql():
     assert conn.execute("SELECT won FROM shadow_signals").fetchone()[0] == 0
 
 
+def test_meets_edge_tolerates_float_noise():
+    from src.trading.edge import meets_edge
+
+    net = pair_net_edge(0.55, 0.44, False, False)
+    assert net < 0.01  # 0.00999999...: a plain >= comparison wrongly rejected this 1c pair
+    assert meets_edge(net, 0.01)
+    assert not meets_edge(0.009, 0.01)
+
+
 def test_kelly_binary_matches_closed_form():
     from src.trading.edge import kelly_binary, scaled_kelly
 

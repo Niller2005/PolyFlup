@@ -151,3 +151,8 @@ def pair_kelly_fraction(net_edge: float, leg_fail_rate: float, leg_loss: float) 
 def scaled_kelly(full_kelly: float, fraction: float, cap: float) -> float:
     """Fractional Kelly, capped at `cap` of bankroll (never negative)."""
     return min(max(full_kelly, 0.0) * fraction, cap)
+
+
+def meets_edge(net_edge: float, minimum: float) -> bool:
+    """`net_edge >= minimum` tolerant of float noise (1 - 0.55 - 0.44 is 0.00999..., not 0.01)."""
+    return net_edge >= minimum - 1e-9

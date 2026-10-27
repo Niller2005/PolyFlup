@@ -28,11 +28,15 @@ POST_ONLY_RESET_TIMEOUT = 300  # seconds (5 minutes) - reset counter if market s
 POST_ONLY_RETRY_INTERVAL = 10  # Try POST_ONLY every 10th trade after threshold
 
 
-def _book_top(token_id: str) -> tuple:
-    """(best_bid, best_ask) from the websocket cache, falling back to the CLOB book."""
+def _book_top(token_id: str, fresh: bool = False) -> tuple:
+    """(best_bid, best_ask) from the websocket cache (unless `fresh`), else the CLOB book.
+
+    Quote maker orders from a fresh book: a stale cached top can sit on the wrong side of
+    a moved market and the POST_ONLY order then crosses and is rejected.
+    """
     from src.utils.websocket_manager import ws_manager
 
-    bid, ask = ws_manager.get_bid_ask(token_id)
+    bid, ask = (None, None) if fresh else ws_manager.get_bid_ask(token_id)
     if bid and ask and bid > 0.0 and ask > 0.0:
         return float(bid), float(ask)
     try:
@@ -558,11 +562,12 @@ def emergency_sell_position(
                         bids = getattr(orderbook, "bids", []) or []
 
                     if bids and len(bids) > 0:
-                        # Handle both dict and object bid entries
-                        if hasattr(bids[0], "price"):
-                            best_bid = float(bids[0].price)
-                        elif isinstance(bids[0], dict):
-                            best_bid = float(bids[0].get("price", 0))
+                        # CLOB V2 returns levels worst-first, so take the max price
+                        # (bids[0] is the WORST bid and made this look like an empty book)
+                        best_bid = max(
+                            float(b.price if hasattr(b, "price") else b.get("price", 0))
+                            for b in bids
+                        )
 
                         if best_bid and best_bid > 0.01:
                             orderbook_available = True
@@ -1185,7 +1190,7 @@ def place_entry_and_hedge_atomic(
             MIN_NET_EDGE,
             TAKER_FEE_RATE,
         )
-        from src.trading.edge import maker_pair_prices, pair_net_edge
+        from src.trading.edge import maker_pair_prices, meets_edge, pair_net_edge
 
         combined_price_threshold = calculate_adaptive_combined_threshold(
             entry_token_id, hedge_token_id
@@ -1208,7 +1213,7 @@ def place_entry_and_hedge_atomic(
             taker_net = pair_net_edge(
                 optimal_entry, optimal_hedge, True, True, TAKER_FEE_RATE
             )
-            if taker_net >= MIN_NET_EDGE:
+            if meets_edge(taker_net, MIN_NET_EDGE):
                 mode = "TAKER"
                 entry_price, hedge_price = optimal_entry, optimal_hedge
                 final_combined = metadata["combined_price"]
@@ -1224,8 +1229,8 @@ def place_entry_and_hedge_atomic(
                 )
 
         if mode is None and ENABLE_MAKER_PAIR:
-            e_bid, e_ask = _book_top(entry_token_id)
-            h_bid, h_ask = _book_top(hedge_token_id)
+            e_bid, e_ask = _book_top(entry_token_id, fresh=True)
+            h_bid, h_ask = _book_top(hedge_token_id, fresh=True)
             quote = maker_pair_prices(e_bid, h_bid, MAKER_PAIR_IMPROVE_TICKS)
             band_ok = bool(
                 quote
@@ -1239,7 +1244,7 @@ def place_entry_and_hedge_atomic(
                 q_entry = min(quote[0], round(e_ask - 0.01, 2))  # never cross the book
                 q_hedge = min(quote[1], round(h_ask - 0.01, 2))
                 maker_net = pair_net_edge(q_entry, q_hedge, False, False, TAKER_FEE_RATE)
-                if maker_net >= MIN_NET_EDGE and q_entry >= 0.01 and q_hedge >= 0.01:
+                if meets_edge(maker_net, MIN_NET_EDGE) and q_entry >= 0.01 and q_hedge >= 0.01:
                     mode = "MAKER"
                     entry_price, hedge_price = q_entry, q_hedge
                     final_combined = q_entry + q_hedge
@@ -1579,8 +1584,8 @@ def place_entry_and_hedge_atomic(
                 return False
             from src.trading.edge import flatten_ev, hold_ev, taker_hedge_ev
 
-            e_bid, e_ask = _book_top(entry_token_id)
-            _, h_ask = _book_top(hedge_token_id)
+            e_bid, e_ask = _book_top(entry_token_id, fresh=True)
+            _, h_ask = _book_top(hedge_token_id, fresh=True)
             if not h_ask:
                 gtc_vetoed = True
                 log(f"   ✋ [{symbol}] No {hedge_side} ask to hedge against - keeping resting hedge")
