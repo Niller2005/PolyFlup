@@ -167,7 +167,7 @@ Fills use the real book at the moment of each order (taker fee `0.07·p·(1−p)
 
 #### Terminal Dashboard
 ```bash
-uv run tui.py                       # live: q quit, r refresh, p pause, l log page
+uv run tui.py                       # live: q quit, r refresh, p pause, l log page, m risk-profile dialog (arrows + Enter)
 uv run tui.py --db prod/trades.db   # inspect a downloaded production database
 ```
 Read-only Rich dashboard: open positions with live midpoints, today / 7d / all-time performance, per-symbol PnL, equity sparkline, recent trades and a log tail. Safe to run next to the bot.

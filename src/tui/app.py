@@ -1,5 +1,6 @@
 """Rich-based live terminal dashboard for PolyFlup (read-only)."""
 
+import os
 import re
 import select
 import sys
@@ -104,6 +105,8 @@ class Dashboard:
         self.loaded_at: Optional[datetime] = None
         self.compact = False
         self.show_log = False  # 'l' toggles a full-screen log page
+        self.modal = False  # 'm' opens the risk-profile dialog
+        self.modal_idx = 0
 
     # ---- data -------------------------------------------------------------
     def reload(self) -> None:
@@ -355,13 +358,31 @@ class Dashboard:
                 out.append("\n")
         return Panel(out, title="[bold]Log[/]", box=box.ROUNDED, border_style=DIM)
 
+    def profile_modal(self) -> Panel:
+        applied = profiles.normalize(self.snap.profile_applied) if self.snap.profile_applied else None
+        want = profiles.normalize(self.snap.profile) if self.snap.profile else None
+        body = Text()
+        for i, name in enumerate(profiles.ORDER):
+            sel = i == self.modal_idx
+            colour = {"conservative": GREEN, "balanced": CYAN, "aggressive": RED}.get(name, YELLOW)
+            body.append("  ❯ " if sel else "    ", style=f"bold {CYAN}")
+            body.append(f"{name.upper():<13}", style=f"bold {colour}" + (" reverse" if sel else ""))
+            tag = " (active)" if name == applied else " (requested)" if name == want and name != applied else ""
+            body.append(tag, style=GREEN if tag == " (active)" else YELLOW)
+            body.append("\n      " + profiles.describe(name) + "\n\n", style="" if sel else DIM)
+        body.append("  ↑/↓ select   Enter apply   Esc cancel   (the bot applies within 2s, no restart)", style=DIM)
+        return Align.center(
+            Panel(body, title="[bold]Risk profile[/]", box=box.DOUBLE, border_style=CYAN, padding=(1, 2), width=min(96, 100)),
+            vertical="middle",
+        )
+
     def footer(self) -> Text:
         loaded = self.loaded_at.strftime("%H:%M:%S") if self.loaded_at else "—"
         state = Text(" PAUSED ", style="black on yellow1") if self.paused else Text("")
         return Text.assemble(
             (" q", f"bold {CYAN}"), (" quit  ", DIM), ("r", f"bold {CYAN}"), (" refresh  ", DIM),
             ("p", f"bold {CYAN}"), (" pause  ", DIM),
-            ("l", f"bold {CYAN}"), (" dashboard  " if self.show_log else " log  ", DIM),
+            ("l", f"bold {CYAN}"), (" dashboard  " if self.show_log else " log  ", DIM), ("m", f"bold {CYAN}"), (" risk profile  ", DIM),
             ("1", f"bold {GREEN}"), (" cons ", DIM), ("2", f"bold {CYAN}"), (" bal ", DIM), ("3", f"bold {RED}"), (" aggr ", DIM), ("0", f"bold {YELLOW}"), (" custom  ", DIM), (f"│ db {self.db_path.name} @ {loaded}  │ every {self.refresh:g}s ", DIM), state,
         )
 
@@ -374,6 +395,13 @@ class Dashboard:
                 Layout(self.header(), size=3),
                 Layout(Panel(Text(self.snap.error, style=RED), title="Error", border_style=RED)),
                 Layout(self.footer(), size=1),
+            )
+            return root
+        if self.modal:
+            root.split_column(
+                Layout(self.header(), size=3, name="header"),
+                Layout(self.profile_modal()),
+                Layout(self.footer(), size=1, name="footer"),
             )
             return root
         if self.show_log:
@@ -413,8 +441,20 @@ def _keys(on_key: Callable[[str], None], stop: threading.Event) -> None:
     try:
         tty.setcbreak(fd)
         while not stop.is_set():
-            if select.select([sys.stdin], [], [], 0.2)[0]:
-                on_key(sys.stdin.read(1).lower())
+            if select.select([fd], [], [], 0.2)[0]:
+                # unbuffered os.read: a buffered sys.stdin.read would swallow the rest of an arrow
+                # sequence and make select() report "nothing pending"
+                ch = os.read(fd, 1).decode("utf-8", "ignore")
+                if ch == "\x1b":  # arrows arrive as ESC [ A/B; a lone ESC is "esc"
+                    if select.select([fd], [], [], 0.05)[0]:
+                        rest = os.read(fd, 2).decode("ascii", "ignore")
+                        on_key({"[A": "up", "[B": "down", "OA": "up", "OB": "down"}.get(rest, ""))
+                    else:
+                        on_key("esc")
+                elif ch in ("\n", "\r"):
+                    on_key("enter")
+                elif ch:
+                    on_key(ch.lower())
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
@@ -438,7 +478,27 @@ def run(db_path: Path, log_path: Path, refresh: float = 1.0, once: bool = False,
     force = threading.Event()
 
     def on_key(k: str) -> None:
-        if k == "q":
+        if dash.modal:
+            n = len(profiles.ORDER)
+            if k in ("up", "k"):
+                dash.modal_idx = (dash.modal_idx - 1) % n
+            elif k in ("down", "j"):
+                dash.modal_idx = (dash.modal_idx + 1) % n
+            elif k == "enter":
+                try:
+                    profiles.request_profile(str(dash.db_path), profiles.ORDER[dash.modal_idx])
+                    force.set()
+                except Exception as e:
+                    dash.snap.note = f"Could not switch profile: {e}"
+                dash.modal = False
+            elif k in ("esc", "q", "m"):
+                dash.modal = False
+            return
+        if k == "m":
+            cur = profiles.normalize(dash.snap.profile_applied or dash.snap.profile) if (dash.snap.profile_applied or dash.snap.profile) else None
+            dash.modal_idx = profiles.ORDER.index(cur) if cur in profiles.ORDER else 1
+            dash.modal = True
+        elif k == "q":
             stop.set()
         elif k == "r":
             force.set()
