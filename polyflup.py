@@ -10,6 +10,9 @@ import os
 # Add src to python path if needed
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+if "--paper" in sys.argv:  # must be set before src.config is imported
+    os.environ["PAPER_TRADING"] = "YES"
+
 from src.bot import main
 from src.utils.logger import log
 
