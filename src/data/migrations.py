@@ -250,6 +250,26 @@ def migration_011_add_hedge_exit_tracking_columns(conn: Any) -> None:
 
 
 # Migration registry: version -> migration function
+def migration_012_create_shadow_signals_table(conn: Any) -> None:
+    """Late-window conviction evaluations (logged for every window, resolved later)"""
+    c = conn.cursor()
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shadow_signals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT, symbol TEXT, slug TEXT, window_end TEXT, seconds_left REAL,
+            side TEXT, token_id TEXT, strike REAL, spot REAL, source TEXT,
+            z REAL, dist_pct REAL, p_model REAL, p_emp REAL, p_use REAL,
+            ask REAL, fee REAL, ev REAL, decision TEXT, reason TEXT,
+            won INTEGER, resolved_at TEXT
+        )
+        """
+    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_shadow_slug ON shadow_signals(slug)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_shadow_won ON shadow_signals(won)")
+    log("    ✓ shadow_signals table ready")
+
+
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
     (2, "Verify timestamp column", migration_002_add_created_at_column),
@@ -293,6 +313,11 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
         11,
         "Add hedge exit tracking columns for accurate P&L",
         migration_011_add_hedge_exit_tracking_columns,
+    ),
+    (
+        12,
+        "Create shadow_signals table for late-window conviction evaluation",
+        migration_012_create_shadow_signals_table,
     ),
 ]
 

@@ -261,11 +261,18 @@ def check_pre_settlement_exits():
                 )
                 seconds_left = (window_end_dt - now).total_seconds()
 
-                # Determine required confidence based on time remaining
+                # Determine required confidence based on time remaining. Tiers that would
+                # start in the first 60% of a short (5m) window are skipped: with a 300s
+                # window the 180s tier would fire only 2 minutes after the open.
+                from src.markets import window_seconds
+
+                max_tier = 0.4 * window_seconds(symbol)
                 required_confidence = None
                 for time_threshold, conf_threshold in sorted(
                     PRE_SETTLEMENT_CONFIDENCE_SCHEDULE.items(), reverse=True
                 ):
+                    if time_threshold > max_tier:
+                        continue
                     if seconds_left <= time_threshold:
                         required_confidence = conf_threshold
                         break
@@ -727,7 +734,14 @@ def _pre_settlement_task():
     log(
         f"   💡 Strategy: Progressive exit with cached prices (markets close ~2-3 min before settlement)"
     )
-    log(f"   ⏰ Exit windows: T-180s (80%), T-120s (70%), T-60s (60%), T-45s (50%)")
+    log(
+        "   ⏰ Exit windows: "
+        + ", ".join(
+            f"T-{t}s ({c:.0%})"
+            for t, c in sorted(PRE_SETTLEMENT_CONFIDENCE_SCHEDULE.items(), reverse=True)
+        )
+        + " (5m windows skip tiers earlier than 40% of the window left)"
+    )
     log(f"   ✅ Pre-settlement exit monitoring enabled (hedged + unhedged positions)")
 
     while True:

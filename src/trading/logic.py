@@ -10,7 +10,7 @@ from src.config.settings import (
     CONFIDENCE_SCALING_FACTOR,
     MAX_SIZE,
     MAX_SIZE_MODE,
-    MAX_ENTRY_LATENESS_SEC,
+    max_entry_lateness,
     ENABLE_BFXD,
 )
 from src.utils.logger import log
@@ -191,8 +191,34 @@ def _calculate_bet_size(
         → Entry 20 @ $0.51 + Hedge 20 @ $0.48 = $0.99 combined
         → Profit: $0.01 per share × 20 shares = $0.20
     """
-    # Simple: BET_PERCENT of balance = dollar allocation
-    allocation_usd = balance * (BET_PERCENT / 100.0)
+    from src.config.settings import (
+        KELLY_FRACTION,
+        KELLY_LEG_FAIL_RATE,
+        KELLY_LEG_LOSS,
+        KELLY_MAX_FRACTION,
+        KELLY_SIZING,
+        MIN_NET_EDGE,
+    )
+
+    if KELLY_SIZING:
+        # Pair Kelly: guaranteed MIN_NET_EDGE when both legs fill vs KELLY_LEG_LOSS when they don't
+        from src.trading.edge import pair_kelly_fraction, scaled_kelly
+
+        full = pair_kelly_fraction(MIN_NET_EDGE, KELLY_LEG_FAIL_RATE, KELLY_LEG_LOSS)
+        frac = scaled_kelly(full, KELLY_FRACTION, KELLY_MAX_FRACTION)
+        allocation_usd = balance * frac
+        if frac <= 0.0 or allocation_usd < MIN_SIZE:
+            log(
+                f"   🎲 Kelly: full={full:.2f} → stake {frac:.1%} of ${balance:.2f} = ${allocation_usd:.2f} "
+                f"(leg-fail {KELLY_LEG_FAIL_RATE:.0%}, leg-loss {KELLY_LEG_LOSS * 100:.0f}¢, edge {MIN_NET_EDGE * 100:.1f}¢) - no sizable edge"
+            )
+            return 0.0, 0.0
+        log(
+            f"   🎲 Kelly: full={full:.2f} × {KELLY_FRACTION:g} (cap {KELLY_MAX_FRACTION:.0%}) → stake {frac:.1%} = ${allocation_usd:.2f}"
+        )
+    else:
+        # Simple: BET_PERCENT of balance = dollar allocation
+        allocation_usd = balance * (BET_PERCENT / 100.0)
 
     # Simple: $1 = 1 share (ignore price)
     size = allocation_usd
@@ -351,7 +377,7 @@ def _prepare_trade_params(
 
         if spread <= TIGHT_SPREAD_THRESHOLD:
             # TIGHT SPREAD: Use maker pricing (bid + 2 cents) for better fill rate
-            # More aggressive than bid+1¢ but still maker (earns 0.15% rebate)
+            # More aggressive than bid+1¢ but still maker (earns rebate share)
             base_price = round(best_bid_val + 0.02, 2)
             pricing_strategy = "maker (tight spread)"
         else:
@@ -490,7 +516,7 @@ def _prepare_trade_params(
     lateness = (now_et - window_start).total_seconds()
     time_left = (window_end - now_et).total_seconds()
 
-    if lateness > MAX_ENTRY_LATENESS_SEC:
+    if lateness > max_entry_lateness(symbol):
         if verbose:
             log(
                 f"[{symbol}] ⚠️   Cycle is TOO LATE ({lateness:.0f}s into window, {time_left:.0f}s left). SKIPPING."
@@ -556,6 +582,12 @@ def _prepare_trade_params(
     size, bet_usd_effective = _calculate_bet_size(balance, price, sizing_confidence)
 
     if size < MIN_SIZE:
+        from src.config.settings import KELLY_SIZING as _KELLY
+
+        if _KELLY:  # Kelly already logged why; never bump a Kelly stake up to the minimum
+            if add_spacing:
+                log("")
+            return None
         min_size_cost = MIN_SIZE * price
         log(
             f"   💸 [{symbol}] Cannot afford {MIN_SIZE} shares (${min_size_cost:.2f}). Balance: ${balance:.2f}. Skipping."

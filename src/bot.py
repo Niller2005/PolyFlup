@@ -5,6 +5,7 @@ import os
 import sys
 import fcntl
 import subprocess
+import threading
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from eth_account import Account
@@ -13,7 +14,9 @@ from src.config.settings import (
     PROXY_PK,
     FUNDER_PROXY,
     MIN_EDGE,
-    MAX_ENTRY_LATENESS_SEC,
+    PAPER_TRADING,
+    PRIMARY_MARKET,
+    max_entry_lateness,
     ADX_ENABLED,
     ADX_PERIOD,
     ADX_INTERVAL,
@@ -91,116 +94,75 @@ def get_git_commit_info() -> str:
         return "unknown"
 
 
-def trade_symbol(symbol: str, balance: float, verbose: bool = True) -> int:
-    """Execute trading logic for a symbol"""
-    trade_id = execute_first_entry(symbol, balance, verbose=verbose)
-
-    if trade_id:
-        # Check if this was a hedged reversal and mark the original trade
-        from src.data.db_connection import db_connection
-
-        with db_connection() as conn:
-            c = conn.cursor()
-            c.execute(
-                "SELECT is_reversal, side, window_start FROM trades WHERE id = ?",
-                (trade_id,),
-            )
-            row = c.fetchone()
-            if row and row[0]:
-                # Fetch side and window_start for reversal tracking
-                side = row[1]
-                window_start = row[2]
-
-                now_iso = datetime.now(tz=ZoneInfo("UTC")).isoformat()
-                c.execute(
-                    "UPDATE trades SET reversal_triggered = 1, reversal_triggered_at = ? WHERE symbol = ? AND window_start = ? AND side != ? AND settled = 0",
-                    (
-                        now_iso,
-                        symbol,
-                        window_start,
-                        side,
-                    ),
-                )
-                if c.rowcount > 0:
-                    log(f"   🛡️  [{symbol}] Original trade marked as reversal_triggered")
-
-    return 1 if trade_id else 0
+_entry_threads: dict = {}
+_entry_lock = threading.Lock()
 
 
-def trade_symbols_batch(symbols: list, balance: float, verbose: bool = True) -> int:
-    """
-    Execute trading logic for multiple symbols using ATOMIC entry+hedge for each.
+def _entry_worker(symbol: str, balance: float, verbose: bool) -> None:
+    from src.trading import inflight
 
-    Each symbol uses BET_PERCENT of the INITIAL balance (not remaining balance).
-    Example: $100 balance, BET_PERCENT=20%, 4 symbols
-      → Each symbol gets $20 allocation (20 shares)
-      → Total needed: $80 for all 4 symbols
-
-    Symbols are processed sequentially. If balance drops below the fixed allocation
-    needed for a symbol, that symbol and all remaining symbols are skipped.
-    """
-    placed_count = 0
-
-    # Calculate FIXED allocation per symbol based on INITIAL balance
-    # This is the same for all symbols, regardless of how many have traded
-    fixed_allocation_per_symbol = balance * (BET_PERCENT / 100.0)
-    approximate_cost_per_symbol = (
-        fixed_allocation_per_symbol * 1.0
-    )  # Worst case: $1.00 combined price
-
-    log(
-        f"📋 Batch processing {len(symbols)} symbols sequentially | Fixed allocation per symbol: ${fixed_allocation_per_symbol:.2f}"
-    )
-
-    for idx, symbol in enumerate(symbols, 1):
-        # Check current balance before attempting trade
-        from src.trading.orders import get_balance_allowance
-
-        bal_info = get_balance_allowance()
-        current_balance = bal_info.get("balance", 0) if bal_info else 0
-
-        # Check if we have enough for the FIXED allocation
-        if current_balance < approximate_cost_per_symbol:
-            log(
-                f"⏭️  [{symbol}] ({idx}/{len(symbols)}) SKIPPED: Insufficient balance (${current_balance:.2f} < ${approximate_cost_per_symbol:.2f} needed)"
-            )
-            log(
-                f"   ⚠️  Skipping remaining {len(symbols) - idx + 1} symbol(s) - balance too low for fixed ${fixed_allocation_per_symbol:.2f} allocation"
-            )
-            break  # Skip this and all remaining symbols
-
-        log(
-            f"🎯 [{symbol}] ({idx}/{len(symbols)}) Processing with ${fixed_allocation_per_symbol:.2f} allocation (balance: ${current_balance:.2f})"
-        )
-
-        # Pass INITIAL balance so _calculate_bet_size() uses the fixed allocation
-        # This ensures all symbols use BET_PERCENT of the initial balance, not remaining
+    inflight.mark(symbol)
+    try:
         trade_id = execute_first_entry(symbol, balance, verbose=verbose)
-
         if trade_id:
-            placed_count += 1
-            log(
-                f"✅ [{symbol}] ({idx}/{len(symbols)}) Trade #{trade_id} placed successfully"
-            )
+            log(f"✅ [{symbol}] Trade #{trade_id} placed successfully")
         else:
+            log(f"⏭️  [{symbol}] No trade placed (filters/conditions not met)")
+    except Exception as e:
+        log_error(f"[{symbol}] Entry worker failed: {e}")
+    finally:
+        inflight.clear(symbol)
+
+
+def launch_entries(symbols: list, balance: float, verbose: bool = True) -> int:
+    """
+    Start one entry worker thread per market so a slow fill monitor (up to 90s on 15m,
+    30s on 5m windows) never blocks position monitoring, notifications, settlement or
+    the other markets.
+
+    Each market uses BET_PERCENT of `balance` as a FIXED allocation. Funds reserved by
+    entries still in flight are subtracted from the wallet balance before launching
+    another one. A market with an entry already in flight is skipped.
+    """
+    from src.trading.orders import get_balance_allowance
+
+    from src.config.settings import KELLY_MAX_FRACTION, KELLY_SIZING
+
+    # Kelly stakes never exceed KELLY_MAX_FRACTION, so that is what an in-flight entry reserves
+    allocation = balance * (KELLY_MAX_FRACTION if KELLY_SIZING else BET_PERCENT / 100.0)
+    launched = 0
+    for symbol in symbols:
+        with _entry_lock:
+            running = [s for s, t in _entry_threads.items() if t.is_alive()]
+            if symbol in running:
+                continue
+            bal_info = get_balance_allowance()
+            wallet = bal_info.get("balance", 0) if bal_info else 0
+            available = wallet - allocation * len(running)
+            if available < allocation:
+                log(
+                    f"⏭️  [{symbol}] SKIPPED: insufficient free balance (${available:.2f} < ${allocation:.2f}; {len(running)} entr{'y' if len(running) == 1 else 'ies'} in flight)"
+                )
+                break
             log(
-                f"⏭️  [{symbol}] ({idx}/{len(symbols)}) No trade placed (filters/conditions not met)"
+                f"🎯 [{symbol}] Launching entry with ${allocation:.2f} allocation (free: ${available:.2f})"
             )
-
-        # Small delay between trades to avoid rate limits
-        if symbol != symbols[-1]:
-            import time
-
-            time.sleep(0.5)
-
-    log(f"📊 Batch complete: {placed_count}/{len(symbols)} trades placed")
-    return placed_count
+            thread = threading.Thread(
+                target=_entry_worker,
+                args=(symbol, balance, verbose),
+                name=f"Entry-{symbol}",
+                daemon=True,
+            )
+            _entry_threads[symbol] = thread
+            thread.start()
+            launched += 1
+    return launched
 
 
 def main():
     """Main bot loop"""
     # PID lock to prevent duplicate processes
-    lock_file = "/tmp/polyflup.lock"
+    lock_file = "/tmp/polyflup_paper.lock" if PAPER_TRADING else "/tmp/polyflup.lock"
     try:
         f = open(lock_file, "w")
         fcntl.lockf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -210,6 +172,10 @@ def main():
 
     setup_api_creds()
     init_database()
+    if PAPER_TRADING:
+        from src import paper
+
+        paper.start()
 
     # Get git commit info for debugging
     git_info = get_git_commit_info()
@@ -217,7 +183,7 @@ def main():
     # Set initial log window if markets are defined
     if MARKETS:
         try:
-            w_start, w_end = get_window_times(MARKETS[0])
+            w_start, w_end = get_window_times(PRIMARY_MARKET)
             set_log_window(w_start.isoformat())
             range_str = format_window_range(w_start, w_end)
             log(f"🚀 Starting PolyFlup Trading Bot | Window: {range_str}")
@@ -257,7 +223,7 @@ def main():
 
     log("=" * 90)
     log(
-        f"🤖 POLYFLUP | Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} USDC"
+        f"🤖 POLYFLUP{' [PAPER]' if PAPER_TRADING else ''} | Wallet: {addr[:10]}...{addr[-8:]} | Balance: {get_balance(addr):.2f} pUSD"
     )
     log(f"⚙️  MIN_EDGE: {MIN_EDGE:.1%} | BET: {BET_PERCENT}%")
     log(f"⚙️  HEDGED REVERSAL: {'ENABLED' if ENABLE_HEDGED_REVERSAL else 'DISABLED'}")
@@ -274,6 +240,10 @@ def main():
 
     start_pre_settlement_monitor()
 
+    from src.trading.late_window import start_late_window_monitor
+
+    start_late_window_monitor()
+
     last_position_check = time.time()
     last_order_check = time.time()
     last_verbose_log = time.time()
@@ -289,7 +259,7 @@ def main():
     last_window_logged = None
     if MARKETS:
         try:
-            last_window_logged, _ = get_window_times(MARKETS[0])
+            last_window_logged, _ = get_window_times(PRIMARY_MARKET)
         except Exception:
             # Silently ignore window time fetch errors on startup
             pass
@@ -301,7 +271,7 @@ def main():
 
             # Log new window start
             if MARKETS:
-                w_start, w_end = get_window_times(MARKETS[0])
+                w_start, w_end = get_window_times(PRIMARY_MARKET)
                 if last_window_logged != w_start:
                     range_str = format_window_range(w_start, w_end)
                     # Update logger to use a new file for this window
@@ -334,7 +304,7 @@ def main():
                     w_start_et, _ = get_window_times(m)
                     lateness = (now_et - w_start_et).total_seconds()
 
-                    if 0 <= lateness <= MAX_ENTRY_LATENESS_SEC:
+                    if 0 <= lateness <= max_entry_lateness(m):
                         if ENABLE_HEDGED_REVERSAL or not has_trade_for_window(
                             m, w_start_et.isoformat()
                         ):
@@ -345,21 +315,14 @@ def main():
                     if current_balance < 5.0:
                         if is_verbose_cycle:
                             log(
-                                f"💰 Balance too low ({current_balance:.2f} USDC). Minimum $5.00 required. Skipping trade evaluation."
+                                f"💰 Balance too low ({current_balance:.2f} pUSD). Minimum $5.00 required. Skipping trade evaluation."
                             )
                     else:
-                        if len(eligible_markets) > 1:
-                            trade_symbols_batch(
-                                eligible_markets,
-                                current_balance,
-                                verbose=is_verbose_cycle,
-                            )
-                        else:
-                            trade_symbol(
-                                eligible_markets[0],
-                                current_balance,
-                                verbose=is_verbose_cycle,
-                            )
+                        launch_entries(
+                            eligible_markets,
+                            current_balance,
+                            verbose=is_verbose_cycle,
+                        )
 
             if is_order_check_cycle:
                 process_notifications()

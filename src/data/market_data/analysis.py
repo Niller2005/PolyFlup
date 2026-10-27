@@ -2,13 +2,14 @@
 
 import requests
 from typing import Any
+from src.markets import asset_of
 from src.config.settings import BINANCE_FUNDING_MAP
 from .binance import _create_klines_dataframe
 
 
 def get_order_flow_analysis(symbol: str) -> dict:
     """Analyze Binance order flow"""
-    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    pair = BINANCE_FUNDING_MAP.get(asset_of(symbol))
     if not pair:
         return {
             "buy_pressure": 0.5,
@@ -54,7 +55,7 @@ def get_order_flow_analysis(symbol: str) -> dict:
 
 def get_cross_exchange_divergence(symbol: str, polymarket_p_up: float) -> dict:
     """Compare Polymarket vs Binance movement"""
-    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    pair = BINANCE_FUNDING_MAP.get(asset_of(symbol))
     if not pair:
         return {
             "binance_direction": "NEUTRAL",

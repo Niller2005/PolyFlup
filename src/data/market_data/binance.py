@@ -4,6 +4,7 @@ import requests
 from typing import Dict, Tuple, Any
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from src.markets import asset_of, window_minutes
 from src.config.settings import BINANCE_FUNDING_MAP, WINDOW_START_PRICE_BUFFER_PCT
 
 # Cache for window start prices
@@ -37,13 +38,14 @@ def _create_klines_dataframe(klines: Any) -> Any:
 def get_window_start_price(symbol: str) -> float:
     """Get the spot price at the ACTUAL START of the window"""
     now_utc = datetime.now(tz=ZoneInfo("UTC"))
-    minute_slot = (now_utc.minute // 15) * 15
+    minutes = window_minutes(symbol)
+    minute_slot = (now_utc.minute // minutes) * minutes
     window_start_utc = now_utc.replace(minute=minute_slot, second=0, microsecond=0)
     window_start_ts = int(window_start_utc.timestamp())
     cache_key = f"{symbol}_{window_start_ts}"
     if cache_key in _window_start_prices:
         return _window_start_prices[cache_key]
-    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    pair = BINANCE_FUNDING_MAP.get(asset_of(symbol))
     if not pair:
         return -1.0
     lateness = (now_utc - window_start_utc).total_seconds()
@@ -72,7 +74,7 @@ def get_window_start_price_range(symbol: str) -> Tuple[float, float, float]:
     return center_price, center_price - buffer, center_price + buffer
 
 def get_current_spot_price(symbol: str) -> float:
-    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    pair = BINANCE_FUNDING_MAP.get(asset_of(symbol))
     if not pair:
         return -1.0
     try:

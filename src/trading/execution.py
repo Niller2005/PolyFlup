@@ -28,6 +28,24 @@ POST_ONLY_RESET_TIMEOUT = 300  # seconds (5 minutes) - reset counter if market s
 POST_ONLY_RETRY_INTERVAL = 10  # Try POST_ONLY every 10th trade after threshold
 
 
+def _book_top(token_id: str) -> tuple:
+    """(best_bid, best_ask) from the websocket cache, falling back to the CLOB book."""
+    from src.utils.websocket_manager import ws_manager
+
+    bid, ask = ws_manager.get_bid_ask(token_id)
+    if bid and ask and bid > 0.0 and ask > 0.0:
+        return float(bid), float(ask)
+    try:
+        from src.trading.orders import get_clob_client
+
+        book = get_clob_client().get_order_book(token_id)
+        bids = [float(x["price"]) for x in (book.get("bids") or [])]
+        asks = [float(x["price"]) for x in (book.get("asks") or [])]
+        return (max(bids) if bids else None), (min(asks) if asks else None)
+    except Exception:
+        return None, None
+
+
 def should_use_post_only(symbol: str) -> bool:
     """
     Determine if POST_ONLY should be used for this symbol based on failure history.
@@ -86,7 +104,7 @@ def record_post_only_result(symbol: str, success: bool) -> None:
         # Reset counter on success
         _post_only_failures[symbol] = 0
         _trade_count_since_post_only[symbol] = 0
-        log(f"   ✅ [{symbol}] POST_ONLY success - earning maker rebate (0.15%)")
+        log(f"   ✅ [{symbol}] POST_ONLY success - earning maker rebate share")
     else:
         # Increment failure counter
         _post_only_failures[symbol] = _post_only_failures.get(symbol, 0) + 1
@@ -1156,32 +1174,23 @@ def place_entry_and_hedge_atomic(
                 )
             return None, None, None
 
-        # OPTIMAL ORDERBOOK PRICING: Scan both orderbooks to find cheapest valid combination
-        # Uses GTC (taker) orders for guaranteed fills at best available prices
-        # Strategy: Find lowest ask prices with sufficient depth that meet profit threshold
-        # Pays 1.54% taker fee but achieves 95%+ fill rate vs 40% with POST_ONLY
+        # PRICING (CLOB V2 fees): a taker leg pays 0.07*p*(1-p) per share, so 2 taker legs near
+        # 50/50 cost ~3.5¢ and a "0.97 combined" pair loses money. Gate on NET edge after fees.
+        #   1. Taker pair from the ASK side, only if net edge after fees >= MIN_NET_EDGE
+        #   2. Otherwise a maker pair: POST_ONLY bids on both legs (no fees, earns rebate)
+        from src.config.settings import (
+            ENABLE_MAKER_PAIR,
+            MAKER_PAIR_IMPROVE_TICKS,
+            MAKER_PAIR_PRICE_BAND,
+            MIN_NET_EDGE,
+            TAKER_FEE_RATE,
+        )
+        from src.trading.edge import maker_pair_prices, pair_net_edge
 
-        # ADAPTIVE THRESHOLD: Calculate based on current market spreads
-        # Tight threshold (1.5¢) in liquid markets, wide threshold (5¢) in illiquid markets
         combined_price_threshold = calculate_adaptive_combined_threshold(
             entry_token_id, hedge_token_id
         )
 
-        # Log if using adaptive vs static threshold
-        from src.config.settings import (
-            COMBINED_PRICE_THRESHOLD,
-            ENABLE_ADAPTIVE_THRESHOLD,
-        )
-
-        if (
-            ENABLE_ADAPTIVE_THRESHOLD
-            and combined_price_threshold != COMBINED_PRICE_THRESHOLD
-        ):
-            log(
-                f"   🎯 [{symbol}] Using adaptive threshold: ${combined_price_threshold:.3f} (static: ${COMBINED_PRICE_THRESHOLD:.3f})"
-            )
-
-        # OPTIMAL PRICING: Find best entry+hedge combination from orderbooks
         from src.trading.orders.market_info import find_optimal_atomic_hedge_prices
 
         optimal_entry, optimal_hedge, metadata = find_optimal_atomic_hedge_prices(
@@ -1191,43 +1200,71 @@ def place_entry_and_hedge_atomic(
             max_combined=combined_price_threshold,
         )
 
-        if not optimal_entry or not optimal_hedge or not metadata:
-            # No profitable combination found - either insufficient liquidity or too expensive
-            log(
-                f"   ⏭️  [{symbol}] No profitable entry+hedge combination found in orderbook"
+        entry_price = hedge_price = final_combined = 0.0
+        use_post_only = False
+        mode = None
+
+        if optimal_entry and optimal_hedge and metadata:
+            taker_net = pair_net_edge(
+                optimal_entry, optimal_hedge, True, True, TAKER_FEE_RATE
             )
+            if taker_net >= MIN_NET_EDGE:
+                mode = "TAKER"
+                entry_price, hedge_price = optimal_entry, optimal_hedge
+                final_combined = metadata["combined_price"]
+                log(
+                    f"   🎯 [{symbol}] OPTIMAL PRICING: {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f}"
+                )
+                log(
+                    f"   📊 [{symbol}] Combined ${final_combined:.2f}, net edge {taker_net * 100:+.1f}¢/sh after taker fees, entry depth: {metadata['entry_depth']:.1f}, hedge depth: {metadata['hedge_depth']:.1f}"
+                )
+            else:
+                log(
+                    f"   ⏭️  [{symbol}] Taker pair ${optimal_entry:.2f}+${optimal_hedge:.2f}=${optimal_entry + optimal_hedge:.2f} has net edge {taker_net * 100:+.1f}¢/sh after fees (< {MIN_NET_EDGE * 100:.1f}¢) - not taking"
+                )
+
+        if mode is None and ENABLE_MAKER_PAIR:
+            e_bid, e_ask = _book_top(entry_token_id)
+            h_bid, h_ask = _book_top(hedge_token_id)
+            quote = maker_pair_prices(e_bid, h_bid, MAKER_PAIR_IMPROVE_TICKS)
+            band_ok = bool(
+                quote
+                and all(MAKER_PAIR_PRICE_BAND <= q <= 1 - MAKER_PAIR_PRICE_BAND for q in quote)
+            )
+            if quote and not band_ok:
+                log(
+                    f"   ⏭️  [{symbol}] Maker pair skipped: bids ${quote[0]:.2f}/${quote[1]:.2f} outside [{MAKER_PAIR_PRICE_BAND:.2f}, {1 - MAKER_PAIR_PRICE_BAND:.2f}] (window already decided)"
+                )
+            elif quote and e_ask and h_ask:
+                q_entry = min(quote[0], round(e_ask - 0.01, 2))  # never cross the book
+                q_hedge = min(quote[1], round(h_ask - 0.01, 2))
+                maker_net = pair_net_edge(q_entry, q_hedge, False, False, TAKER_FEE_RATE)
+                if maker_net >= MIN_NET_EDGE and q_entry >= 0.01 and q_hedge >= 0.01:
+                    mode = "MAKER"
+                    entry_price, hedge_price = q_entry, q_hedge
+                    final_combined = q_entry + q_hedge
+                    use_post_only = True
+                    log(
+                        f"   💹 [{symbol}] Maker pair: bids {entry_side} ${q_entry:.2f} + {hedge_side} ${q_hedge:.2f} = ${final_combined:.2f}, net edge {maker_net * 100:+.1f}¢/sh, fees $0.00"
+                    )
+                else:
+                    log(
+                        f"   ⏭️  [{symbol}] Maker pair ${q_entry:.2f}+${q_hedge:.2f}=${q_entry + q_hedge:.2f} has net edge {maker_net * 100:+.1f}¢/sh (< {MIN_NET_EDGE * 100:.1f}¢)"
+                    )
+
+        if mode is None:
             log(
-                f"   💹 [{symbol}] Required: combined ≤ ${combined_price_threshold:.2f}, min depth: {entry_size:.1f} shares"
+                f"   ⏭️  [{symbol}] No entry+hedge pair with net edge ≥ {MIN_NET_EDGE * 100:.1f}¢/sh after fees - skipping"
             )
             return None, None, None
 
-        # Use optimal prices from orderbook scan
-        entry_price = optimal_entry
-        hedge_price = optimal_hedge
-        final_combined = metadata["combined_price"]
-        edge_cents = metadata["edge_cents"]
-
-        log(
-            f"   🎯 [{symbol}] OPTIMAL PRICING: {entry_side} ${entry_price:.2f} + {hedge_side} ${hedge_price:.2f}"
-        )
-        log(
-            f"   📊 [{symbol}] Combined ${final_combined:.2f} ({edge_cents:.1f}¢ edge), entry depth: {metadata['entry_depth']:.1f}, hedge depth: {metadata['hedge_depth']:.1f}"
-        )
-        log(
-            f"   💰 [{symbol}] Alternatives considered: {metadata['alternatives_count']}"
-        )
-
-        # Smart POST_ONLY vs GTC decision based on failure history
-        use_post_only = should_use_post_only(symbol)
-
         if use_post_only:
-            log(f"   💸 [{symbol}] Using POST_ONLY (maker, earns 0.15% rebate)")
+            log(f"   💸 [{symbol}] Using POST_ONLY (maker: no fee, earns rebate share)")
         else:
-            log(f"   💸 [{symbol}] Using GTC (taker, pays 1.54% fee)")
+            log(f"   💸 [{symbol}] Using GTC (taker: pays 0.07·p·(1−p) per share per leg)")
 
         # Create batch order with smart POST_ONLY/GTC selection
-        # POST_ONLY earns 0.15% rebate but may fail if crossing
-        # GTC pays 1.54% fee but guarantees fill
+        # POST_ONLY: no fee + rebate share, may rest unfilled; GTC: taker fee 0.07*p*(1-p) per share
         orders = [
             {
                 "token_id": entry_token_id,
@@ -1509,6 +1546,15 @@ def place_entry_and_hedge_atomic(
             HEDGE_POLL_INTERVAL_SECONDS,
             HEDGE_GTC_FALLBACK_SECONDS,
         )
+        from src.markets import scale_seconds
+
+        # Timeouts are tuned for 15m windows; shorter windows get proportionally less
+        HEDGE_FILL_TIMEOUT_SECONDS = int(
+            scale_seconds(HEDGE_FILL_TIMEOUT_SECONDS, symbol, floor=3 * HEDGE_POLL_INTERVAL_SECONDS)
+        )
+        HEDGE_GTC_FALLBACK_SECONDS = int(
+            scale_seconds(HEDGE_GTC_FALLBACK_SECONDS, symbol, floor=HEDGE_POLL_INTERVAL_SECONDS)
+        )
 
         entry_order_id = entry_result.get("order_id")
         hedge_order_id = hedge_result.get("order_id")
@@ -1524,6 +1570,34 @@ def place_entry_and_hedge_atomic(
         elapsed = 0
         both_filled = False
         gtc_switched = False  # Track if we've switched hedge to GTC
+        gtc_vetoed = False
+
+        def _gtc_hedge_worth_it() -> bool:
+            """Entry filled, hedge not: only pay the taker fee if it beats flattening/holding."""
+            nonlocal gtc_vetoed
+            if gtc_vetoed:
+                return False
+            from src.trading.edge import flatten_ev, hold_ev, taker_hedge_ev
+
+            e_bid, e_ask = _book_top(entry_token_id)
+            _, h_ask = _book_top(hedge_token_id)
+            if not h_ask:
+                gtc_vetoed = True
+                log(f"   ✋ [{symbol}] No {hedge_side} ask to hedge against - keeping resting hedge")
+                return False
+            taker = taker_hedge_ev(entry_price, h_ask)
+            flat = flatten_ev(entry_price, e_bid) if e_bid else float("-inf")
+            hold = hold_ev(entry_price, (e_bid + e_ask) / 2) if e_bid and e_ask else float("-inf")
+            log(
+                f"   🧭 [{symbol}] Leg-risk EV/sh: taker-hedge {taker * 100:+.1f}¢ (ask ${h_ask:.2f}) | flatten {flat * 100:+.1f}¢ | hold {hold * 100:+.1f}¢ (market-implied)"
+            )
+            if taker >= max(flat, hold):
+                return True
+            gtc_vetoed = True
+            log(
+                f"   ✋ [{symbol}] Taker hedge not worth the fee - keeping resting {hedge_side} bid until timeout"
+            )
+            return False
 
         while elapsed < HEDGE_FILL_TIMEOUT_SECONDS:
             time.sleep(HEDGE_POLL_INTERVAL_SECONDS)
@@ -1577,6 +1651,7 @@ def place_entry_and_hedge_atomic(
                     and not hedge_filled
                     and not gtc_switched
                     and use_post_only  # Only switch if we started with POST_ONLY
+                    and _gtc_hedge_worth_it()
                 ):
                     log(
                         f"   ⚠️  [{symbol}] Entry filled but hedge timeout after {elapsed}s - switching hedge to GTC (taker)"
@@ -1654,12 +1729,16 @@ def place_entry_and_hedge_atomic(
                             hedge_price = gtc_hedge_price  # Update for DB tracking
                             gtc_switched = True
 
-                            taker_fee_pct = 1.54
-                            taker_fee_cost = (
-                                remaining_hedge_size
-                                * gtc_hedge_price
-                                * taker_fee_pct
-                                / 100
+                            from src.config.settings import TAKER_FEE_RATE
+                            from src.trading.edge import taker_fee
+
+                            taker_fee_cost = remaining_hedge_size * taker_fee(
+                                gtc_hedge_price, TAKER_FEE_RATE
+                            )
+                            taker_fee_pct = (
+                                taker_fee_cost / (remaining_hedge_size * gtc_hedge_price) * 100
+                                if remaining_hedge_size * gtc_hedge_price
+                                else 0.0
                             )
 
                             log(

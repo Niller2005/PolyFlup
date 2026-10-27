@@ -1,11 +1,12 @@
 """External market sentiment and bias data"""
 
 import requests
+from src.markets import asset_of
 from src.config.settings import BINANCE_FUNDING_MAP
 
 def get_funding_bias(symbol: str) -> float:
     """Get funding rate bias from Binance futures"""
-    pair = BINANCE_FUNDING_MAP.get(symbol)
+    pair = BINANCE_FUNDING_MAP.get(asset_of(symbol))
     if not pair:
         return 0.0
     try:

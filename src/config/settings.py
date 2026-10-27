@@ -5,7 +5,15 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
+from src.markets import parse_market, scale_seconds, window_minutes
+
 load_dotenv()
+
+# Paper trading: simulated account on live order books (src/paper.py). Uses its own
+# database/log files so it can never mix with real trades. `polyflup.py --paper` sets this.
+PAPER_TRADING = os.getenv("PAPER_TRADING", "NO").upper() == "YES"
+PAPER_STARTING_BALANCE = float(os.getenv("PAPER_STARTING_BALANCE", "1000"))
+PAPER_MAKER_FILL_MODE = os.getenv("PAPER_MAKER_FILL_MODE", "cross").lower()  # cross | touch
 
 # Trading Configuration
 BET_PERCENT = float(os.getenv("BET_PERCENT", "5.0"))
@@ -31,6 +39,58 @@ MAX_SIZE_MODE = os.getenv("MAX_SIZE_MODE", "CAP")  # CAP or MAXIMIZE
 COMBINED_PRICE_THRESHOLD = float(
     os.getenv("COMBINED_PRICE_THRESHOLD", "0.97")
 )  # Max combined entry+hedge price for profit (default 3¢ buffer, increased from 1.5¢)
+
+# Fee-aware edge (CLOB V2: taker fee = shares * rate * p * (1-p) in pUSD, makers pay 0)
+TAKER_FEE_RATE = float(os.getenv("TAKER_FEE_RATE", "0.07"))  # crypto markets
+MIN_NET_EDGE = float(
+    os.getenv("MIN_NET_EDGE", "0.01")
+)  # Min guaranteed profit per share AFTER fees to open an entry+hedge pair (1¢)
+ENABLE_MAKER_PAIR = (
+    os.getenv("ENABLE_MAKER_PAIR", "YES").upper() == "YES"
+)  # Rest POST_ONLY bids on both legs when the taker pair has no net edge
+MAKER_PAIR_PRICE_BAND = float(
+    os.getenv("MAKER_PAIR_PRICE_BAND", "0.20")
+)  # Only quote when both bids are within [band, 1-band]: a lopsided book means the window is decided
+MAKER_PAIR_IMPROVE_TICKS = int(
+    os.getenv("MAKER_PAIR_IMPROVE_TICKS", "0")
+)  # Ticks above best bid to quote (0 = join the queue, more = faster fills, less edge)
+
+# Kelly position sizing (replaces flat BET_PERCENT when KELLY_SIZING=YES)
+KELLY_SIZING = os.getenv("KELLY_SIZING", "NO").upper() == "YES"
+KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.25"))  # quarter Kelly: estimates are noisy
+KELLY_MAX_FRACTION = float(
+    os.getenv("KELLY_MAX_FRACTION", "0.08")
+)  # Hard cap per position as a fraction of bankroll (also the per-entry reservation)
+KELLY_LEG_FAIL_RATE = float(
+    os.getenv("KELLY_LEG_FAIL_RATE", "0.30")
+)  # Prior: share of pairs where one leg fills and the other cannot be hedged. MEASURE THIS in paper mode.
+KELLY_LEG_LOSS = float(
+    os.getenv("KELLY_LEG_LOSS", "0.04")
+)  # Loss per share when a pair legs out (spread + taker fee to flatten, ~4¢)
+KELLY_PROB_HAIRCUT = float(
+    os.getenv("KELLY_PROB_HAIRCUT", "0.02")
+)  # Subtracted from the late-window win probability before sizing (model error)
+
+# Late-window conviction mode: when the leading side is far from the strike near close
+LATE_WINDOW_ENABLED = (
+    os.getenv("LATE_WINDOW_ENABLED", "YES").upper() == "YES"
+)  # Evaluate + log to shadow_signals (no orders)
+LATE_WINDOW_LIVE = (
+    os.getenv("LATE_WINDOW_LIVE", "NO").upper() == "YES"
+)  # Actually place orders (enable only after reviewing shadow results)
+LATE_WINDOW_SECONDS = int(
+    os.getenv("LATE_WINDOW_SECONDS", "90")
+)  # Evaluate during the last N seconds of a window
+LATE_WINDOW_MIN_EV = float(
+    os.getenv("LATE_WINDOW_MIN_EV", "0.015")
+)  # Min net EV per share (after taker fee) to enter
+LATE_WINDOW_MIN_DISTANCE_PCT = float(
+    os.getenv("LATE_WINDOW_MIN_DISTANCE_PCT", "0.02")
+)  # Skip if |spot-strike| < this % (Chainlink-vs-Binance basis risk)
+LATE_WINDOW_BET_USD = float(os.getenv("LATE_WINDOW_BET_USD", "5.0"))
+LATE_WINDOW_EVAL_INTERVAL = int(
+    os.getenv("LATE_WINDOW_EVAL_INTERVAL", "10")
+)  # Seconds between evaluations per market
 
 # Confidence-Biased Fill Priority
 # Makes winning side (high confidence) more aggressive to fill first
@@ -254,12 +314,30 @@ if WINDOW_DELAY_SEC < 0:
 if WINDOW_DELAY_SEC > 300:
     WINDOW_DELAY_SEC = 300
 
-# Markets
+# Markets: BTC (15m, default) or BTC-5M for 5-minute windows, e.g. MARKETS=BTC,ETH,BTC-5M,ETH-5M
 MARKETS_ENV = os.getenv("MARKETS", "BTC,ETH,XRP,SOL")
-MARKETS = [m.strip().upper() for m in MARKETS_ENV.split(",") if m.strip()]
+MARKETS = []
+for _entry in (m for m in MARKETS_ENV.split(",") if m.strip()):
+    _key = parse_market(_entry).key
+    if _key not in MARKETS:
+        MARKETS.append(_key)
+# Window log files rotate on the longest window so 5m markets don't churn them
+PRIMARY_MARKET = max(MARKETS, key=window_minutes) if MARKETS else None
+
+
+def max_entry_lateness(symbol: str) -> int:
+    """Latest entry (seconds into the window). `MAX_ENTRY_LATENESS_SEC_5M` overrides the
+    5m value, which otherwise scales proportionally from the 15m setting (600s -> 200s)."""
+    override = os.getenv(f"MAX_ENTRY_LATENESS_SEC_{window_minutes(symbol)}M")
+    if override:
+        return int(override)
+    return int(scale_seconds(MAX_ENTRY_LATENESS_SEC, symbol))
 
 # Credentials
 PROXY_PK = os.getenv("PROXY_PK")
+if PAPER_TRADING and not PROXY_PK:
+    # Nothing is ever signed in paper mode; a throwaway key only satisfies client setup.
+    PROXY_PK = "0x" + "1" * 64
 FUNDER_PROXY = os.getenv("FUNDER_PROXY", "")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK", "")
 BFXD_URL = os.getenv("BFXD_URL", "").strip()
@@ -309,10 +387,10 @@ BINANCE_FUNDING_MAP = {
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.makedirs(f"{BASE_DIR}/logs", exist_ok=True)
-LOG_FILE = f"{BASE_DIR}/logs/trades_2025.log"
+LOG_FILE = f"{BASE_DIR}/logs/{'trades_paper' if PAPER_TRADING else 'trades_2025'}.log"
 ERROR_LOG_FILE = f"{BASE_DIR}/logs/errors.log"
 # Database Configuration
-DB_FILE = f"{BASE_DIR}/trades.db"
+DB_FILE = f"{BASE_DIR}/{'trades_paper' if PAPER_TRADING else 'trades'}.db"
 REPORTS_DIR = f"{BASE_DIR}/logs/reports"
 os.makedirs(REPORTS_DIR, exist_ok=True)
 
@@ -322,10 +400,9 @@ CLOB_WSS_HOST = "wss://ws-subscriptions-clob.polymarket.com"
 GAMMA_API_BASE = "https://gamma-api.polymarket.com"
 DATA_API_BASE = "https://data-api.polymarket.com"
 CHAIN_ID = 137
-SIGNATURE_TYPE = 2
-POLYGON_RPC = "https://polygon-rpc.com"
+# Wallet type: 0=EOA, 1=POLY_PROXY (Magic/email), 2=POLY_GNOSIS_SAFE, 3=POLY_1271 (deposit wallet)
+SIGNATURE_TYPE = int(os.getenv("SIGNATURE_TYPE", "2"))
+POLYGON_RPC = os.getenv("POLYGON_RPC", "https://polygon-rpc.com")
 
-# Contracts
-USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
-CTF_ABI = '[{"constant":false,"inputs":[{"name":"collateralToken","type":"address"},{"name":"parentCollectionId","type":"bytes32"},{"name":"conditionId","type":"bytes32"},{"name":"indexSets","type":"uint256[]"}],"name":"redeemPositions","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"}]'
+# Contracts (CLOB V2 collateral is pUSD, 6 decimals; replaced USDC.e on 2026-04-28)
+PUSD_ADDRESS = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"

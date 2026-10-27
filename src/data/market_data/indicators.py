@@ -2,6 +2,7 @@
 
 import requests
 from typing import Any
+from src.markets import asset_of
 from src.config.settings import BINANCE_FUNDING_MAP, ADX_INTERVAL, ADX_PERIOD
 from .binance import _create_klines_dataframe
 
@@ -12,7 +13,7 @@ def get_adx_from_binance(symbol: str) -> float:
         import pandas as pd
         from ta.trend import ADXIndicator
 
-        pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+        pair = BINANCE_FUNDING_MAP.get(asset_of(symbol))
         if not pair:
             return -1.0
         url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval={ADX_INTERVAL}&limit={ADX_PERIOD * 3 + 10}"
@@ -37,7 +38,7 @@ def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
         import pandas as pd
         from ta.momentum import RSIIndicator
 
-        pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+        pair = BINANCE_FUNDING_MAP.get(asset_of(symbol))
         if not pair:
             return {
                 "velocity": 0.0,
@@ -89,7 +90,7 @@ def get_price_momentum(symbol: str, lookback_minutes: int = 15) -> dict:
 
 def get_volume_weighted_momentum(symbol: str) -> dict:
     """Calculate volume-weighted indicators"""
-    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    pair = BINANCE_FUNDING_MAP.get(asset_of(symbol))
     if not pair:
         return {"vwap_distance": 0.0, "volume_trend": "STABLE", "momentum_quality": 0.0}
     try:

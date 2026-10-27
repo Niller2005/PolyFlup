@@ -3,6 +3,7 @@
 import requests
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
+from src.markets import asset_of
 from src.config.settings import BINANCE_FUNDING_MAP
 from .binance import _create_klines_dataframe
 
@@ -18,7 +19,7 @@ def get_recent_price_movements(symbol: str, timeframes_minutes: List[int] = [5, 
     Returns:
         Dict with percentage changes for each timeframe
     """
-    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    pair = BINANCE_FUNDING_MAP.get(asset_of(symbol))
     if not pair:
         return {f"{tf}m": 0.0 for tf in timeframes_minutes}
     
@@ -66,7 +67,7 @@ def calculate_volatility_score(symbol: str, lookback_minutes: int = 30) -> float
     Returns:
         Volatility score from 0 (low) to 1 (high)
     """
-    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    pair = BINANCE_FUNDING_MAP.get(asset_of(symbol))
     if not pair:
         return 0.0
     
@@ -111,7 +112,7 @@ def detect_price_manipulation(symbol: str) -> Dict[str, any]:
     Returns:
         Dict with manipulation indicators
     """
-    pair = BINANCE_FUNDING_MAP.get(symbol.upper())
+    pair = BINANCE_FUNDING_MAP.get(asset_of(symbol))
     if not pair:
         return {"manipulation_detected": False, "score": 0.0, "reasons": []}
     

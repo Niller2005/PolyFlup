@@ -3,28 +3,19 @@
 import time
 import json
 import requests
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime
 from src.config.settings import GAMMA_API_BASE, CLOB_HOST
+from src.markets import slug_for, window_bounds
 
 
 def get_current_slug(symbol: str) -> str:
-    """Generate slug for current 15-minute window"""
-    now_et = datetime.now(tz=ZoneInfo("America/New_York"))
-    minute_slot = (now_et.minute // 15) * 15
-    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0)
-    window_start_utc = window_start_et.astimezone(ZoneInfo("UTC"))
-    ts = int(window_start_utc.timestamp())
-    return f"{symbol.lower()}-updown-15m-{ts}"
+    """Slug for the current window of a market key (e.g. btc-updown-15m-<ts>, btc-updown-5m-<ts>)"""
+    return slug_for(symbol)
 
 
 def get_window_times(symbol: str):
-    """Get window start and end times in ET"""
-    now_et = datetime.now(tz=ZoneInfo("America/New_York"))
-    minute_slot = (now_et.minute // 15) * 15
-    window_start_et = now_et.replace(minute=minute_slot, second=0, microsecond=0)
-    window_end_et = window_start_et + timedelta(minutes=15)
-    return window_start_et, window_end_et
+    """Get window start and end times in ET for a market key"""
+    return window_bounds(symbol)
 
 
 def format_window_range(start_et: datetime, end_et: datetime) -> str:
