@@ -40,6 +40,11 @@ def set_log_window(window_id: str = "") -> None:
         _current_log_file = os.path.join(BASE_DIR, "logs", f"window_{safe_id}.log")
 
 
+def fmt_num(value, decimals: int = 3) -> str:
+    """Format a possibly-missing number for log lines ('n/a' instead of raising on None)."""
+    return "n/a" if value is None else f"{value:.{decimals}f}"
+
+
 def log(text: str) -> None:
     """Log message to console and file"""
     try:

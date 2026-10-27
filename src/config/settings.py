@@ -59,6 +59,9 @@ MAKER_PAIR_IMPROVE_TICKS = int(
 # Switch live from the TUI (keys 1/2/3/0); see src/profiles.py
 RISK_PROFILE = os.getenv("RISK_PROFILE", "custom").lower()
 
+# Max entry workers running at once (many parallel REST calls produced 'Resource temporarily unavailable')
+ENTRY_MAX_CONCURRENT = int(os.getenv("ENTRY_MAX_CONCURRENT", "4"))
+
 # Exposure-aware sizing
 MAX_EXPOSURE_PERCENT = float(
     os.getenv("MAX_EXPOSURE_PERCENT", "50")

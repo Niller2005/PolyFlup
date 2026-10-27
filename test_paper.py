@@ -108,6 +108,27 @@ def test_settlement_pays_one_or_zero():
     assert abs(paper.cash_balance() - (before + 5.0)) < 1e-9 and paper.position_size(TOKEN) == 0.0
 
 
+def test_extreme_price_before_window_end_is_not_a_resolution():
+    import time
+
+    fresh()
+    paper._market_for = lambda token: (f"btc-updown-5m-{int(time.time()) + 600}", "Up")  # window still open
+    paper.place_order(TOKEN, 0.50, 5.0, "BUY", "FAK")
+
+    class R:
+        def json(self):
+            return {"clobTokenIds": f'["{TOKEN}", "222"]', "outcomePrices": '["1", "0"]'}  # trading at 0.99+
+
+    paper.requests.get = lambda *a, **k: R()
+    assert paper.settle_resolved() == 0 and paper.position_size(TOKEN) == 5.0
+
+
+def test_fmt_num_handles_missing_values():
+    from src.utils.logger import fmt_num
+
+    assert fmt_num(None) == "n/a" and fmt_num(0.0123) == "0.012" and fmt_num(14.26, 1) == "14.3"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

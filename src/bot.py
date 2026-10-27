@@ -136,6 +136,10 @@ def launch_entries(symbols: list, balance: float, verbose: bool = True) -> int:
             running = [s for s, t in _entry_threads.items() if t.is_alive()]
             if symbol in running:
                 continue
+            from src.config.settings import ENTRY_MAX_CONCURRENT
+
+            if len(running) >= ENTRY_MAX_CONCURRENT:
+                break  # the remaining markets are picked up on the next 20s cycle
             st = sizing_state(balance)
             if st["allocation"] < MIN_ENTRY_USD:
                 why = (

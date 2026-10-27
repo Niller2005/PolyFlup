@@ -2,7 +2,7 @@
 
 import time
 from typing import Optional, Dict, Any
-from src.utils.logger import log, log_error, send_discord
+from src.utils.logger import fmt_num, log, log_error, send_discord
 from src.data.database import save_trade
 from src.trading.orders import (
     place_order,
@@ -1172,10 +1172,10 @@ def place_entry_and_hedge_atomic(
             log(f"   ⏭️  [{symbol}] SKIPPING TRADE: {skip_reason}")
             if liquidity_metrics:
                 log(
-                    f"   📊 [{symbol}] Liquidity metrics: entry_spread={liquidity_metrics.get('entry_spread', 'N/A'):.3f}, "
-                    f"hedge_spread={liquidity_metrics.get('hedge_spread', 'N/A'):.3f}, "
-                    f"entry_depth={liquidity_metrics.get('entry_depth', 'N/A')}, "
-                    f"hedge_depth={liquidity_metrics.get('hedge_depth', 'N/A')}"
+                    f"   📊 [{symbol}] Liquidity metrics: entry_spread={fmt_num(liquidity_metrics.get('entry_spread'))}, "
+                    f"hedge_spread={fmt_num(liquidity_metrics.get('hedge_spread'))}, "
+                    f"entry_depth={fmt_num(liquidity_metrics.get('entry_depth'), 1)}, "
+                    f"hedge_depth={fmt_num(liquidity_metrics.get('hedge_depth'), 1)}"
                 )
             return None, None, None
 
@@ -1450,6 +1450,9 @@ def place_entry_and_hedge_atomic(
                         # Try market pricing first (bid + 2¢), but cap at max_hedge_price
                         retry_hedge_price = round(hedge_bid + 0.02, 2)
                         retry_hedge_price = min(retry_hedge_price, max_hedge_price)
+                        if use_post_only:
+                            # bid+2c crosses a 1-2 tick spread and POST_ONLY is rejected every retry
+                            retry_hedge_price = min(retry_hedge_price, round(hedge_ask - 0.01, 2))
                         retry_hedge_price = max(0.01, min(0.99, retry_hedge_price))
 
                         combined_price = entry_price + retry_hedge_price
@@ -1480,6 +1483,7 @@ def place_entry_and_hedge_atomic(
                         retry_results = place_batch_orders(hedge_order)
                         if retry_results and retry_results[0].get("success"):
                             hedge_result = retry_results[0]
+                            hedge_price = retry_hedge_price  # the saved trade must record the price actually placed
                             log(
                                 f"   ✅ [{symbol}] Hedge retry succeeded: {hedge_side} {entry_size:.1f} @ ${retry_hedge_price:.2f}"
                             )

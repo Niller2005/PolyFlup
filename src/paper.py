@@ -36,6 +36,7 @@ from src.config.settings import (
     TAKER_FEE_RATE,
 )
 from src.data.db_connection import db_connection
+from src.markets import parse_slug
 from src.utils.logger import log, log_error
 
 EPS = 1e-9
@@ -386,6 +387,9 @@ def settle_resolved() -> int:
                 p = prices[ids.index(token_id)]
             except Exception:
                 continue
+            parsed = parse_slug(slug)
+            if parsed and parsed[2].astimezone(timezone.utc) > datetime.now(timezone.utc):
+                continue  # window still open: 0.99/0.01 is a price, not a resolution
             if not (p >= 0.99 or p <= 0.01):
                 continue  # not resolved yet
             payout = 1.0 if p >= 0.99 else 0.0

@@ -36,6 +36,15 @@ def get_market_resolution(slug: str):
             p0 = float(outcome_prices[0])
             p1 = float(outcome_prices[1])
 
+            # A market trading at 0.99/0.01 minutes before the window ends is NOT resolved:
+            # the outcome can still flip. Only trust extreme prices after the window closed.
+            from src.markets import parse_slug
+            from datetime import datetime, timezone
+
+            parsed = parse_slug(slug)
+            if parsed and parsed[2].astimezone(timezone.utc) > datetime.now(timezone.utc):
+                return False, None
+
             # Check if resolved (one is 1, one is 0)
             # We use a loose check (>= 0.99 or <= 0.01) just in case
             if (p0 >= 0.99 and p1 <= 0.01) or (p0 <= 0.01 and p1 >= 0.99):

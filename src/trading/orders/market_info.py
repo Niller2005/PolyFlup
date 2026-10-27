@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Any
 from py_clob_client_v2 import BookParams, TradeParams
-from src.utils.logger import log
+from src.utils.logger import fmt_num, log
 from .client import client
 from .utils import is_404_error
 
@@ -473,10 +473,10 @@ def check_atomic_hedge_liquidity(
 
         log(
             f"   ✅ Liquidity check passed: "
-            f"entry_spread={metrics.get('entry_spread', 'N/A'):.3f}, "
-            f"hedge_spread={metrics.get('hedge_spread', 'N/A'):.3f}, "
-            f"entry_depth={metrics.get('entry_depth', 'N/A'):.1f}, "
-            f"hedge_depth={metrics.get('hedge_depth', 'N/A'):.1f}"
+            f"entry_spread={fmt_num(metrics.get('entry_spread'))}, "
+            f"hedge_spread={fmt_num(metrics.get('hedge_spread'))}, "
+            f"entry_depth={fmt_num(metrics.get('entry_depth'), 1)}, "
+            f"hedge_depth={fmt_num(metrics.get('hedge_depth'), 1)}"
             f"{velocity_str}"
         )
         return True, "", metrics
