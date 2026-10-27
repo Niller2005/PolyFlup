@@ -174,7 +174,14 @@ class Dashboard:
         for p in positions:
             mid = self.feed.mid(p.token_id)
             pnl = pnl_pct = None
-            if mid is not None:
+            locked = p.locked_edge
+            if locked is not None:
+                # Both legs held: the result is fixed at resolution, mark-to-market is noise
+                pnl = locked * p.size
+                pnl_pct = locked / (p.entry_price + p.hedge_price)
+                total_pnl += pnl
+                priced += 1
+            elif mid is not None:
                 pnl = (mid - p.entry_price) * p.size
                 pnl_pct = (mid / p.entry_price - 1) if p.entry_price else None
                 total_pnl += pnl
@@ -192,7 +199,7 @@ class Dashboard:
                 Text("—", style=DIM) if p.locked_edge is None else Text(f"{p.locked_edge * 100:+.1f}", style=GREEN if p.locked_edge > 0 else RED),
                 hedge_status(p),
                 f"{mid:.3f}" if mid is not None else Text("…", style=DIM),
-                money(pnl),
+                Text.assemble(money(pnl), (" 🔒", "")) if locked is not None else money(pnl),
                 Text("—", style=DIM) if pnl_pct is None else Text(f"{pnl_pct * 100:+.1f}%", style=GREEN if pnl_pct > 0 else RED if pnl_pct < 0 else DIM),
                 Text("✓", style=GREEN) if p.has_exit_order else Text("·", style=DIM),
                 Text.assemble(fmt_left(left), (f" {tags}" if tags else "", DIM)),
@@ -205,7 +212,7 @@ class Dashboard:
         )
         body = table if positions else Align.center(Text("\n" + empty, style=DIM))
         subtitle = Text.assemble(
-            (f"exposure ${exposure:,.2f}", DIM), ("  unrealized ", DIM), money(total_pnl if priced else None)
+            (f"exposure ${exposure:,.2f}", DIM), ("  unrealized/locked ", DIM), money(total_pnl if priced else None)
         )
         return Panel(body, title=f"[bold]Open positions[/] ({len(positions)})", subtitle=subtitle,
                      box=box.ROUNDED, border_style=GREEN if positions else DIM)
