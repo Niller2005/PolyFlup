@@ -42,10 +42,59 @@ class OpenPosition:
     hedge_price: Optional[float] = None
     entry_sold: bool = False  # entry leg exited early (stop loss / pre-settlement)
     hedge_sold: bool = False  # hedge leg exited early
+    exit_price: Optional[float] = None  # entry leg sale price
+    hedge_exit_price: Optional[float] = None  # hedge leg sale price
 
     @property
     def hedge_side(self) -> str:
         return {"UP": "DOWN", "DOWN": "UP"}.get(self.side, "?")
+
+    @property
+    def pair_cost(self) -> float:
+        """Cash committed to this position (both legs when hedged)."""
+        if self.is_hedged and self.hedge_price:
+            return self.size * (self.entry_price + self.hedge_price)
+        return self.bet_usd
+
+    def realized(self, fee_rate: float = 0.07) -> Optional[float]:
+        """P&L already booked by selling a leg early, net of the taker fee; None if nothing sold."""
+        fee = lambda p: self.size * fee_rate * p * (1.0 - p)
+        total, any_sold = 0.0, False
+        if self.entry_sold and self.exit_price is not None:
+            total += self.size * (self.exit_price - self.entry_price) - fee(self.exit_price)
+            any_sold = True
+        if self.hedge_sold and self.hedge_exit_price is not None and self.hedge_price:
+            total += self.size * (self.hedge_exit_price - self.hedge_price) - fee(self.hedge_exit_price)
+            any_sold = True
+        return total if any_sold else None
+
+    def pnl(self, mid: Optional[float]):
+        """(pnl $, pnl % of cost, locked?) combining locked, realized and open-leg mark-to-market.
+
+        Both legs held: the locked edge. A leg sold: its realized result (with fee) plus the
+        other leg marked to the entry-token midpoint (hedge ~ 1 - mid). Unhedged: mark only.
+        """
+        locked = self.locked_edge
+        if locked is not None:
+            return locked * self.size, locked / (self.entry_price + self.hedge_price), True
+        realized = self.realized()
+        cost = self.pair_cost
+        if realized is None:
+            if mid is None:
+                return None, None, False
+            pnl = (mid - self.entry_price) * self.size
+            return pnl, (mid / self.entry_price - 1) if self.entry_price else None, False
+        open_mark = 0.0
+        if not self.entry_sold:
+            if mid is None:
+                return None, None, False
+            open_mark = (mid - self.entry_price) * self.size
+        elif not self.hedge_sold and self.hedge_price:
+            if mid is None:
+                return None, None, False
+            open_mark = ((1.0 - mid) - self.hedge_price) * self.size
+        total = realized + open_mark
+        return total, (total / cost if cost else None), False
 
     @property
     def locked_edge(self) -> Optional[float]:
@@ -245,7 +294,8 @@ def load_snapshot(db_path: Path, recent_limit: int = 12, curve_len: int = 40) ->
             SELECT id, symbol, side, size, entry_price, bet_usd, token_id, window_end,
                    limit_sell_order_id, scaled_in, is_reversal,
                    {opt("is_hedged", "0")}, {opt("hedge_order_price")},
-                   {opt("exited_early", "0")}, {opt("hedge_exited_early", "0")}
+                   {opt("exited_early", "0")}, {opt("hedge_exited_early", "0")},
+                   {opt("exit_price")}, {opt("hedge_exit_price")}
             FROM trades WHERE settled = 0 ORDER BY id DESC
             """
         ):
@@ -266,6 +316,8 @@ def load_snapshot(db_path: Path, recent_limit: int = 12, curve_len: int = 40) ->
                     hedge_price=r["hedge_order_price"],
                     entry_sold=bool(r["exited_early"]),
                     hedge_sold=bool(r["hedge_exited_early"]),
+                    exit_price=r["exit_price"],
+                    hedge_exit_price=r["hedge_exit_price"],
                 )
             )
 

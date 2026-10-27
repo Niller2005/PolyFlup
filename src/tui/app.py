@@ -67,12 +67,14 @@ def fmt_left(seconds: Optional[float]) -> Text:
 
 def hedge_status(p: "OpenPosition") -> Text:
     """Which legs are still held: both (hedged), only the entry, or one sold early."""
+    realized = p.realized()
+    booked = f" ({realized:+.2f})" if realized is not None else ""
     if p.entry_sold and p.hedge_sold:
-        return Text("both sold", style=DIM)
+        return Text(f"both sold{booked}", style=DIM)
     if p.entry_sold:
-        return Text("entry sold", style=YELLOW)
+        return Text(f"entry sold{booked}", style=YELLOW)
     if p.hedge_sold:
-        return Text("hedge sold", style=YELLOW)
+        return Text(f"hedge sold{booked}", style=YELLOW)
     if p.is_hedged:
         return Text(f"✓ +{p.hedge_side}", style=f"bold {GREEN}")
     return Text("⚠ UNHEDGED", style=f"bold {RED}")
@@ -188,20 +190,12 @@ class Dashboard:
         total_pnl, exposure, priced = 0.0, 0.0, 0
         for p in positions:
             mid = self.feed.mid(p.token_id)
-            pnl = pnl_pct = None
-            locked = p.locked_edge
-            if locked is not None:
-                # Both legs held: the result is fixed at resolution, mark-to-market is noise
-                pnl = locked * p.size
-                pnl_pct = locked / (p.entry_price + p.hedge_price)
+            # locked edge when both legs are held; realized (incl. fee) + open leg when one was sold
+            pnl, pnl_pct, locked = p.pnl(mid)
+            if pnl is not None:
                 total_pnl += pnl
                 priced += 1
-            elif mid is not None:
-                pnl = (mid - p.entry_price) * p.size
-                pnl_pct = (mid / p.entry_price - 1) if p.entry_price else None
-                total_pnl += pnl
-                priced += 1
-            exposure += p.size * (p.entry_price + p.hedge_price) if p.is_hedged and p.hedge_price else p.bet_usd
+            exposure += p.pair_cost
             left = (p.window_end - now).total_seconds() if p.window_end else None
             tags = ("⇄" if p.is_reversal else "") + ("+" if p.scaled_in else "")
             cells = [
@@ -214,7 +208,7 @@ class Dashboard:
                 Text("—", style=DIM) if p.locked_edge is None else Text(f"{p.locked_edge * 100:+.1f}", style=GREEN if p.locked_edge > 0 else RED),
                 hedge_status(p),
                 f"{mid:.3f}" if mid is not None else Text("…", style=DIM),
-                Text.assemble(money(pnl), (" 🔒", "")) if locked is not None else money(pnl),
+                Text.assemble(money(pnl), (" 🔒", "")) if locked else money(pnl),
                 Text("—", style=DIM) if pnl_pct is None else Text(f"{pnl_pct * 100:+.1f}%", style=GREEN if pnl_pct > 0 else RED if pnl_pct < 0 else DIM),
                 Text("✓", style=GREEN) if p.has_exit_order else Text("·", style=DIM),
                 Text.assemble(fmt_left(left), (f" {tags}" if tags else "", DIM)),
