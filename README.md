@@ -146,7 +146,21 @@ docker compose up -d --build
 uv run polyflup.py
 ```
 
-#### Start Dashboard
+#### Paper Trading
+```bash
+uv run polyflup.py --paper   # simulated account on live order books; no private key or API credentials needed
+uv run tui.py --paper        # watch it
+```
+Fills use the real book at the moment of each order (taker fee `0.07·p·(1−p)` included). Resting maker orders fill when the book crosses them (`PAPER_MAKER_FILL_MODE=cross`, conservative) or when the midpoint reaches them (`touch`, optimistic); queue position is not modelled, so maker fill rates are approximate. State lives in `trades_paper.db` (delete to reset; `PAPER_STARTING_BALANCE`, default 1000).
+
+#### Terminal Dashboard
+```bash
+uv run tui.py                       # live: q quit, r refresh, p pause
+uv run tui.py --db prod/trades.db   # inspect a downloaded production database
+```
+Read-only Rich dashboard: open positions with live midpoints, today / 7d / all-time performance, per-symbol PnL, equity sparkline, recent trades and a log tail. Safe to run next to the bot.
+
+#### Start Web Dashboard
 ```bash
 cd ui
 npm install

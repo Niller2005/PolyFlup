@@ -12,6 +12,35 @@ and this project uses semantic versioning.
 ### In Progress
 - Documentation updates for atomic hedging strategy (v0.6.0)
 
+### Breaking
+- **CLOB V2 migration**: Replaced `py-clob-client` (V1, rejected by production since 2026-04-28) with `py-clob-client-v2>=1.2.0`. Order, market-info, notification and scoring modules import from `py_clob_client_v2`.
+- **pUSD collateral**: `USDC_ADDRESS`/`CTF_ADDRESS`/`CTF_ABI` settings removed; `PUSD_ADDRESS` added. `get_balance()` reads pUSD. API-only wallets must wrap USDC.e → pUSD via the CollateralOnramp.
+- **Redemption**: `ctf_operations` routes `redeemPositions` through `CtfCollateralAdapter` with pUSD collateral and prepends a one-time `CTF.setApprovalForAll(adapter, true)` when needed. Requires `py-builder-relayer-client>=0.0.3`.
+- **Data API v2**: Position sync and settlement audit use `GET /v2/positions` (cursor pagination, snake_case rows); v1 routes retired 2026-10-24. `get_trades_for_user` removed (unused).
+
+### Added
+- **Kelly position sizing** (`KELLY_SIZING=YES`, off by default): pair entries use a two-outcome Kelly (`+MIN_NET_EDGE` when both legs fill vs `-KELLY_LEG_LOSS` when they leg out, at `KELLY_LEG_FAIL_RATE`); late-window entries use binary Kelly `(p−cost)/(1−cost)` on the fee-inclusive cost with `p` reduced by `KELLY_PROB_HAIRCUT`. Both use `KELLY_FRACTION` (¼) and are capped at `KELLY_MAX_FRACTION` of bankroll; a Kelly stake below the 5-share minimum is skipped, never bumped up.
+- **Paper trading** (`uv run polyflup.py --paper`, `src/paper.py`): simulated account on live order books. Taker fills walk the book and pay `0.07·p·(1−p)`; POST_ONLY that would cross is rejected; resting orders fill in a background matcher (`PAPER_MAKER_FILL_MODE=cross` conservative / `touch` optimistic); positions redeem at 1/0 once Gamma resolves. Separate `trades_paper.db` / `trades_paper.log` / lock file, no API credentials or private key needed. View with `uv run tui.py --paper`.
+- **Fee-aware entry gate**: a pair is opened only if its guaranteed profit AFTER taker fees (`0.07·p·(1−p)` per leg) is ≥ `MIN_NET_EDGE` (1¢). Near 50/50 a "0.97 combined" taker pair previously lost ~0.5¢/share.
+- **Maker pair**: when no taker pair qualifies, POST_ONLY bids are rested on both legs (no fee, rebate share) while both bids are within `MAKER_PAIR_PRICE_BAND`. Previously POST_ONLY orders were priced at ask levels, so they always crossed the book and fell back to taker after 3 failures.
+- **Leg-risk EV check**: if one leg fills and the other doesn't, the taker hedge is bought only if it beats flattening or holding (`edge.py`); otherwise the resting hedge is kept until timeout.
+- **Late-window conviction mode** (`src/trading/late_window.py`): z-score of Chainlink spot vs strike in the last `LATE_WINDOW_SECONDS`, conservative probability (min of normal model and measured hold rates), EV after fee. Shadow-logs to new `shadow_signals` table (migration 12) and resolves outcomes; live orders only with `LATE_WINDOW_LIVE=YES`.
+- **PolyBolt Chainlink feed** (`polybolt.py`): the price source Polymarket resolves on (`price.crypto`, `price.crypto.twap`), authenticated with the existing CLOB API credentials; falls back to Binance with a 2x distance filter.
+- `analyze_strategy.py`: early exits vs held, confidence calibration, PnL by market, shadow-signal calibration and realized EV. Tests: `test_edge.py`.
+- **5-minute markets**: `MARKETS=BTC,ETH,BTC-5M,ETH-5M` trades `{asset}-updown-5m-{ts}` markets alongside 15m ones. A market key (`BTC`, `BTC-5M`) is the `symbol` everywhere (DB, logs); `src/markets.py` holds key parsing and window math. Entry cutoff, hedge fill/GTC-fallback timeouts scale with window length; pre-settlement exit tiers earlier than 40% of the window left are skipped for 5m. Fees, min size (5), tick (0.01) and CTF redemption path are identical to 15m.
+- **Terminal dashboard** (`uv run tui.py`, `src/tui/`): read-only Rich TUI with open positions + live midpoints, today/7d/all-time performance, per-symbol PnL, equity sparkline, recent trades and log tail.
+- `SIGNATURE_TYPE` and `POLYGON_RPC` settings.
+
+### Changed
+- Entries run in one worker thread per market (`launch_entries`): the fill monitor (up to 90s) no longer blocks position monitoring, settlement or other markets; funds reserved by in-flight entries are subtracted before launching another.
+- Log text and pre-settlement startup line now reflect the real fee model and configured confidence schedule.
+- `place_batch_orders` posts `post_only` and normal orders as separate V2 batches (V2 takes `post_only` per call) and restores the original order of results.
+- Settlement audit compares `realized_pnl` of CLOSED positions keyed by `token_id` (previously read non-existent `assetId`/`pnl`, so it never matched).
+- Fee documentation corrected to the official model (`0.07 × p × (1 − p)` pUSD, makers free, 20% rebate pool).
+
+### Removed
+- Dead code: `redeem_winnings` (web3_utils), V1 client shims (`heartbeat`, `builder_config`), `get_position_from_data_api`, `get_actual_positions_from_data_api`, `notifications.py.backup`.
+
 ---
 
 ## [0.6.0] - 2026-01-19

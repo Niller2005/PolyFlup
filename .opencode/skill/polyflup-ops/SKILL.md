@@ -8,9 +8,11 @@ description: Operational commands, environment configuration, and deployment for
 ### Python Backend
 ```bash
 uv run polyflup.py      # Run bot
+uv run polyflup.py --paper  # Paper trading (simulated fills on live books, trades_paper.db, no keys needed)
+uv run tui.py           # Terminal dashboard (read-only): q quit, r refresh, p pause; --db PATH, --once, --no-wallet
 uv run check_db.py      # Check database
 uv run migrate_db.py    # Run migrations
-uv pip install -r requirements.txt
+uv sync                 # Install dependencies (pyproject.toml + uv.lock)
 ```
 
 ### Svelte UI
@@ -32,9 +34,15 @@ docker compose down
 
 ### Core Settings
 - `PROXY_PK`: Private key (Required, starts with 0x)
+- `FUNDER_PROXY`: Wallet address holding pUSD (proxy/Safe/deposit wallet)
+- `SIGNATURE_TYPE`: 0 EOA, 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE (default), 3 POLY_1271
+- `POLYGON_RPC`: RPC endpoint for pUSD balance reads (default https://polygon-rpc.com)
 - `BET_PERCENT`: Position size (default 5.0)
-- `MIN_EDGE`: Min confidence (default 0.565)
-- `MARKETS`: Comma-separated symbols (e.g., BTC,ETH)
+- `MIN_EDGE`: Min confidence (default 0.35)
+- `MIN_NET_EDGE` (0.01), `ENABLE_MAKER_PAIR` (YES), `MAKER_PAIR_PRICE_BAND` (0.20), `MAKER_PAIR_IMPROVE_TICKS` (0), `TAKER_FEE_RATE` (0.07)
+- `LATE_WINDOW_ENABLED` (YES, shadow), `LATE_WINDOW_LIVE` (NO), `LATE_WINDOW_SECONDS` (90), `LATE_WINDOW_MIN_EV` (0.015), `LATE_WINDOW_MIN_DISTANCE_PCT` (0.02), `LATE_WINDOW_BET_USD` (5)
+- `MARKETS`: Comma-separated market keys. `BTC` = 15-minute market, `BTC-5M` = 5-minute market (e.g., `BTC,ETH,BTC-5M`)
+- `MAX_ENTRY_LATENESS_SEC_5M`: Optional override for 5m entry cutoff (default: 15m value scaled, 600s -> 200s)
 
 ### Atomic Hedging Configuration (v0.6.0+)
 - `COMBINED_PRICE_THRESHOLD`: Max combined price for entry+hedge (default 0.99)

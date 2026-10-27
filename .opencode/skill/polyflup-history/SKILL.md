@@ -5,6 +5,15 @@ description: Chronological log of system improvements and session summaries for 
 
 ## Session Improvements Summary
 
+### 2026-10-27 (Polymarket V2 migration + terminal dashboard)
+- **CLOB V2**: Migrated to `py-clob-client-v2`; the V1 client no longer works on production (cutover 2026-04-28).
+- **pUSD**: Collateral changed from USDC.e; balance reads and logs updated. CTF redeem now goes through `CtfCollateralAdapter` with a one-time `setApprovalForAll`.
+- **Data API v2**: `/v2/positions` replaces `/positions` and `/closed-positions` (v1 retired 2026-10-24).
+- **Fees**: Corrected to `0.07 × p × (1 − p)` pUSD per share for takers; makers free with a 20% rebate pool.
+- **Fixed latent bug**: settlement audit read `assetId`/`pnl`, which never existed in the API response.
+- **TUI**: Added `uv run tui.py` (Rich, read-only dashboard).
+- **Not live-tested**: relayer redeem via the adapter, and order posting (no funded wallet/credentials available in the session).
+
 ### 2026-01-19 (v0.6.0 Release - Atomic Hedging Overhaul)
 - **Atomic Hedging Strategy**: Complete overhaul to simultaneous entry+hedge pairs via batch API
   - Batch placement with combined price threshold (≤ $0.99) guarantees profit structure

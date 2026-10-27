@@ -200,6 +200,12 @@ trade_id = execute_atomic_trade(symbol, entry_side, entry_price, hedge_price, si
 
 ## Version History
 
+### v0.6.x (Oct 2026) - Polymarket V2
+- **CLOB V2 client**: Import from `py_clob_client_v2`; use `create_and_post_order`, `create_and_post_market_order`, `PostOrdersV2Args`, `get_open_orders`, `cancel_order(OrderPayload(orderID=...))`.
+- **pUSD collateral**: `PUSD_ADDRESS` in `src.config.settings`; `get_balance()` returns pUSD.
+- **Data API v2**: Use `_fetch_positions_v2` / `get_current_positions` / `get_closed_positions`; rows are snake_case (`token_id`, `current_size`, `avg_price`, `realized_pnl`).
+- **TUI**: `src/tui/` (`data.py` read-only queries + `LiveFeed`, `app.py` Rich rendering); entry point `tui.py`.
+
 ### v0.6.0 (Jan 2026)
 - **Atomic Hedging Strategy**: Complete overhaul to simultaneous entry+hedge pairs via batch API
 - **POST_ONLY → GTC Fallback**: Smart switching after 3 POST_ONLY crossing failures (Bug #10 fix)

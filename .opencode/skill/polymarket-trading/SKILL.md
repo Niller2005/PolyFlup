@@ -110,21 +110,64 @@ The bot supports two confidence calculation methods for A/B testing:
 - **Minimum Size**: Polymarket enforces a 5.0 share minimum for limit orders
 - **Rounding**: Use `truncate_float(value, 2)` for all order sizes to match exchange precision
 
-## Fees & Rebates (15-Minute Crypto Markets)
+## Fees & Rebates (Crypto Markets, CLOB V2)
 
-- **Maker Rebates**: Earn 0.15% rebate for orders that add liquidity (POST_ONLY orders).
-- **Taker Fees**: Pay 1.54% fee for orders that remove liquidity (GTC/IOC/FOK orders).
-- **Fee Deduction**: 
-    - **BUY**: Fee is taken in **Tokens** from the proceeds.
-    - **SELL**: Fee is taken in **USDC** from the proceeds.
-- **Strategy Implications**: 
-    - **Prefer POST_ONLY orders** to earn maker rebates and avoid taker fees.
-    - Bot uses POST_ONLY by default, switches to GTC after 3 POST_ONLY crossing failures.
-    - Maker orders may not fill immediately but earn 0.15% rebate when filled.
-    - GTC orders fill immediately but pay 1.54% taker fee - still worth it for profitable trades.
-- **Effective Rates** (legacy info): 
-    - Buying peaks at ~1.6% at $0.50 price.
-    - Selling peaks at ~3.7% at $0.30 price (USDC deducted directly).
+Source: https://docs.polymarket.com/trading/fees (verified 2026-10-27). Supersedes the older flat "1.54% taker / 0.15% rebate" notes.
+
+- **Formula**: `fee = C × feeRate × p × (1 − p)` (C = shares, p = price). Crypto `feeRate = 0.07`.
+- **Denomination**: pUSD for BUY and SELL alike (the "BUY fee in tokens" rule is obsolete).
+- **Symmetric**: 100 shares at 0.50 → $1.75; same dollar fee at 0.30 and 0.70. Effective rate on notional = `0.07 × (1 − p)`: 3.5% at 0.50, 4.9% at 0.30, 0.7% at 0.90.
+- **Makers pay 0** and share a **20%** rebate pool of collected taker fees (paid daily).
+- **Protocol-set at match time**; never put fees in orders. Read live params with `client.get_clob_market_info(condition_id)` → `fd = {"r": rate, "e": exponent, "to": takerOnly}`.
+- **Precision**: 5 decimals (min 0.00001).
+- **Strategy Implications**:
+    - **Prefer POST_ONLY orders** (no fee + rebate). The bot uses POST_ONLY by default and switches to GTC after 3 POST_ONLY crossing failures.
+    - A taker GTC leg near p≈0.50 costs ~3.5% of notional, which is larger than the 1¢ edge implied by `COMBINED_PRICE_THRESHOLD=0.99`. Taker fallbacks erase the atomic-hedge edge; check before enabling them.
+
+## CLOB V2 (live 2026-04-28)
+
+Polymarket hard-cut over to CLOB V2. The old `py-clob-client` stopped working against production (V1-signed orders rejected, repo archived). PolyFlup uses **`py-clob-client-v2`** (`from py_clob_client_v2 import ...`).
+
+- **Collateral is pUSD** (`0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB`, 6 decimals), not USDC.e. API-only wallets wrap USDC.e via `CollateralOnramp.wrap(USDC.e, to, amount)` (`0x93070a847efEf7F70739046A929D47a521F5B8ee`) after approving the Onramp. `get_balance()` in `src/utils/web3_utils.py` reads pUSD.
+- **Redeem/merge for 15m markets** (CTF positions, Gamma `version: "v1"`) go through **`CtfCollateralAdapter`** (`0xAdA100Db00Ca00073811820692005400218FcE1f`), which has the CTF function signatures (`redeemPositions`, `mergePositions`, `splitPosition`) and returns pUSD. The holder must first call `CTF.setApprovalForAll(adapter, true)`; `ctf_operations._adapter_approval_txs()` prepends it to relayer batches when `isApprovedForAll` is false. Negative-risk markets use `NegRiskCtfCollateralAdapter` (`0xadA2005600Dec949baf300f4C6120000bDB6eAab`).
+- **Renames**: `create_or_derive_api_creds` → `create_or_derive_api_key`; `get_orders` → `get_open_orders`; `cancel(id)` → `cancel_order(OrderPayload(orderID=id))`; `cancel_market_orders(OrderMarketCancelParams(...))`.
+- **Removed**: `get_balance()` / `get_positions()` on the client. Positions come from the Data API.
+- **Order args**: no `nonce`, `fee_rate_bps`, `taker`. New optional `builder_code`, `metadata`, `user_usdc_balance`. `post_orders(batch, post_only=...)` takes `post_only` per call (not per order); `place_batch_orders` groups by it. Batch items are `PostOrdersV2Args`.
+- **Side**: plain `"BUY"`/`"SELL"` strings still work (`Side` is an IntEnum).
+- **Signature types**: 0 EOA, 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE (default), 3 POLY_1271 deposit wallet (recommended for new API users). Set via `SIGNATURE_TYPE`.
+- **Auth unchanged**: existing `API_KEY/API_SECRET/API_PASSPHRASE` keep working. Resting V1 orders were wiped at cutover.
+- **WebSocket**: URLs and payloads unchanged.
+- **Relayer**: `py-builder-relayer-client>=0.0.3`. Builder `POLY_BUILDER_*` headers are still used for the relayer (not for orders).
+- **Unified SDK**: `polymarket-client` (py-sdk, Python 3.11+) is the recommended successor; `py-clob-client-v2` is deprecated but functional. Not drop-in: https://docs.polymarket.com/migrate/clob-sdk-to-unified-sdk.
+
+## 5-Minute Markets
+
+Slug `{asset}-updown-5m-{window_start_unix}` (same Gamma/CLOB/fee/redeem behavior as 15m: min size 5, tick 0.01, CTF "v1" positions, `crypto_fees_v2` 0.07 rate). Enabled per market in `MARKETS` with a `-5M` suffix (`BTC-5M`); that key is the `symbol` stored in the DB. `src/markets.py`: `parse_market`, `asset_of`, `window_bounds`, `slug_for`, `parse_slug`, `scale_seconds`.
+
+- Scaled by window length: max entry lateness (600s -> 200s, `MAX_ENTRY_LATENESS_SEC_5M` overrides), hedge fill timeout (90s -> 30s) and GTC fallback (30s -> 10s).
+- Pre-settlement exit tiers with more than 40% of the window left are skipped (5m: only the 120s/60s/45s tiers).
+- Not scaled (tune manually if needed): `MOMENTUM_LOOKBACK_MINUTES` (15), `HEDGE_POLL_INTERVAL_SECONDS` (5s), `PRE_SETTLEMENT_*` confidence values, strategy weights. The strategy was calibrated on 15m data; backtest before trusting 5m results.
+
+## Strategy Notes (fee-aware)
+
+- Observed 2026-10-27 (8 markets, ~75s): best-ask sum of UP+DOWN was 1.001–1.019, best-bid sum ≤ 0.999, so a taker pair below 0.97 essentially never exists; two taker legs near 50/50 cost ~3.5¢/share in fees (break-even combined ≈ 0.96).
+- Pair entry order of preference: taker pair (net edge after fees ≥ `MIN_NET_EDGE`) → maker pair at bids (both bids within `MAKER_PAIR_PRICE_BAND`) → skip. Leg risk: buy the missing leg as taker only if `taker_hedge_ev ≥ max(flatten_ev, hold_ev)`.
+- Late-window mode: z = ln(spot/strike)/(σ₁ₘ·√(T/60)); p_use = min(Φ(|z|), measured hold rate). 7-day Binance study of the T-60s leader: BTC/ETH 5m hold 65–73% (|z|<0.5), ~85% (0.5–1), ~92–94% (1–1.5), ~97% (1.5–2), ≥99% (>2). Whether the market misprices this is unproven; judge it with `shadow_signals` + `analyze_strategy.py`.
+- Resolution source is a Chainlink 60s TWAP, not Binance. PolyBolt (`wss://ws-live-v2.polymarket.com/ws`, `price.crypto` / `price.crypto.twap`, auth with CLOB API creds, symbols like `btcusd`) streams it; replaces the retired RTDS price topics.
+- Useful official repos: `Polymarket/py-clob-client-v2` (trading), `Polymarket/py-builder-relayer-client` (gasless redeem), `Polymarket/py-sdk` (unified, Python 3.11+, newer successor).
+
+## Data API v2 (v1 retired 2026-10-24)
+
+Base `https://data-api.polymarket.com/v2/...`. Responses are `{"data": [...], "pagination": {"next_cursor": ...}}` with **snake_case** keys. Follow `next_cursor`; `offset` and `market=` return 400 (use `condition=`).
+
+- `GET /v2/positions?user=&status=OPEN|REDEEMABLE|REDEEMABLE_LOST|MERGEABLE|CLOSED` replaces `/positions` and `/closed-positions`. Default dust floor is 0.1 shares; `filter_amount=0.001` keeps tiny balances.
+- Row keys: `token_id` (was `asset`), `condition_id`, `current_size` (was `size`), `avg_price`, `realized_pnl`, `total_pnl`, `slug`, `title`, `outcome`, `redeemable`, `mergeable`, `negative_risk`.
+- Helper: `src/trading/orders/positions.py::_fetch_positions_v2`.
+
+## Terminal Dashboard
+
+`uv run tui.py` (`src/tui/`): read-only Rich dashboard (open positions with live midpoints, performance, recent trades, log tail). Keys `q` quit, `r` refresh, `p` pause. `--db PATH` inspects a downloaded production DB, `--once` renders a single frame, `--no-wallet` skips the balance lookup. It opens the DB with `mode=ro`, so it is safe to run next to the bot.
+
 
 ## Common Code Patterns
 
