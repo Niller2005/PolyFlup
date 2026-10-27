@@ -122,7 +122,7 @@ def test_encoding_functions():
         _encode_merge_positions,
         _encode_redeem_positions,
         CTF_ADDRESS,
-        USDC_ADDRESS,
+        PUSD_ADDRESS,
     )
 
     # Test data (example condition_id from Polymarket)
@@ -135,7 +135,7 @@ def test_encoding_functions():
     print(f"  Condition ID: {test_condition_id}")
     print(f"  Amount: {test_amount / 1_000_000:.1f} USDC")
     print(f"  CTF Address: {CTF_ADDRESS}")
-    print(f"  USDC Address: {USDC_ADDRESS}")
+    print(f"  pUSD Address: {PUSD_ADDRESS}")
 
     # Test merge encoding
     print("\n--- Merge Encoding ---")

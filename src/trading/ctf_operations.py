@@ -11,14 +11,23 @@ from src.config.settings import (
     POLY_BUILDER_PASSPHRASE,
     ENABLE_RELAYER_CLIENT,
     ENABLE_MANUAL_REDEMPTION_FALLBACK,
+    PAPER_TRADING,
+    PUSD_ADDRESS,
 )
 from src.utils.logger import log, log_error
 
-# CTF Contract Address on Polygon
+# Conditional Tokens (CTF) contract on Polygon. Holds the ERC-1155 outcome tokens
+# of 15m crypto markets (Gamma market version "v1").
 CTF_ADDRESS = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
 
-# USDCe Address on Polygon
-USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+# CLOB V2 collateral is pUSD. CTF itself still settles in USDC.e, so merge/redeem go
+# through CtfCollateralAdapter (same function signatures as CTF), which wraps the
+# redeemed USDC.e back into pUSD in the same call. Per the official docs the
+# collateralToken argument is pUSD. The holder must first call
+# CTF.setApprovalForAll(adapter, true); see _adapter_approval_txs().
+# NegRiskCtfCollateralAdapter (0xadA2005600Dec949baf300f4C6120000bDB6eAab) is for
+# negative-risk markets, which 15m up/down markets are not.
+CTF_COLLATERAL_ADAPTER = "0xAdA100Db00Ca00073811820692005400218FcE1f"
 
 # Relayer Configuration
 RELAYER_URL = "https://relayer-v2.polymarket.com"
@@ -65,6 +74,26 @@ CTF_ABI = [
         "name": "redeemPositions",
         "outputs": [],
         "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"internalType": "address", "name": "operator", "type": "address"},
+            {"internalType": "bool", "name": "approved", "type": "bool"},
+        ],
+        "name": "setApprovalForAll",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"internalType": "address", "name": "account", "type": "address"},
+            {"internalType": "address", "name": "operator", "type": "address"},
+        ],
+        "name": "isApprovedForAll",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
         "type": "function",
     },
 ]
@@ -135,6 +164,54 @@ def _get_relayer_client():
         return None
 
 
+def _is_adapter_approved(holder: str) -> Optional[bool]:
+    """Return whether `holder` approved CtfCollateralAdapter on CTF, None if unknown."""
+    try:
+        web3 = get_web3_client()
+        ctf_contract = web3.eth.contract(
+            address=Web3.to_checksum_address(CTF_ADDRESS), abi=CTF_ABI
+        )
+        return bool(
+            ctf_contract.functions.isApprovedForAll(
+                Web3.to_checksum_address(holder),
+                Web3.to_checksum_address(CTF_COLLATERAL_ADAPTER),
+            ).call()
+        )
+    except Exception as e:
+        log(f"   ⚠️  Could not read adapter approval state: {e}")
+        return None
+
+
+def _adapter_approval_txs(safe_transaction_cls, operation_type) -> list:
+    """
+    One-time approval call(s) to prepend to a relayer batch.
+
+    CtfCollateralAdapter pulls outcome tokens from the holder, so the wallet must
+    have approved it on CTF. Skipped when already approved; included when the
+    state is unknown (setApprovalForAll is idempotent).
+    """
+    if _is_adapter_approved(get_wallet_address()):
+        return []
+
+    web3 = Web3()
+    ctf_contract = web3.eth.contract(
+        address=Web3.to_checksum_address(CTF_ADDRESS), abi=CTF_ABI
+    )
+    data = ctf_contract.encode_abi(
+        abi_element_identifier="setApprovalForAll",
+        args=[Web3.to_checksum_address(CTF_COLLATERAL_ADAPTER), True],
+    )
+    log("   🔑 Prepending CTF setApprovalForAll(CtfCollateralAdapter) to batch")
+    return [
+        safe_transaction_cls(
+            to=CTF_ADDRESS,
+            operation=operation_type.Call,
+            data=data,
+            value="0",
+        )
+    ]
+
+
 def _encode_merge_positions(condition_id: str, amount: int) -> str:
     """
     Encode mergePositions function call for CTF contract.
@@ -154,7 +231,7 @@ def _encode_merge_positions(condition_id: str, amount: int) -> str:
     encoded = ctf_contract.encode_abi(
         abi_element_identifier="mergePositions",
         args=[
-            Web3.to_checksum_address(USDC_ADDRESS),  # collateralToken
+            Web3.to_checksum_address(PUSD_ADDRESS),  # collateralToken
             b"\x00" * 32,  # parentCollectionId (null)
             bytes.fromhex(condition_id.replace("0x", "")),  # conditionId
             [1, 2],  # partition (YES | NO)
@@ -184,7 +261,7 @@ def _encode_redeem_positions(condition_id: str) -> str:
     encoded = ctf_contract.encode_abi(
         abi_element_identifier="redeemPositions",
         args=[
-            Web3.to_checksum_address(USDC_ADDRESS),  # collateralToken
+            Web3.to_checksum_address(PUSD_ADDRESS),  # collateralToken
             b"\x00" * 32,  # parentCollectionId (null)
             bytes.fromhex(condition_id.replace("0x", "")),  # conditionId
             [1, 2],  # indexSets (redeem both YES and NO)
@@ -237,14 +314,41 @@ def _manual_web3_redeem(
         web3 = get_web3_client()
         account = Account.from_key(PROXY_PK)
 
-        # Create contract instance
+        # Create contract instance (the adapter exposes CTF's redeemPositions signature)
         ctf_contract = web3.eth.contract(
             address=Web3.to_checksum_address(CTF_ADDRESS), abi=CTF_ABI
         )
+        adapter_contract = web3.eth.contract(
+            address=Web3.to_checksum_address(CTF_COLLATERAL_ADAPTER), abi=CTF_ABI
+        )
+
+        # The EOA must have approved the adapter on CTF (one-time, costs gas)
+        if not ctf_contract.functions.isApprovedForAll(
+            account.address, Web3.to_checksum_address(CTF_COLLATERAL_ADAPTER)
+        ).call():
+            approve_tx = ctf_contract.functions.setApprovalForAll(
+                Web3.to_checksum_address(CTF_COLLATERAL_ADAPTER), True
+            ).build_transaction(
+                {
+                    "from": account.address,
+                    "gas": 100000,
+                    "gasPrice": web3.eth.gas_price,
+                    "nonce": web3.eth.get_transaction_count(account.address),
+                    "chainId": POLYGON_CHAIN_ID,
+                }
+            )
+            signed_approve = web3.eth.account.sign_transaction(approve_tx, PROXY_PK)
+            approve_hash = web3.eth.send_raw_transaction(signed_approve.raw_transaction)
+            approve_receipt = web3.eth.wait_for_transaction_receipt(
+                approve_hash, timeout=60
+            )
+            if approve_receipt.get("status") != 1:
+                log_error(f"[{symbol}] #{trade_id} Adapter approval tx FAILED")
+                return None
 
         # Build redemption transaction
-        redeem_fn = ctf_contract.functions.redeemPositions(
-            Web3.to_checksum_address(USDC_ADDRESS),  # collateralToken
+        redeem_fn = adapter_contract.functions.redeemPositions(
+            Web3.to_checksum_address(PUSD_ADDRESS),  # collateralToken
             b"\x00" * 32,  # parentCollectionId (null)
             bytes.fromhex(condition_id.replace("0x", "")),  # conditionId
             [1, 2],  # indexSets (redeem both YES and NO)
@@ -328,6 +432,8 @@ def redeem_winning_tokens(
     Returns:
         Transaction hash if successful, None otherwise
     """
+    if PAPER_TRADING:
+        return "paper-redeem"  # paper.settle_resolved() credits payouts
     # Try gasless RelayClient first
     relay_client = _get_relayer_client()
     relayer_failed = False
@@ -341,16 +447,17 @@ def redeem_winning_tokens(
             # Encode redeem function call
             encoded_data = _encode_redeem_positions(condition_id)
 
-            # Create SafeTransaction for relayer
+            # Create SafeTransaction for relayer (via the pUSD collateral adapter)
             redeem_tx = SafeTransaction(
-                to=CTF_ADDRESS,
+                to=CTF_COLLATERAL_ADAPTER,
                 operation=OperationType.Call,
                 data=f"0x{encoded_data}",
                 value="0",
             )
 
-            # Execute via relayer (gasless!)
-            response = relay_client.execute([redeem_tx], "Redeem winning tokens")
+            # Execute via relayer (gasless!), approving the adapter first if needed
+            batch = _adapter_approval_txs(SafeTransaction, OperationType) + [redeem_tx]
+            response = relay_client.execute(batch, "Redeem winning tokens")
 
             # Check if we got a transaction hash
             if (
@@ -443,6 +550,8 @@ def batch_redeem_winning_tokens(
             (125, "SOL", "0x123...")
         ])
     """
+    if PAPER_TRADING:
+        return "paper-redeem" if redemptions else None
     if not redemptions:
         return None
 
@@ -458,7 +567,7 @@ def batch_redeem_winning_tokens(
             from py_builder_relayer_client.models import SafeTransaction, OperationType
 
             # Build list of redemption transactions
-            redeem_txs = []
+            redeem_txs = _adapter_approval_txs(SafeTransaction, OperationType)
             symbols_str = ", ".join(set(sym for _, sym, _ in redemptions))
 
             log(
@@ -471,7 +580,7 @@ def batch_redeem_winning_tokens(
 
                 # Create SafeTransaction for this redemption
                 redeem_tx = SafeTransaction(
-                    to=CTF_ADDRESS,
+                    to=CTF_COLLATERAL_ADAPTER,
                     operation=OperationType.Call,
                     data=f"0x{encoded_data}",
                     value="0",

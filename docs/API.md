@@ -21,7 +21,7 @@ PolyFlup integrates with multiple Polymarket API endpoints for trading, market d
 
 **Base URL**: `https://clob.polymarket.com`
 
-Used by: `py_clob_client` library
+Used by: `py_clob_client_v2` library (CLOB V2, live since 2026-04-28; the V1 `py-clob-client` no longer works). Collateral is pUSD.
 
 #### Key Endpoints
 
@@ -38,12 +38,12 @@ Used by: `py_clob_client` library
 
 - **Account**
   - `GET /balance-allowance` - Get token balance and allowances
-  - `GET /open-orders` - Get all open orders
+  - `GET /data/orders` - Get all open orders (`get_open_orders`)
   - `POST /check-scoring` - Check if order earns liquidity rewards
 
 **Authentication**: ECDSA signatures using wallet private key
 
-**Rate Limits**: Managed by `py_clob_client` with automatic throttling
+**Rate Limits**: Not handled by `py_clob_client_v2` (no automatic retries); PolyFlup retries transient errors in `src/trading/orders/utils.py::_execute_with_retry`
 
 ---
 

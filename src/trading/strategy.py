@@ -1,6 +1,7 @@
 """Trading strategy logic"""
 
-from py_clob_client.client import ClobClient
+from py_clob_client_v2 import ClobClient
+from src.markets import asset_of
 from src.config.settings import (
     MAX_SPREAD,
     ADX_ENABLED,
@@ -559,7 +560,7 @@ def bfxd_allows_trade(symbol: str, direction: str) -> tuple[bool, str]:
     if not ENABLE_BFXD:
         return True, "DISABLED"
 
-    symbol_u = symbol.upper()
+    symbol_u = asset_of(symbol)
     direction_u = direction.upper()
 
     if not BFXD_URL:

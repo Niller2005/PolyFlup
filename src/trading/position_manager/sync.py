@@ -2,6 +2,8 @@
 
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from src.markets import asset_of, parse_slug
+from src.trading.inflight import entries_in_flight
 from src.data.db_connection import db_connection
 from src.utils.logger import log
 from src.trading.orders import get_current_positions, normalize_token_id, get_orders
@@ -80,12 +82,7 @@ def sync_positions_with_exchange(user_address: str):
         # We normalize to decimal string for the primary key
         position_map = {}
         for p in exchange_positions:
-            aid = (
-                p.get("asset")
-                or p.get("asset_id")
-                or p.get("assetId")
-                or p.get("token_id")
-            )
+            aid = p.get("token_id")
             if aid:
                 norm_aid = normalize_token_id(aid)
                 position_map[norm_aid] = p
@@ -118,9 +115,9 @@ def sync_positions_with_exchange(user_address: str):
                     pos = position_map[tid_str]
                     matched_exchange_ids.add(tid_str)
 
-                    actual_size = float(pos.get("size", 0))
+                    actual_size = float(pos.get("current_size", 0))
                     actual_price = float(
-                        pos.get("avg_price") or pos.get("avgPrice") or db_entry
+                        pos.get("avg_price") or db_entry
                     )
 
                     # Check for significant size mismatch
@@ -212,16 +209,22 @@ def sync_positions_with_exchange(user_address: str):
                                 (trade_id,),
                             )
 
-            # 3. Check for untracked positions
-            for t_id_str, p_data in position_map.items():
+            # 3. Check for untracked positions. Entry legs fill before their trade row is
+            # saved, so adopting while an entry is in flight would duplicate them.
+            in_flight = entries_in_flight()
+            if in_flight:
+                log(
+                    f"   ⏳ Entries in flight ({', '.join(sorted(in_flight))}) - deferring untracked-position adoption"
+                )
+            for t_id_str, p_data in ({} if in_flight else position_map).items():
                 if t_id_str and t_id_str not in all_tracked_token_ids:
-                    size = float(p_data.get("size", 0))
+                    size = float(p_data.get("current_size", 0))
                     if size < 0.001:
                         continue
 
                     try:
                         avg_price = float(
-                            p_data.get("avg_price") or p_data.get("avgPrice") or 0.5
+                            p_data.get("avg_price") or 0.5
                         )
                         slug = (
                             p_data.get("slug")
@@ -229,20 +232,18 @@ def sync_positions_with_exchange(user_address: str):
                             or "adopted-market"
                         )
 
-                        # Extract symbol from slug (e.g., "btc-updown-15m-123456" -> "BTC")
+                        # Market key + window from slug (e.g. "btc-updown-5m-123456" -> "BTC-5M")
                         if slug and slug.startswith("-adopted-market"):
                             slug = "adopted-market"
-                        if slug and "-" in slug:
-                            extracted = slug.split("-")[0].upper()
-                            if extracted in ["BTC", "ETH", "SOL", "XRP"]:
-                                symbol = extracted
-                            else:
-                                symbol = (
-                                    p_data.get("symbol")
-                                    or p_data.get("market")
-                                    or p_data.get("title")
-                                    or "ADOPTED"
-                                )
+                        parsed_slug = parse_slug(slug)
+                        if parsed_slug and asset_of(parsed_slug[0]) in [
+                            "BTC",
+                            "ETH",
+                            "SOL",
+                            "XRP",
+                        ]:
+                            symbol = parsed_slug[0]
+                            win_start, win_end = parsed_slug[1], parsed_slug[2]
                         else:
                             symbol = (
                                 p_data.get("symbol")
@@ -250,6 +251,7 @@ def sync_positions_with_exchange(user_address: str):
                                 or p_data.get("title")
                                 or "ADOPTED"
                             )
+                            win_start, win_end = now, now + timedelta(minutes=15)
 
                         side = p_data.get("outcome", "UNKNOWN").upper()
 
@@ -301,8 +303,8 @@ def sync_positions_with_exchange(user_address: str):
                                 size,
                                 size * avg_price,
                                 now.isoformat(),
-                                now.isoformat(),
-                                (now + timedelta(minutes=15)).isoformat(),
+                                win_start.isoformat(),
+                                win_end.isoformat(),
                                 0,
                                 "FILLED",
                                 "ADOPTED",

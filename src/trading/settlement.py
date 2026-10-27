@@ -59,8 +59,8 @@ def _audit_settlements():
         with db_connection() as conn:
             c = conn.cursor()
             for pos in closed_positions:
-                token_id = pos.get("assetId")
-                pnl = float(pos.get("pnl", 0))
+                token_id = pos.get("token_id")
+                pnl = float(pos.get("realized_pnl", 0))
 
                 # Look for matching trade in DB that was recently settled
                 c.execute(

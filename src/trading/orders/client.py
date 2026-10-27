@@ -1,8 +1,7 @@
 """Polymarket CLOB Client initialization"""
 
 import os
-from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import ApiCreds
+from py_clob_client_v2 import ApiCreds, ClobClient
 from dotenv import set_key
 from src.config.settings import (
     CLOB_HOST,
@@ -10,6 +9,7 @@ from src.config.settings import (
     CHAIN_ID,
     SIGNATURE_TYPE,
     FUNDER_PROXY,
+    PAPER_TRADING,
 )
 from src.utils.logger import log, log_error
 
@@ -22,22 +22,6 @@ client = ClobClient(
     funder=FUNDER_PROXY or "",
 )
 
-# Hotfix: ensure client has builder_config attribute
-if not hasattr(client, "builder_config"):
-    setattr(client, "builder_config", None)
-
-# Hotfix: ensure client has heartbeat method for API connection maintenance
-if not hasattr(client, "heartbeat"):
-    def heartbeat_shim():
-        """Health check to maintain API connection - uses get_ok() for compatibility"""
-        try:
-            return client.get_ok()
-        except Exception as e:
-            # If get_ok fails, return None to indicate heartbeat failure
-            return None
-    
-    setattr(client, "heartbeat", heartbeat_shim)
-
 
 def get_clob_client() -> ClobClient:
     """Get the initialized CLOB client"""
@@ -46,6 +30,9 @@ def get_clob_client() -> ClobClient:
 
 def setup_api_creds() -> None:
     """Setup API credentials"""
+    if PAPER_TRADING and not (os.getenv("API_KEY") and os.getenv("API_SECRET") and os.getenv("API_PASSPHRASE")):
+        log("📝 PAPER mode: no API credentials needed (public order books only)")
+        return
     api_key = os.getenv("API_KEY")
     api_secret = os.getenv("API_SECRET")
     api_passphrase = os.getenv("API_PASSPHRASE")
@@ -60,7 +47,7 @@ def setup_api_creds() -> None:
         except Exception as e:
             log_error(f"Error loading API creds from .env: {e}")
     try:
-        creds = client.create_or_derive_api_creds()
+        creds = client.create_or_derive_api_key()
         client.set_api_creds(creds)
         set_key(".env", "API_KEY", creds.api_key)
         set_key(".env", "API_SECRET", creds.api_secret)

@@ -1209,6 +1209,38 @@ wheels = [
 ]
 
 [[package]]
+name = "markdown-it-py"
+version = "3.0.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version < '3.10'",
+]
+dependencies = [
+    { name = "mdurl", marker = "python_full_version < '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/38/71/3b932df36c1a044d397a1f92d1cf91ee0a503d91e470cbd670aa66b07ed0/markdown-it-py-3.0.0.tar.gz", hash = "sha256:e3f60a94fa066dc52ec76661e37c851cb232d92f9886b15cb560aaada2df8feb", size = 74596, upload-time = "2023-06-03T06:41:14.443Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/42/d7/1ec15b46af6af88f19b8e5ffea08fa375d433c998b8a7639e76935c14f1f/markdown_it_py-3.0.0-py3-none-any.whl", hash = "sha256:355216845c60bd96232cd8d8c40e8f9765cc86f46880e43a8fd22dc1a1a8cab1", size = 87528, upload-time = "2023-06-03T06:41:11.019Z" },
+]
+
+[[package]]
+name = "markdown-it-py"
+version = "4.2.0"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.12'",
+    "python_full_version == '3.11.*'",
+    "python_full_version == '3.10.*'",
+]
+dependencies = [
+    { name = "mdurl", marker = "python_full_version >= '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/06/ff/7841249c247aa650a76b9ee4bbaeae59370dc8bfd2f6c01f3630c35eb134/markdown_it_py-4.2.0.tar.gz", hash = "sha256:04a21681d6fbb623de53f6f364d352309d4094dd4194040a10fd51833e418d49", size = 82454, upload-time = "2026-05-07T12:08:28.36Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/81/4da04ced5a082363ecfa159c010d200ecbd959ae410c10c0264a38cac0f5/markdown_it_py-4.2.0-py3-none-any.whl", hash = "sha256:9f7ebbcd14fe59494226453aed97c1070d83f8d24b6fc3a3bcf9a38092641c4a", size = 91687, upload-time = "2026-05-07T12:08:27.182Z" },
+]
+
+[[package]]
 name = "markupsafe"
 version = "3.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1302,6 +1334,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/cd/1b/a7782984844bd519ad4ffdbebbba2671ec5d0ebbeac34736c15fb86399e8/markupsafe-3.0.3-cp39-cp39-win32.whl", hash = "sha256:df2449253ef108a379b8b5d6b43f4b1a8e81a061d6537becd5582fba5f9196d7", size = 14566, upload-time = "2025-09-27T18:37:37.09Z" },
     { url = "https://files.pythonhosted.org/packages/18/1f/8d9c20e1c9440e215a44be5ab64359e207fcb4f675543f1cf9a2a7f648d0/markupsafe-3.0.3-cp39-cp39-win_amd64.whl", hash = "sha256:7c3fb7d25180895632e5d3148dbdc29ea38ccb7fd210aa27acbd1201a1902c6e", size = 15053, upload-time = "2025-09-27T18:37:38.054Z" },
     { url = "https://files.pythonhosted.org/packages/4e/d3/fe08482b5cd995033556d45041a4f4e76e7f0521112a9c9991d40d39825f/markupsafe-3.0.3-cp39-cp39-win_arm64.whl", hash = "sha256:38664109c14ffc9e7437e86b4dceb442b0096dfe3541d7864d9cbe1da4cf36c8", size = 13928, upload-time = "2025-09-27T18:37:39.037Z" },
+]
+
+[[package]]
+name = "mdurl"
+version = "0.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d6/54/cfe61301667036ec958cb99bd3efefba235e65cdeb9c84d24a8293ba1d90/mdurl-0.1.2.tar.gz", hash = "sha256:bb413d29f5eea38f31dd4754dd7377d4465116fb207585f97bf925588687c1ba", size = 8729, upload-time = "2022-08-14T12:40:10.846Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b3/38/89ba8ad64ae25be8de66a6d463314cf1eb366222074cfda9ee839c56a4b4/mdurl-0.1.2-py3-none-any.whl", hash = "sha256:84008a41e51615a49fc9966191ff91509e3c40b939176e643fd50a5c2196b8f8", size = 9979, upload-time = "2022-08-14T12:40:09.779Z" },
 ]
 
 [[package]]
@@ -1790,9 +1831,10 @@ dependencies = [
     { name = "psutil" },
     { name = "py-builder-relayer-client" },
     { name = "py-builder-signing-sdk" },
-    { name = "py-clob-client" },
+    { name = "py-clob-client-v2" },
     { name = "python-dotenv" },
     { name = "requests" },
+    { name = "rich" },
     { name = "ta" },
     { name = "web3" },
 ]
@@ -1804,11 +1846,12 @@ requires-dist = [
     { name = "flask-cors", specifier = ">=4.0.0" },
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "psutil", specifier = ">=5.9.0" },
-    { name = "py-builder-relayer-client", specifier = ">=0.0.1" },
+    { name = "py-builder-relayer-client", specifier = ">=0.0.3" },
     { name = "py-builder-signing-sdk", specifier = ">=0.0.2" },
-    { name = "py-clob-client", specifier = ">=0.34.5" },
+    { name = "py-clob-client-v2", specifier = ">=1.2.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
     { name = "requests", specifier = ">=2.32.5" },
+    { name = "rich", specifier = ">=13.7.0" },
     { name = "ta", specifier = ">=0.11.0" },
     { name = "web3", specifier = ">=7.14.0" },
 ]
@@ -1972,16 +2015,20 @@ wheels = [
 
 [[package]]
 name = "py-builder-relayer-client"
-version = "0.0.1"
+version = "0.0.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "eth-abi" },
+    { name = "eth-account" },
+    { name = "eth-utils" },
+    { name = "hexbytes" },
     { name = "py-builder-signing-sdk" },
     { name = "python-dotenv" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8f/f1/25a5bb3a4ccf1084430986871aaff71f1e1455cd10b529a1d2498b7ec9f1/py_builder_relayer_client-0.0.1.tar.gz", hash = "sha256:4cbf7bf070912b34c8b80aaf50a35a88300a44fe6416d2a5d6a7b107a140262c", size = 12835, upload-time = "2025-10-30T12:30:38.343Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/b4/d351ae9194e83129fd9548d0878eec2a8ec24fe3c904d62672fafebfebeb/py_builder_relayer_client-0.0.3.tar.gz", hash = "sha256:1f936457c561b0c665b56bda2ef501e475440ea79c5e285cd9cb436b876411cc", size = 21496, upload-time = "2026-10-15T08:26:33.524Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/58/3d/afceb6ccab7514a9806eff4c396a13d231b2bee87098e1ece26792f26689/py_builder_relayer_client-0.0.1-py3-none-any.whl", hash = "sha256:3e69a8aacceca86edd6d16389b3bf436adbc0f56fd0d585e4083e133731f7e3b", size = 19725, upload-time = "2025-10-30T12:30:36.922Z" },
+    { url = "https://files.pythonhosted.org/packages/6d/b1/1cc3c2c3a806d5a4d653a9dcfe8a8cc62306c6d5f1051152ba01a381822b/py_builder_relayer_client-0.0.3-py3-none-any.whl", hash = "sha256:46431cc5c79cdabc0732621d15a41470fcd2d7683c31d8e1b5e7202ca653649c", size = 32307, upload-time = "2026-10-15T08:26:32.494Z" },
 ]
 
 [[package]]
@@ -1998,21 +2045,20 @@ wheels = [
 ]
 
 [[package]]
-name = "py-clob-client"
-version = "0.34.5"
+name = "py-clob-client-v2"
+version = "1.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "eth-abi" },
     { name = "eth-account" },
     { name = "eth-utils" },
     { name = "httpx", extra = ["http2"] },
     { name = "poly-eip712-structs" },
-    { name = "py-builder-signing-sdk" },
     { name = "py-order-utils" },
-    { name = "python-dotenv" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fa/a4/64f81cd2ba674f575cb53a46be3fb14adc2ba92dd229ac0eb2c4a0456662/py_clob_client-0.34.5.tar.gz", hash = "sha256:fdc3907e3dae8e2e8bcc93a7c97780493a8d97e0e40247c84d2291ccb2d4e026", size = 38164, upload-time = "2026-01-13T17:13:32.037Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b0/04/dc16a34571f5f2cafa8db7c27fbb1e030103f29c77ee5c7609fcc6725150/py_clob_client_v2-1.2.1.tar.gz", hash = "sha256:c405f6c57db8faf0dc81569ef4e8f7025f608c15b9cfa2ff202cf832bb0a59a9", size = 53302, upload-time = "2026-10-15T08:26:21.849Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/85/64/1d5a1ecc0a95f1552da62ebd01d4b6bae63505c6ccba36632250d313445e/py_clob_client-0.34.5-py3-none-any.whl", hash = "sha256:31b7b57d522164f3eeab6bfdd78c42d8b313ff3d4469e0966fa2296121fbfb12", size = 43788, upload-time = "2026-01-13T17:13:30.877Z" },
+    { url = "https://files.pythonhosted.org/packages/0d/c7/c3fc6a54499f3dab7e1509e1a015922f422d3cb0b3e30658f314823ef69e/py_clob_client_v2-1.2.1-py3-none-any.whl", hash = "sha256:9dc00b444632cdb9aeae1c80490a3df0ff50dd5694a015480396cc4f77e7c6ae", size = 51828, upload-time = "2026-10-15T08:26:20.544Z" },
 ]
 
 [[package]]
@@ -2469,6 +2515,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c9/74/b3ff8e6c8446842c3f5c837e9c3dfcfe2018ea6ecef224c710c85ef728f4/requests-2.32.5.tar.gz", hash = "sha256:dbba0bac56e100853db0ea71b82b4dfd5fe2bf6d3754a8893c3af500cec7d7cf", size = 134517, upload-time = "2025-08-18T20:46:02.573Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1e/db/4254e3eabe8020b458f1a747140d32277ec7a271daf1d235b70dc0b4e6e3/requests-2.32.5-py3-none-any.whl", hash = "sha256:2462f94637a34fd532264295e186976db0f5d453d1cdd31473c85a6a161affb6", size = 64738, upload-time = "2025-08-18T20:46:00.542Z" },
+]
+
+[[package]]
+name = "rich"
+version = "15.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "markdown-it-py", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "markdown-it-py", version = "4.2.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pygments" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c0/8f/0722ca900cc807c13a6a0c696dacf35430f72e0ec571c4275d2371fca3e9/rich-15.0.0.tar.gz", hash = "sha256:edd07a4824c6b40189fb7ac9bc4c52536e9780fbbfbddf6f1e2502c31b068c36", size = 230680, upload-time = "2026-04-12T08:24:00.75Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/3b/64d4899d73f91ba49a8c18a8ff3f0ea8f1c1d75481760df8c68ef5235bf5/rich-15.0.0-py3-none-any.whl", hash = "sha256:33bd4ef74232fb73fe9279a257718407f169c09b78a87ad3d296f548e27de0bb", size = 310654, upload-time = "2026-04-12T08:24:02.83Z" },
 ]
 
 [[package]]

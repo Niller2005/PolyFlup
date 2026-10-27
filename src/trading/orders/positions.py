@@ -2,10 +2,12 @@
 
 from typing import Optional, List, Any
 import requests
-from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+from py_clob_client_v2 import BalanceAllowanceParams, AssetType
 from src.utils.logger import log
 from src.config.settings import DATA_API_BASE
 from .client import client
+from src.config.settings import PAPER_TRADING
+from src import paper
 from .constants import SELL
 from .market import place_market_order
 from .limit import place_limit_order
@@ -13,6 +15,8 @@ from .limit import place_limit_order
 
 def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
     """Get balance and allowance"""
+    if PAPER_TRADING:
+        return paper.balance_allowance(token_id)
     try:
         atype: Any = AssetType.CONDITIONAL if token_id else AssetType.COLLATERAL
         params: Any = BalanceAllowanceParams(asset_type=atype, token_id=token_id or "")
@@ -37,55 +41,77 @@ def get_balance_allowance(token_id: Optional[str] = None) -> Optional[dict]:
         return None
 
 
+def _fetch_positions_v2(
+    user: str,
+    status: str = "OPEN",
+    limit: int = 100,
+    max_pages: int = 10,
+    dust_floor: float = 0.001,
+) -> List[dict]:
+    """Fetch a user's positions from Data API v2 (cursor pagination, snake_case rows).
+
+    v2 defaults to a 0.1-share dust floor for OPEN/REDEEMABLE; `dust_floor` lowers it
+    so tiny residual balances still sync. CLOSED sets ignore the floor.
+    """
+    params: dict = {
+        "user": user,
+        "status": status,
+        "limit": limit,
+        "filter_amount": dust_floor,
+    }
+    rows: List[dict] = []
+    for _ in range(max_pages):
+        resp = requests.get(f"{DATA_API_BASE}/v2/positions", params=params, timeout=10)
+        resp.raise_for_status()
+        body = resp.json()
+        rows.extend(body.get("data") or [])
+        cursor = (body.get("pagination") or {}).get("next_cursor")
+        if not cursor:
+            break
+        # The cursor carries page size, status and sort; send only the cursor + user
+        params = {"user": user, "cursor": cursor}
+    return rows
+
+
 def get_current_positions(user_address: str) -> List[dict]:
-    """Get current positions for a user from Data API"""
+    """Get current positions for a user from Data API v2.
+
+    Row keys: token_id, condition_id, current_size, avg_price, slug, title, outcome, ...
+    """
+    if PAPER_TRADING:
+        return paper.positions()
     try:
         if not user_address:
             log("   ❌ Error: user_address is empty for position fetch")
             return []
 
-        url = f"{DATA_API_BASE}/positions?user={user_address}"
         log(f"   🔍 Fetching positions from Data API for {user_address[:10]}...")
-
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-
-        positions = []
-        if isinstance(data, list):
-            positions = data
-        elif isinstance(data, dict):
-            positions = data.get("positions", [])
+        positions = _fetch_positions_v2(user_address, status="OPEN")
 
         valid_positions = []
         for p in positions:
             try:
-                size = float(p.get("size", 0))
-                if size > 0.001:  # Filter out dust
+                if float(p.get("current_size", 0)) > 0.001:  # Filter out dust
                     valid_positions.append(p)
-            except:
+            except (TypeError, ValueError):
                 continue
 
         log(f"   ✅ Data API returned {len(valid_positions)} open positions")
         return valid_positions
     except Exception as e:
-        log(f"⚠️  Error getting orders from Data API: {e}")
+        log(f"⚠️  Error getting positions from Data API: {e}")
         return []
 
 
 def get_closed_positions(user: str, limit: int = 100) -> List[dict]:
-    """Get closed positions for a user from Data API"""
-    try:
-        url = f"{DATA_API_BASE}/closed-positions?user={user}"
-        if limit:
-            url += f"&limit={limit}"
+    """Get closed positions for a user (Data API v2, most recent page only).
 
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, list):
-            return data
-        return data.get("positions", []) if isinstance(data, dict) else []
+    Row keys: token_id, condition_id, realized_pnl, total_pnl, avg_price, ...
+    """
+    if PAPER_TRADING:
+        return []
+    try:
+        return _fetch_positions_v2(user, status="CLOSED", limit=limit or 100, max_pages=1)
     except Exception as e:
         log(f"⚠️  Error getting closed positions: {e}")
         return []

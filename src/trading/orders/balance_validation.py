@@ -7,12 +7,11 @@ from src.config.settings import (
 )
 
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from src.utils.logger import log
-from src.trading.orders import get_balance_allowance, get_current_positions
+from src.trading.orders import get_balance_allowance
+from src.markets import asset_of
 from src.trading.orders.utils import normalize_token_id
-from src.config.settings import DATA_API_BASE
-import requests
 
 
 # Symbol-specific tolerance settings for API reliability issues
@@ -39,7 +38,7 @@ SYMBOL_TOLERANCE_CONFIG = {
 def get_symbol_config(symbol: str) -> Dict[str, Any]:
     """Get symbol-specific configuration with fallback to default"""
     return SYMBOL_TOLERANCE_CONFIG.get(
-        symbol.upper(), SYMBOL_TOLERANCE_CONFIG["DEFAULT"]
+        asset_of(symbol), SYMBOL_TOLERANCE_CONFIG["DEFAULT"]
     )
 
 
@@ -63,7 +62,7 @@ def retry_balance_api_call(
             balance_info = get_balance_allowance(token_id)
             if balance_info is not None:
                 # Additional validation for crypto markets that commonly have issues
-                if symbol in ["BTC", "ETH", "SOL", "XRP", "DOGE", "MATIC"]:
+                if asset_of(symbol) in ["BTC", "ETH", "SOL", "XRP", "DOGE", "MATIC"]:
                     balance_val = balance_info.get("balance", 0)
                     if balance_val < 0.001:  # Near-zero balance for crypto
                         if attempt < max_retries - 1:
@@ -110,66 +109,6 @@ def retry_balance_api_call(
                 )
 
     return None
-
-
-def get_position_from_data_api(
-    user_address: str, token_id: str, symbol: str = ""
-) -> Optional[Dict[str, float]]:
-    """
-    Get position data from Data API as cross-validation source
-
-    DEBUG: Added symbol parameter to track which symbol this position data belongs to
-    """
-    try:
-        url = f"{DATA_API_BASE}/positions?user={user_address}&asset_id={token_id}"
-
-        # Removed POSITION API CALL debug spam - was causing excessive logging
-
-        resp = requests.get(url, timeout=15)  # Longer timeout for reliability
-        resp.raise_for_status()
-        data = resp.json()
-
-        if isinstance(data, list) and len(data) > 0:
-            position = data[0]
-            position_size = float(position.get("size", 0))
-
-            # Removed POSITION API RESULT debug spam - was causing excessive logging
-
-            return {
-                "size": position_size,
-                "avg_price": float(
-                    position.get("avg_price", position.get("avgPrice", 0))
-                ),
-                "condition_id": position.get("conditionId", ""),
-            }
-
-        # Removed POSITION API RESULT debug spam - was causing excessive logging
-        return None
-
-    except Exception as e:
-        log(f"   ⚠️  Error getting position from Data API for {symbol}: {e}")
-        return None
-
-
-def get_actual_positions_from_data_api(user_address: str) -> List[Dict[str, Any]]:
-    """
-    Get ALL current positions from Data API to verify actual holdings
-    """
-    try:
-        url = f"{DATA_API_BASE}/positions?user={user_address}"
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-
-        if isinstance(data, list):
-            return data
-        elif isinstance(data, dict) and "positions" in data:
-            return data["positions"]
-        return []
-
-    except (requests.RequestException, ValueError, KeyError) as e:
-        log(f"   ⚠️  Error getting all positions from Data API: {e}")
-        return []
 
 
 def cross_validate_balance_position(

@@ -33,7 +33,5 @@ __all__ = [
     "CHAIN_ID",
     "SIGNATURE_TYPE",
     "POLYGON_RPC",
-    "USDC_ADDRESS",
-    "CTF_ADDRESS",
-    "CTF_ABI",
+    "PUSD_ADDRESS",
 ]

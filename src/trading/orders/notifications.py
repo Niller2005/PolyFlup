@@ -1,9 +1,10 @@
 """Order notifications management with comprehensive audit trail"""
 
 from typing import List, Any
-from py_clob_client.clob_types import DropNotificationParams
+from py_clob_client_v2 import DropNotificationParams
 from src.utils.logger import log
 from .client import client
+from src.config.settings import PAPER_TRADING
 
 
 def _extract_order_id_from_payload(payload: dict) -> str:
@@ -24,6 +25,8 @@ def _extract_order_id_from_payload(payload: dict) -> str:
 
 def get_notifications() -> List[dict]:
     """Get all notifications with simplified audit trail"""
+    if PAPER_TRADING:
+        return []  # fills are discovered by polling get_order() against the paper account
     try:
         notifications = client.get_notifications()
         if not isinstance(notifications, list):
@@ -53,6 +56,8 @@ def get_notifications() -> List[dict]:
 
 def drop_notifications(notification_ids: List[str]) -> bool:
     """Mark notifications as read with simplified logging"""
+    if PAPER_TRADING:
+        return True
     if not notification_ids:
         return True
 

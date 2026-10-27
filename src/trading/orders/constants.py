@@ -1,13 +1,8 @@
 """Order related constants"""
 
-try:
-    from py_clob_client.order_builder.constants import BUY as CLOB_BUY, SELL as CLOB_SELL
-except ImportError:
-    CLOB_BUY = "BUY"
-    CLOB_SELL = "SELL"
-
-BUY = CLOB_BUY
-SELL = CLOB_SELL
+# CLOB V2 accepts the plain "BUY"/"SELL" strings (py_clob_client_v2.Side is an IntEnum)
+BUY = "BUY"
+SELL = "SELL"
 
 # API Constraints
 MIN_TICK_SIZE = 0.01

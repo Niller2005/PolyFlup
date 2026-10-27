@@ -3,7 +3,7 @@
 import time
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Any
-from py_clob_client.clob_types import BookParams, TradeParams
+from py_clob_client_v2 import BookParams, TradeParams
 from src.utils.logger import log
 from .client import client
 from .utils import is_404_error
@@ -166,36 +166,6 @@ def get_trades(
         return []
 
 
-def get_trades_for_user(
-    user: str,
-    market: Optional[str] = None,
-    asset_id: Optional[str] = None,
-    limit: int = 100,
-) -> List[dict]:
-    """Get trade history for a specific user from Data API"""
-    try:
-        from src.config.settings import DATA_API_BASE
-        import requests
-
-        url = f"{DATA_API_BASE}/trades?user={user}"
-        if market:
-            url += f"&market={market}"
-        if asset_id:
-            url += f"&asset_id={asset_id}"
-        if limit:
-            url += f"&limit={limit}"
-
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, list):
-            return data
-        return data.get("trades", []) if isinstance(data, dict) else []
-    except Exception as e:
-        log(f"⚠️  Error getting user trades: {e}")
-        return []
-
-
 def check_liquidity(token_id: str, size: float, warn_threshold: float = 0.05) -> bool:
     spread = get_spread(token_id)
     if spread is None:
@@ -224,6 +194,11 @@ def _check_fill_velocity(
             - is_sufficient: True if velocity meets minimum, False otherwise
             - actual_velocity: Measured shares per minute
     """
+    from src.config.settings import PAPER_TRADING
+
+    if PAPER_TRADING:
+        # trade history needs API credentials and cannot be filtered by token publicly
+        return True, float(min_velocity)
     if min_velocity <= 0:
         # Velocity check disabled
         return True, 0.0

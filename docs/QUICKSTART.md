@@ -9,7 +9,7 @@ Get up and running with PolyFlup in under 5 minutes.
 - **Python 3.9+** (3.11 recommended)
 - **Node.js 18+** (for dashboard)
 - **Docker** (optional, for containerized deployment)
-- **Polygon wallet** with USDC balance
+- **Polygon wallet** funded with pUSD (Polymarket collateral since CLOB V2; API-only wallets wrap USDC.e via the CollateralOnramp)
 
 ---
 
@@ -74,8 +74,8 @@ Edit `.env` with these minimum settings:
 
 ```bash
 # Required
-PROXY_PK=0xYOUR_PRIVATE_KEY_HERE    # Polygon wallet (MUST HAVE USDC)
-MARKETS=BTC,ETH,XRP,SOL             # Which markets to trade
+PROXY_PK=0xYOUR_PRIVATE_KEY_HERE    # Polygon wallet (MUST HAVE pUSD)
+MARKETS=BTC,ETH,XRP,SOL             # Which markets to trade (add BTC-5M, ETH-5M, ... for 5-minute markets)
 
 # Recommended (Balanced profile)
 BET_PERCENT=5.0                     # Position size (% of balance)
@@ -125,7 +125,7 @@ uv run check_db.py
 uv run python -c "from src.utils.web3_utils import get_balance; from src.config.settings import PROXY_PK; from eth_account import Account; print(f'Balance: {get_balance(Account.from_key(PROXY_PK).address)} USDC')"
 ```
 
-**Expected**: Shows your USDC balance
+**Expected**: Shows your pUSD balance
 
 ---
 
@@ -300,10 +300,10 @@ Every 60 seconds, the bot prints a summary:
 
 ### "Missing PROXY_PK in .env"
 - Add your Polygon private key (0x...) to `.env`
-- Ensure key has USDC balance
+- Ensure key has pUSD balance
 
 ### "Balance shows 0.0000"
-- Check wallet has USDC on Polygon network
+- Check the wallet holds pUSD (not USDC.e) on Polygon; wrap USDC.e via the CollateralOnramp
 - Use `get_balance()` to verify
 
 ### "No trades executing"

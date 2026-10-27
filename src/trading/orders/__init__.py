@@ -30,7 +30,6 @@ from .market_info import (
     check_liquidity,
     check_atomic_hedge_liquidity,
     get_trades,
-    get_trades_for_user,
 )
 from .scoring import check_order_scoring, check_orders_scoring
 from .utils import truncate_float, normalize_token_id
@@ -52,7 +51,6 @@ __all__ = [
     "get_multiple_market_prices",
     "get_server_time",
     "get_trades",
-    "get_trades_for_user",
     "get_closed_positions",
     "get_balance_allowance",
     "get_notifications",

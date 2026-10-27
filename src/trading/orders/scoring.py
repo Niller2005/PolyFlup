@@ -1,12 +1,15 @@
 """Order reward scoring checks"""
 
 from typing import List, Dict, Any
-from py_clob_client.clob_types import OrderScoringParams, OrdersScoringParams
+from py_clob_client_v2 import OrderScoringParams, OrdersScoringParams
 from src.utils.logger import log
 from .client import client
+from src.config.settings import PAPER_TRADING
 
 def check_order_scoring(order_id: str) -> bool:
     """Check if order is scoring for rewards"""
+    if PAPER_TRADING:
+        return False
     try:
         params: Any = OrderScoringParams(orderId=order_id)
         resp: Any = client.is_order_scoring(params)
@@ -22,6 +25,8 @@ def check_order_scoring(order_id: str) -> bool:
 
 def check_orders_scoring(order_ids: List[str]) -> Dict[str, bool]:
     """Check scoring for multiple orders"""
+    if PAPER_TRADING:
+        return {o: False for o in order_ids}
     if not order_ids:
         return {}
     try:

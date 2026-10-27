@@ -2,13 +2,15 @@
 
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timedelta, timezone
-from py_clob_client.clob_types import (
+from py_clob_client_v2 import (
+    MarketOrderArgs,
     OrderArgs,
     OrderType,
-    PostOrdersArgs,
-    MarketOrderArgs,
+    PostOrdersV2Args,
 )
 from src.utils.logger import log, log_error
+from src.config.settings import PAPER_TRADING
+from src import paper
 from .client import client, _ensure_api_creds
 from .constants import BUY
 from .utils import (
@@ -47,11 +49,16 @@ def place_limit_order(
         _ensure_api_creds(client)
         # Use truncate_float to ensure we don't round up and exceed balance
         truncated_size = truncate_float(size, 2)
-        oa = OrderArgs(token_id=token_id, price=price, size=truncated_size, side=side)
-        if otype == OrderType.GTD and expiration:
-            oa.expiration = expiration
-        signed = client.create_order(oa)
-        return client.post_order(signed, otype)  # type: ignore
+        oa = OrderArgs(
+            token_id=token_id,
+            price=price,
+            size=truncated_size,
+            side=side,
+            expiration=expiration if (otype == OrderType.GTD and expiration) else 0,
+        )
+        if PAPER_TRADING:
+            return paper.place_order(token_id, price, truncated_size, side, order_type.upper(), post_only=False)
+        return client.create_and_post_order(oa, order_type=otype)  # type: ignore
 
     try:
         resp: Any = _execute_with_retry(_place)
@@ -86,6 +93,12 @@ def place_limit_order(
             "order_id": oid,
             "error": emsg,
         }
+
+
+def _paper_market(token_id: str, shares: float, side: str, order_type: str) -> dict:
+    """Paper market order: marketable limit through the whole book (FOK default / FAK)."""
+    price = 0.99 if side.upper() == "BUY" else 0.01
+    return paper.place_order(token_id, price, shares, side, order_type.upper() if order_type.upper() == "FAK" else "FOK")
 
 
 def place_order(token_id: str, price: float, size: float) -> dict:
@@ -141,8 +154,9 @@ def place_market_order(
             price=0,  # Market order - no price limit
             order_type=otype,
         )
-        signed = client.create_market_order(moa)
-        return client.post_order(signed, otype)  # type: ignore
+        if PAPER_TRADING:
+            return _paper_market(token_id, truncated_size, side, order_type)
+        return client.create_and_post_market_order(moa, order_type=otype)  # type: ignore
 
     try:
         resp: Any = _execute_with_retry(_place)
@@ -210,6 +224,21 @@ def place_batch_orders(
         validated.append(op)
     if not validated:
         return results
+    if PAPER_TRADING:
+        for op in validated:
+            r = paper.place_order(
+                op["token_id"], op["price"], op["size"], op.get("side", BUY),
+                order_type.upper(), post_only=bool(op.get("post_only", False)),
+            )
+            results.append(
+                {
+                    "success": bool(r.get("success")),
+                    "status": r.get("status", "UNKNOWN"),
+                    "order_id": r.get("orderID"),
+                    "error": r.get("errorMsg", ""),  # "" when none, like the real response
+                }
+            )
+        return results
     try:
         _ensure_api_creds(client)
 
@@ -222,7 +251,9 @@ def place_batch_orders(
         }
         otype = otype_map.get(order_type, OrderType.GTC)
 
-        batch = []
+        # CLOB V2 takes `post_only` per post_orders() call (not per order), so
+        # post each group separately and restore the original order afterwards.
+        signed_orders = []
         for op in validated:
             oa = OrderArgs(
                 token_id=op["token_id"],
@@ -230,13 +261,26 @@ def place_batch_orders(
                 size=op["size"],
                 side=op.get("side", BUY),
             )
-            signed = client.create_order(oa)
-            # Add postOnly flag for maker orders (earns rebate, ensures whole number fills)
-            post_only = op.get("post_only", False)
-            batch.append(
-                PostOrdersArgs(order=signed, orderType=otype, postOnly=post_only)
-            )  # type: ignore
-        responses: Any = client.post_orders(batch)
+            signed_orders.append(client.create_order(oa))
+
+        responses: List[Any] = [None] * len(validated)
+        for post_only in (True, False):
+            idxs = [
+                i
+                for i, op in enumerate(validated)
+                if bool(op.get("post_only", False)) == post_only
+            ]
+            if not idxs:
+                continue
+            # Maker (post_only) orders earn the rebate and never cross the book
+            group = [
+                PostOrdersV2Args(order=signed_orders[i], orderType=otype) for i in idxs
+            ]
+            group_resp: Any = client.post_orders(group, post_only=post_only)
+            if not isinstance(group_resp, list):
+                group_resp = [group_resp] * len(idxs)
+            for i, r in zip(idxs, group_resp):
+                responses[i] = r
         for r in responses:
             if isinstance(r, dict):
                 results.append(
