@@ -186,7 +186,7 @@ class Dashboard:
                 pnl_pct = (mid / p.entry_price - 1) if p.entry_price else None
                 total_pnl += pnl
                 priced += 1
-            exposure += p.bet_usd
+            exposure += p.size * (p.entry_price + p.hedge_price) if p.is_hedged and p.hedge_price else p.bet_usd
             left = (p.window_end - now).total_seconds() if p.window_end else None
             tags = ("⇄" if p.is_reversal else "") + ("+" if p.scaled_in else "")
             cells = [
@@ -211,8 +211,10 @@ class Dashboard:
             else "No open positions"
         )
         body = table if positions else Align.center(Text("\n" + empty, style=DIM))
+        cash = self.snap.paper_cash if self.snap.paper_cash is not None else self.feed.balance
+        pct_txt = f" ({exposure / (cash + exposure) * 100:.0f}% of equity)" if cash is not None and cash + exposure > 0 else ""
         subtitle = Text.assemble(
-            (f"exposure ${exposure:,.2f}", DIM), ("  unrealized/locked ", DIM), money(total_pnl if priced else None)
+            (f"exposure ${exposure:,.2f}{pct_txt}", DIM), ("  unrealized/locked ", DIM), money(total_pnl if priced else None)
         )
         return Panel(body, title=f"[bold]Open positions[/] ({len(positions)})", subtitle=subtitle,
                      box=box.ROUNDED, border_style=GREEN if positions else DIM)

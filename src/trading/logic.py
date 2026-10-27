@@ -220,6 +220,14 @@ def _calculate_bet_size(
         # Simple: BET_PERCENT of balance = dollar allocation
         allocation_usd = balance * (BET_PERCENT / 100.0)
 
+    # Exposure cap for this entry (set by the entry worker from the live portfolio state)
+    from src.trading.exposure import allocation_cap
+
+    cap_usd = allocation_cap()
+    if cap_usd is not None and allocation_usd > cap_usd:
+        log(f"   🧱 Exposure cap: allocation ${allocation_usd:.2f} → ${cap_usd:.2f}")
+        allocation_usd = cap_usd
+
     # Simple: $1 = 1 share (ignore price)
     size = allocation_usd
 

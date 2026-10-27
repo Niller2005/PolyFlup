@@ -94,14 +94,16 @@ def get_git_commit_info() -> str:
         return "unknown"
 
 
+MIN_ENTRY_USD = 5.0  # 5-share minimum at ~$1/share
 _entry_threads: dict = {}
 _entry_lock = threading.Lock()
 
 
-def _entry_worker(symbol: str, balance: float, verbose: bool) -> None:
+def _entry_worker(symbol: str, balance: float, allocation: float, verbose: bool) -> None:
     from src.trading import inflight
+    from src.trading.exposure import set_allocation_cap
 
-    inflight.mark(symbol)
+    set_allocation_cap(allocation)  # sizing code never exceeds what was reserved at launch
     try:
         trade_id = execute_first_entry(symbol, balance, verbose=verbose)
         if trade_id:
@@ -120,36 +122,37 @@ def launch_entries(symbols: list, balance: float, verbose: bool = True) -> int:
     30s on 5m windows) never blocks position monitoring, notifications, settlement or
     the other markets.
 
-    Each market uses BET_PERCENT of `balance` as a FIXED allocation. Funds reserved by
-    entries still in flight are subtracted from the wallet balance before launching
-    another one. A market with an entry already in flight is skipped.
+    `balance` is wallet cash. Each entry gets BET_PERCENT of the cash NOT already committed
+    (so entries shrink as cash is used) and is clipped so total exposure (open positions +
+    entries in flight) stays under MAX_EXPOSURE_PERCENT of equity. See trading/exposure.py.
+    A market with an entry already in flight is skipped.
     """
-    from src.trading.orders import get_balance_allowance
+    from src.trading import inflight
+    from src.trading.exposure import sizing_state
 
-    from src.config.settings import KELLY_MAX_FRACTION, KELLY_SIZING
-
-    # Kelly stakes never exceed KELLY_MAX_FRACTION, so that is what an in-flight entry reserves
-    allocation = balance * (KELLY_MAX_FRACTION if KELLY_SIZING else BET_PERCENT / 100.0)
     launched = 0
     for symbol in symbols:
         with _entry_lock:
             running = [s for s, t in _entry_threads.items() if t.is_alive()]
             if symbol in running:
                 continue
-            bal_info = get_balance_allowance()
-            wallet = bal_info.get("balance", 0) if bal_info else 0
-            available = wallet - allocation * len(running)
-            if available < allocation:
-                log(
-                    f"⏭️  [{symbol}] SKIPPED: insufficient free balance (${available:.2f} < ${allocation:.2f}; {len(running)} entr{'y' if len(running) == 1 else 'ies'} in flight)"
+            st = sizing_state(balance)
+            if st["allocation"] < MIN_ENTRY_USD:
+                why = (
+                    f"exposure cap reached ({st['exposure_pct']:.0f}% of ${st['equity']:.2f} equity, headroom ${st['headroom']:.2f})"
+                    if st["headroom"] < MIN_ENTRY_USD
+                    else f"insufficient free cash (${st['available']:.2f} available)"
                 )
+                log(f"⏭️  [{symbol}] SKIPPED: {why}")
                 break
             log(
-                f"🎯 [{symbol}] Launching entry with ${allocation:.2f} allocation (free: ${available:.2f})"
+                f"🎯 [{symbol}] Launching entry with ${st['allocation']:.2f} | cash ${st['available']:.2f} free, "
+                f"exposure {st['exposure_pct']:.0f}% (cap {st['cap'] / st['equity'] * 100:.0f}%)"
             )
+            inflight.mark(symbol, st["allocation"])  # reserve before the next market is sized
             thread = threading.Thread(
                 target=_entry_worker,
-                args=(symbol, balance, verbose),
+                args=(symbol, st["available"], st["allocation"], verbose),
                 name=f"Entry-{symbol}",
                 daemon=True,
             )

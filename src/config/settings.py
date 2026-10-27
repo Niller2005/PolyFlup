@@ -55,6 +55,14 @@ MAKER_PAIR_IMPROVE_TICKS = int(
     os.getenv("MAKER_PAIR_IMPROVE_TICKS", "0")
 )  # Ticks above best bid to quote (0 = join the queue, more = faster fills, less edge)
 
+# Exposure-aware sizing
+MAX_EXPOSURE_PERCENT = float(
+    os.getenv("MAX_EXPOSURE_PERCENT", "50")
+)  # Open positions + in-flight entries may not exceed this % of equity (cash + exposure)
+SIZE_FROM_AVAILABLE_CASH = (
+    os.getenv("SIZE_FROM_AVAILABLE_CASH", "YES").upper() == "YES"
+)  # BET_PERCENT applies to cash not already committed, so entries shrink as cash is used
+
 # Kelly position sizing (replaces flat BET_PERCENT when KELLY_SIZING=YES)
 KELLY_SIZING = os.getenv("KELLY_SIZING", "NO").upper() == "YES"
 KELLY_FRACTION = float(os.getenv("KELLY_FRACTION", "0.25"))  # quarter Kelly: estimates are noisy

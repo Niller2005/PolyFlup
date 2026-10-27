@@ -6,22 +6,28 @@ treat those fills as untracked positions and adopt them.
 """
 
 import threading
-from typing import Set
+from typing import Dict, Set
 
-_active: Set[str] = set()
+_active: Dict[str, float] = {}  # symbol -> cash reserved for the entry
 _lock = threading.Lock()
 
 
-def mark(symbol: str) -> None:
+def mark(symbol: str, reserved_usd: float = 0.0) -> None:
     with _lock:
-        _active.add(symbol)
+        _active[symbol] = reserved_usd
 
 
 def clear(symbol: str) -> None:
     with _lock:
-        _active.discard(symbol)
+        _active.pop(symbol, None)
 
 
 def entries_in_flight() -> Set[str]:
     with _lock:
         return set(_active)
+
+
+def reserved_usd() -> float:
+    """Cash earmarked by entries that have not filled yet (still in the wallet)."""
+    with _lock:
+        return sum(_active.values())
