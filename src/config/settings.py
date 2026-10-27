@@ -55,6 +55,10 @@ MAKER_PAIR_IMPROVE_TICKS = int(
     os.getenv("MAKER_PAIR_IMPROVE_TICKS", "0")
 )  # Ticks above best bid to quote (0 = join the queue, more = faster fills, less edge)
 
+# Risk profile applied at startup: conservative | balanced | aggressive | custom (= the values in this file).
+# Switch live from the TUI (keys 1/2/3/0); see src/profiles.py
+RISK_PROFILE = os.getenv("RISK_PROFILE", "custom").lower()
+
 # Exposure-aware sizing
 MAX_EXPOSURE_PERCENT = float(
     os.getenv("MAX_EXPOSURE_PERCENT", "50")

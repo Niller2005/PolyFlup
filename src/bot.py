@@ -177,6 +177,9 @@ def main():
 
     setup_api_creds()
     init_database()
+    from src import risk_runtime
+
+    risk_runtime.init()
     if PAPER_TRADING:
         from src import paper
 
@@ -250,6 +253,7 @@ def main():
     start_late_window_monitor()
 
     last_position_check = time.time()
+    last_profile_poll = 0.0
     last_order_check = time.time()
     last_verbose_log = time.time()
     last_entry_check = 0
@@ -291,6 +295,13 @@ def main():
             # Health check: Verify monitor is running properly
             if now_ts % 30 < 1:  # Check every 30 seconds
                 check_monitor_health()
+
+            if now_ts - last_profile_poll >= 2:
+                last_profile_poll = now_ts
+                try:
+                    risk_runtime.poll()
+                except Exception as e:
+                    log_error(f"Risk profile poll failed: {e}")
 
             if now_ts - last_position_check >= 1:
                 check_open_positions(

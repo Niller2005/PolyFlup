@@ -68,6 +68,8 @@ cd ui && npm run dev    # Start dashboard development server
 
 14. **Kelly sizing** (`KELLY_SIZING=YES`): use `kelly_binary` / `pair_kelly_fraction` / `scaled_kelly` from `edge.py`; always fractional and capped; never round a Kelly stake up to the 5-share minimum.
 
+15. **Risk profiles**: values listed in `src/profiles.py` can change at runtime. New profile-controlled settings must be read from `src.config.settings` at call time or be added to `profiles.KEYS` so `risk_runtime` can rebind them; do not cache them in your own module-level copies.
+
 ## Glossary (v0.6.0+)
 
 - **Atomic Hedging**: Simultaneous entry+hedge pair placement via batch API (primary risk management).

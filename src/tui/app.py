@@ -18,6 +18,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from src import profiles
 from src.tui.data import (
     ClosedTrade,
     LiveFeed,
@@ -131,6 +132,7 @@ class Dashboard:
             windows.append(f"{minutes}m ", style=DIM)
             windows.append_text(fmt_left((current_window_end(minutes, now_et) - now_et).total_seconds()))
         bal = self.feed.balance
+        profile = self.profile_text()
         paper = self.snap.paper_cash is not None
         if paper:
             bal = self.snap.paper_cash
@@ -149,10 +151,23 @@ class Dashboard:
                 windows,
                 ("   paper cash " if paper else "   balance ", DIM),
                 (f"{bal:,.2f} pUSD" if bal is not None else "—", "bold"),
+                ("   ", ""),
+                profile,
             ),
             Text.assemble(status, ("  ", ""), (datetime.now(timezone.utc).strftime("%H:%M:%S UTC"), DIM)),
         )
         return Panel(grid, box=box.ROUNDED, border_style=CYAN, padding=(0, 1))
+
+    def profile_text(self) -> Text:
+        want = profiles.normalize(self.snap.profile) if self.snap.profile else None
+        applied = self.snap.profile_applied
+        if want is None:
+            return Text("profile —", style=DIM)
+        colour = {"conservative": GREEN, "balanced": CYAN, "aggressive": RED}.get(want, YELLOW)
+        t = Text.assemble(("profile ", DIM), (want.upper(), f"bold {colour}"))
+        if applied != want:
+            t.append(" (pending: bot applies within 2s)", style=YELLOW)
+        return t
 
     def positions(self) -> Panel:
         positions: List[OpenPosition] = self.snap.open_positions
@@ -216,7 +231,7 @@ class Dashboard:
         subtitle = Text.assemble(
             (f"exposure ${exposure:,.2f}{pct_txt}", DIM), ("  unrealized/locked ", DIM), money(total_pnl if priced else None)
         )
-        return Panel(body, title=f"[bold]Open positions[/] ({len(positions)})", subtitle=subtitle,
+        return Panel(body, title=f"[bold]Open positions[/] ({len(positions)})" + ("" if self.compact or not self.snap.profile else f" [dim]· {profiles.describe(profiles.normalize(self.snap.profile))}[/]"), subtitle=subtitle,
                      box=box.ROUNDED, border_style=GREEN if positions else DIM)
 
     def stats(self) -> Panel:
@@ -335,7 +350,8 @@ class Dashboard:
         state = Text(" PAUSED ", style="black on yellow1") if self.paused else Text("")
         return Text.assemble(
             (" q", f"bold {CYAN}"), (" quit  ", DIM), ("r", f"bold {CYAN}"), (" refresh  ", DIM),
-            ("p", f"bold {CYAN}"), (" pause  ", DIM), (f"│ db {self.db_path.name} @ {loaded}  │ every {self.refresh:g}s ", DIM), state,
+            ("p", f"bold {CYAN}"), (" pause  ", DIM),
+            ("1", f"bold {GREEN}"), (" cons ", DIM), ("2", f"bold {CYAN}"), (" bal ", DIM), ("3", f"bold {RED}"), (" aggr ", DIM), ("0", f"bold {YELLOW}"), (" custom  ", DIM), (f"│ db {self.db_path.name} @ {loaded}  │ every {self.refresh:g}s ", DIM), state,
         )
 
     # ---- layout -----------------------------------------------------------
@@ -411,6 +427,12 @@ def run(db_path: Path, log_path: Path, refresh: float = 1.0, once: bool = False,
             force.set()
         elif k == "p":
             dash.paused = not dash.paused
+        elif k in profiles.HOTKEYS:
+            try:
+                profiles.request_profile(str(dash.db_path), profiles.HOTKEYS[k])
+                force.set()
+            except Exception as e:  # DB busy/readonly: keep the dashboard alive
+                dash.snap.note = f"Could not switch profile: {e}"
 
     feed.start()
     threading.Thread(target=_keys, args=(on_key, stop), daemon=True).start()

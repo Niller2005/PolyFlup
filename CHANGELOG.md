@@ -19,6 +19,7 @@ and this project uses semantic versioning.
 - **Data API v2**: Position sync and settlement audit use `GET /v2/positions` (cursor pagination, snake_case rows); v1 routes retired 2026-10-24. `get_trades_for_user` removed (unused).
 
 ### Added
+- **Risk profiles** (`conservative`, `balanced`, `aggressive`, `custom`): bundles of 14 risk settings switchable live from the TUI (keys `1/2/3/0`); the bot polls `bot_state` every 2s and rebinds the settings across loaded modules without a restart. `RISK_PROFILE` sets the startup profile; `custom` keeps `.env` values. See `docs/RISK_PROFILES.md`.
 - **Cash- and exposure-aware sizing** (`src/trading/exposure.py`): each entry gets `BET_PERCENT` of cash not already committed (wallet cash minus entries in flight) and is clipped so open positions (entry + hedge cost) plus in-flight entries stay under `MAX_EXPOSURE_PERCENT` of equity. Entries are skipped with the reason when the cap or cash is exhausted; the TUI shows exposure as a % of equity.
 - **Trailing second leg**: when one leg of a maker pair fills first, the other leg is re-quoted every poll at the best bid (escalating up to `TRAIL_MAX_TICKS` ticks over time), never above `1 − filled − MIN_NET_EDGE`, so the lock only improves or stays ≥ `MIN_NET_EDGE` (`ENABLE_TRAILING`). Works for either leg; the saved trade uses the final fill prices.
 - `POLYFLUP_DB_NAME`: run an isolated instance (own DB, log and lock file) next to another one.

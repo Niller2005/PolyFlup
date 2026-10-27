@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from src import profiles
 from src.markets import DEFAULT_MINUTES, window_bounds, window_minutes
 
 CLOB_HOST = "https://clob.polymarket.com"
@@ -131,6 +132,8 @@ class Snapshot:
     paper_start: Optional[float] = None
     paper_orders: List[PaperOrder] = field(default_factory=list)
     paper_holdings: List[PaperHolding] = field(default_factory=list)
+    profile: Optional[str] = None  # requested by the user
+    profile_applied: Optional[str] = None  # what the running bot has applied
     note: Optional[str] = None  # non-fatal status, e.g. waiting for the bot to create tables
     error: Optional[str] = None
 
@@ -227,6 +230,8 @@ def load_snapshot(db_path: Path, recent_limit: int = 12, curve_len: int = 40) ->
     try:
         snap = Snapshot()
         _load_paper(conn, snap)
+        snap.profile = profiles.get(conn, "risk_profile")
+        snap.profile_applied = profiles.get(conn, "risk_profile_applied")
         has_trades = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='trades'"
         ).fetchone()
