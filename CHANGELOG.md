@@ -11,6 +11,24 @@ and this project uses semantic versioning.
 
 ---
 
+## [0.8.1] - 2026-10-28
+
+### Fixed (confidence calculation, `src/trading/strategy.py`)
+- **Bayesian evidence had the wrong sign for weak signals**: `(score - 0.5) * 2` made any signal scoring below 0.5 evidence *against* its own direction (e.g. 52% buy pressure became a strong vote for DOWN). A weak signal is now weak evidence, never negative. On live markets the old Bayesian confidence was often 0.4-0.7 where the corrected one is 0.01-0.2, and a few biases flipped. **Bayesian confidences/biases recorded before this version (trades, `evaluations`, the 77% hit rate seen in the calibration check) are not comparable.** Roughly half of all entries used the Bayesian value (random A/B).
+- **The A/B selection bypassed the safeguards**: entry code takes `raw_scores["additive_confidence"|"bayesian_confidence"]`, which were the values *before* multi-confirmation, the 85% cap and price validation. Both are now final values; the pre-processing ones are `additive_raw` / `bayesian_raw`.
+- **NaN / None / inf from a data source** could become *maximum* confidence (`min(1.0, nan)` is 1.0). All inputs are sanitised and clamped; non-finite results are 0.
+- **Failing data source**: an exception in any of the six sources aborted the whole evaluation. Each source is now fetched defensively; 1-2 missing sources scale confidence by 15% each, 3+ = NEUTRAL (`reason: insufficient_data`); `raw_scores["missing_sources"]` is recorded.
+- **Order book parsing** relied on `bids[-1]`/`asks[-1]` being the best level (worst-first V2 order); it now uses max/min over valid prices. Empty, crossed or locked books are NEUTRAL.
+- **Price validation ran twice** (duplicate block) plus a third time in `logic.py` with hardcoded thresholds that ignored `ENABLE_PRICE_VALIDATION`; it now runs once per method in `calculate_confidence` and the entry gate uses the settings.
+- **Momentum quality** had unreachable branches and was asymmetric; flow quality treated 70%+ buying (1.3) and 30%- buying (1.2) differently; flow/VWM direction at exactly 0.5 / 0 was DOWN instead of NEUTRAL; the momentum acceleration boost could push a score above 1. All fixed/symmetric, scores are in [0, 1].
+- The combination is now a pure, unit-tested function (`score_signals`); `test_confidence.py` covers sign, NaN, mirror symmetry, caps, order-independence and degraded sources.
+- Market websocket: with all ten markets subscribed the server sometimes closed the connection (`1013 slow consumer`) because the client read queue was only 16 messages; it is now 10000 and `book` messages only seed a token's top of book. A reconnect (5s) still happens occasionally under load (one in a 280s run), data continues afterwards.
+- New in `raw_scores`: `bayesian_evidence` (signal-only log-odds, excluding the market prior), `missing_sources`.
+- Additive confidence is unchanged except for the quality/direction fixes above (live check: identical on 4 of 8 markets, +0.01-0.05 on the others).
+
+---
+---
+
 ## [0.8.0] - 2026-10-28
 
 ### Added

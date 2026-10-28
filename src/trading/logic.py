@@ -325,14 +325,21 @@ def _prepare_trade_params(
     if isinstance(signals, dict):
         current_spot = float(signals.get("current_spot", 0))
 
-    # Price Movement Validation for High Confidence Trades
-    if confidence >= 0.75:  # Only validate high confidence trades
+    # Price Movement Validation for High Confidence Trades (same settings as in calculate_confidence;
+    # this is the hard block, the reduction already happened there)
+    from src.config.settings import (
+        ENABLE_PRICE_VALIDATION,
+        PRICE_VALIDATION_MAX_MOVEMENT,
+        PRICE_VALIDATION_MIN_CONFIDENCE,
+    )
+
+    if ENABLE_PRICE_VALIDATION and confidence >= PRICE_VALIDATION_MIN_CONFIDENCE:
         validation_result = validate_price_movement_for_trade(
             symbol=symbol,
             confidence=confidence,
             current_spot=current_spot,
-            max_movement_threshold=20.0,
-            min_confidence_threshold=0.75,
+            max_movement_threshold=PRICE_VALIDATION_MAX_MOVEMENT,
+            min_confidence_threshold=PRICE_VALIDATION_MIN_CONFIDENCE,
         )
 
         if not validation_result["valid"]:

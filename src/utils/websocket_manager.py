@@ -112,8 +112,8 @@ class WebSocketManager:
         while self._running:
             try:
                 async with websockets.connect(
-                    url, ping_interval=10, ping_timeout=10
-                ) as ws:
+                    url, ping_interval=10, ping_timeout=10, max_queue=10000
+                ) as ws:  # default queue (16 msgs) -> server closes with 1013 'slow consumer' under load
                     # Phase 3A (B2): Track successful connection
                     with self._metrics_lock:
                         self.health_metrics["market_connection"]["status"] = "connected"
@@ -175,8 +175,8 @@ class WebSocketManager:
                     continue
 
                 async with websockets.connect(
-                    url, ping_interval=10, ping_timeout=10
-                ) as ws:
+                    url, ping_interval=10, ping_timeout=10, max_queue=10000
+                ) as ws:  # default queue (16 msgs) -> server closes with 1013 'slow consumer' under load
                     # Phase 3A (B2): Track successful connection
                     with self._metrics_lock:
                         self.health_metrics["user_connection"]["status"] = "connected"
@@ -318,7 +318,7 @@ class WebSocketManager:
                 if not asset_id:
                     return
 
-                if event_type == "book":
+                if event_type == "book" and str(asset_id) not in self.bids:  # only seeds the top; best_bid_ask keeps it fresh
                     try:
                         bids = [float(x["price"]) for x in data.get("bids") or []]
                         asks = [float(x["price"]) for x in data.get("asks") or []]
