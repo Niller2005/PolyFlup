@@ -340,7 +340,17 @@ def match_resting() -> int:
             if token_id not in books:
                 try:
                     books[token_id] = _book(token_id)
-                except Exception:
+                except Exception as e:
+                    # a resolved/expired market has no book any more: its resting orders can never fill, and
+                    # polling it every cycle only produces 404s. (Transient errors keep the order alive.)
+                    if "no orderbook" in str(e).lower() or "404" in str(e):
+                        with db_connection() as conn:
+                            conn.execute(
+                                "UPDATE paper_orders SET status='CANCELED', updated_at=? WHERE token_id=? AND status='LIVE'",
+                                (_now(), token_id),
+                            )
+                        log(f"   🧹 PAPER: market of {token_id[:10]}… has no order book (ended) - resting orders cancelled")
+                        books[token_id] = ([], [])
                     continue
             bids, asks = books[token_id]
             bid = bids[0][0] if bids else None
@@ -414,6 +424,10 @@ def start(match_interval: float = 2.0, settle_interval: float = 30.0) -> None:
         return
     _started = True
     init()
+    # orders left LIVE by a previous process (restart/crash) belong to attempts nobody monitors any more
+    stale = cancel_all()
+    if stale:
+        log(f"   🧹 PAPER: cancelled {len(stale)} resting order(s) left over from a previous run")
 
     def loop():
         last_settle = 0.0

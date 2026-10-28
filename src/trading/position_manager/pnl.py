@@ -4,7 +4,7 @@ from typing import Optional, Dict
 from src.trading.orders import get_clob_client, get_midpoint
 from src.utils.websocket_manager import ws_manager
 
-def _get_position_pnl(token_id: str, entry_price: float, size: float, cached_prices: Optional[Dict[str, float]] = None) -> Optional[dict]:
+def _get_position_pnl(token_id: str, entry_price: float, size: float, cached_prices: Optional[Dict[str, float]] = None, allow_rest: bool = True) -> Optional[dict]:
     """Get current market price and calculate P&L"""
     current_price = None
     if cached_prices and str(token_id) in cached_prices:
@@ -13,6 +13,9 @@ def _get_position_pnl(token_id: str, entry_price: float, size: float, cached_pri
     if current_price is None:
         current_price = ws_manager.get_price(token_id)
     
+    if current_price is None and not allow_rest:
+        return None  # window ended: the market has no order book any more (REST would 404 every second)
+
     if current_price is None:
         current_price = get_midpoint(token_id)
 

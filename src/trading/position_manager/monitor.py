@@ -134,7 +134,12 @@ def check_open_positions(verbose=True, check_orders=False, user_address=None):
                     continue
 
                 # Get PnL info
-                pnl_i = _get_position_pnl(tok, entry, size, cached_prices)
+                try:
+                    _w = datetime.fromisoformat(w_end) if isinstance(w_end, str) else w_end
+                    _ended = _w is not None and _w < now
+                except Exception:
+                    _ended = False
+                pnl_i = _get_position_pnl(tok, entry, size, cached_prices, allow_rest=not _ended)
                 if not pnl_i:
                     # Increment failure counter
                     _failed_pnl_checks[tid] = _failed_pnl_checks.get(tid, 0) + 1

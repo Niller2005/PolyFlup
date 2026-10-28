@@ -48,6 +48,7 @@ from src.trading.execution import emergency_sell_position
 
 # Track already processed trades to avoid duplicate exits
 _processed_trade_ids = set()
+_logged_no_confidence = set()
 
 
 def _get_token_price_from_api(token_id: str, symbol: str) -> Optional[float]:
@@ -362,9 +363,11 @@ def check_pre_settlement_exits():
                 # Log position details
                 hedge_label = "🛡️ HEDGED" if is_hedged else "⚠️  UNHEDGED"
                 conf_label = f"{confidence:.1%}" if confidence else "N/A"
-                log(
-                    f"   📊 [{symbol}] #{trade_id} {hedge_label} | {winning_side} @ ${entry_price:.2f} | Confidence: {conf_label} | T-{int(seconds_left)}s"
-                )
+                if conf_label != "N/A" or trade_id not in _logged_no_confidence:  # adopted/held legs have none: say it once
+                    _logged_no_confidence.add(trade_id)
+                    log(
+                        f"   📊 [{symbol}] #{trade_id} {hedge_label} | {winning_side} @ ${entry_price:.2f} | Confidence: {conf_label} | T-{int(seconds_left)}s"
+                    )
 
                 # For hedged positions, we don't need confidence check
                 # We KNOW one side will lose, so always try to exit the losing side

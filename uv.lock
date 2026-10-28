@@ -1821,7 +1821,7 @@ wheels = [
 
 [[package]]
 name = "polyflup"
-version = "0.8.2"
+version = "0.8.3"
 source = { virtual = "." }
 dependencies = [
     { name = "eth-account" },

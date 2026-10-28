@@ -11,6 +11,16 @@ and this project uses semantic versioning.
 
 ---
 
+## [0.8.3] - 2026-10-28
+
+### Fixed
+- **Main source of the `/book` 404 spam (paper)**: resting paper orders left LIVE by an earlier run (restart/crash) were matched against their book every 2s forever. They are now cancelled at start (nothing monitors them any more) and whenever their market's book no longer exists (404); transient errors keep them alive.
+- **`/book` 404 "No orderbook exists" spam**: once a window ends its market has no order book, but the position monitor (1s loop) and the new recorders kept asking REST for it. The monitor now uses cached prices only for positions whose window has ended; `position_marks` and the post-attempt ticks skip ended windows and read the websocket cache only (REST fallback only for a live attempt's own ticks).
+- `Confidence: N/A` for adopted / held-to-resolution legs (they have no stored confidence) was logged every 5s per position; now once per trade.
+
+---
+---
+
 ## [0.8.2] - 2026-10-28
 
 See `docs/ANALYSIS_2026-10-28.md` (5 hours, 10 markets, 660 attempts, 420 resolved windows).

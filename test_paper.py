@@ -131,6 +131,36 @@ def test_fmt_num_handles_missing_values():
     assert fmt_num(None) == "n/a" and fmt_num(0.0123) == "0.012" and fmt_num(14.26, 1) == "14.3"
 
 
+def test_resting_orders_of_an_ended_market_are_cancelled_not_polled_forever():
+    fresh()
+    r = paper.place_order(TOKEN, 0.40, 10.0, "BUY", "GTC", post_only=True)
+    assert r["success"] and len(paper.open_orders()) == 1
+    calls = []
+
+    def gone(token):
+        calls.append(token)
+        raise RuntimeError('status=404 body={"error":"No orderbook exists for the requested token id"}')
+
+    paper._book = gone
+    paper.match_resting()
+    assert paper.open_orders() == [] and paper.cash_balance() == 1000.0  # cancelled, cash released
+    n = len(calls)
+    paper.match_resting()
+    assert len(calls) == n  # nothing left to poll
+
+
+def test_transient_book_errors_keep_the_order_alive():
+    fresh()
+    paper.place_order(TOKEN, 0.40, 10.0, "BUY", "GTC", post_only=True)
+
+    def flaky(token):
+        raise RuntimeError("connection reset")
+
+    paper._book = flaky
+    paper.match_resting()
+    assert len(paper.open_orders()) == 1
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

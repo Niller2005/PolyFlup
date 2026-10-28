@@ -181,8 +181,8 @@ def tick(t_s: float, phase: str = "wait", entry_filled: float = 0.0, hedge_fille
     if not a or not a.get("tokens"):
         return
     e_tok, h_tok = a["tokens"]
-    eb, ea = _top(e_tok)
-    hb, ha = _top(h_tok)
+    eb, ea = _top(e_tok, rest=True)  # attempt is live: its market has a book
+    hb, ha = _top(h_tok, rest=True)
     _safe(
         lambda conn: conn.execute(
             "INSERT INTO attempt_ticks (attempt_id, ts, t_s, phase, entry_bid, entry_ask, hedge_bid, hedge_ask, entry_filled, hedge_filled, spot) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -191,15 +191,36 @@ def tick(t_s: float, phase: str = "wait", entry_filled: float = 0.0, hedge_fille
     )
 
 
-def _top(token_id: str):
-    """(bid, ask): websocket cache, else the CLOB book (the cache is empty for tokens we never subscribed)."""
+def _top(token_id: str, rest: bool = False):
+    """(bid, ask) from the websocket cache; only with rest=True fall back to the CLOB book.
+
+    A resolved/expired market has no order book (404 "No orderbook exists"), so anything that looks at old
+    markets - position marks, post-attempt ticks - must stay on the cache and never poll REST.
+    """
     try:
+        from src.utils.websocket_manager import ws_manager
+
+        b, a = ws_manager.get_bid_ask(str(token_id))
+        if (b and a) or not rest:
+            return b, a
         from src.trading.execution import _book_top
 
-        b, a = _book_top(token_id)
-        return b, a
+        return _book_top(token_id)
     except Exception:
         return None, None
+
+
+def _window_over(slug) -> bool:
+    """True once the market window of `slug` has ended (its book is gone)."""
+    try:
+        import time as _t
+
+        from src.markets import parse_slug
+
+        p = parse_slug(slug)
+        return bool(p) and p[2].timestamp() < _t.time()
+    except Exception:
+        return False
 
 
 def _spot(symbol: str) -> Optional[float]:
@@ -301,15 +322,15 @@ def snapshot_positions(every: float = 30.0) -> int:
         n = 0
         held_value = 0.0
         # path after we stopped waiting: both legs of recent attempts, to see what the market did next
-        for aid, t0, e_tok, h_tok in conn.execute(
+        for aid, t0, e_tok, h_tok, a_slug in conn.execute(
             "SELECT a.id, a.ts, "
             "(SELECT token_id FROM order_events WHERE attempt_id=a.id AND event='place' ORDER BY id LIMIT 1), "
-            "(SELECT token_id FROM order_events WHERE attempt_id=a.id AND event='place' ORDER BY id LIMIT 1 OFFSET 1) "
+            "(SELECT token_id FROM order_events WHERE attempt_id=a.id AND event='place' ORDER BY id LIMIT 1 OFFSET 1), a.slug "
             "FROM pair_attempts a WHERE a.outcome IN ('timeout','both') AND a.winner_side IS NULL "
             "AND datetime(a.ts) > datetime('now', '-16 minutes')"
         ).fetchall():
-            if not e_tok or not h_tok:
-                continue
+            if not e_tok or not h_tok or _window_over(a_slug):
+                continue  # the book of an ended window no longer exists
             eb, ea = _top(e_tok)
             hb, ha = _top(h_tok)
             try:
@@ -321,6 +342,8 @@ def snapshot_positions(every: float = 30.0) -> int:
                 (aid, _now(), t_s, "after", eb, ea, hb, ha),
             )
         for tid, symbol, slug, side, tok, size, avg, win_end in rows:
+            if _window_over(slug):
+                continue  # waiting for redemption: no book to mark against
             bid, ask = _top(tok)
             if not bid and not ask:
                 continue

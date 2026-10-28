@@ -96,11 +96,31 @@ def test_snapshot_counts_a_token_once_even_if_it_is_in_trades_and_holdings():
     c.executemany("INSERT INTO paper_positions VALUES (?,?,?,?,?,?)", [("tUP", 10, 0.5, "s", "x", "Up"), ("tDN", 10, 0.49, "s", "x", "Down")])
     c.commit()
     c.close()
-    pair_log._top = lambda token: (0.4, 0.6)  # mid 0.5 for both legs
+    real_top, pair_log._top = pair_log._top, (lambda token, rest=False: (0.4, 0.6))  # mid 0.5 for both legs
     pair_log._last_mark = 0.0
-    assert pair_log.snapshot_positions(every=0.0) == 2
+    try:
+        assert pair_log.snapshot_positions(every=0.0) == 2
+    finally:
+        pair_log._top = real_top
     assert rows(path, "select count(*), count(distinct token_id) from position_marks") == [(2, 2)]
     assert rows(path, "select round(held,2), round(equity,2), open_legs from account_snapshots") == [(10.0, 910.0, 2)]
+
+
+def test_ended_markets_never_trigger_rest_book_calls():
+    import time
+
+    from src.trading.position_manager import pnl
+
+    calls = []
+    pnl.get_midpoint = lambda t: calls.append("mid")
+    pnl.get_clob_client = lambda: calls.append("book")
+    pnl.ws_manager.prices.pop("tok-ended", None)
+    assert pnl._get_position_pnl("tok-ended", 0.5, 10.0, {}, allow_rest=False) is None
+    assert calls == []  # no /midpoint and no /book (both 404 once a window has ended)
+    past, future = int(time.time()) - 3600, int(time.time()) + 3600
+    assert pair_log._window_over(f"btc-updown-5m-{past - past % 300}") is True
+    assert pair_log._window_over(f"btc-updown-5m-{future - future % 300}") is False
+    assert pair_log._top("never-subscribed") == (None, None)  # cache only: no REST fallback by default
 
 
 if __name__ == "__main__":
