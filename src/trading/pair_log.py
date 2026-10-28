@@ -26,6 +26,7 @@ _ATTEMPT_COLS = {
     "sell_price", "sell_size", "sell_fee", "realized_pnl", "winner_side", "filled_leg_won",
     "trade_id", "closed_at", "note", "entry_order_id", "hedge_order_id", "net_edge", "secs_into_window",
     "confidence", "p_up", "spot", "strike", "dist_pct", "entry_depth", "hedge_depth", "cash", "exposure",
+    "entry_book", "hedge_book", "other_book_at_first",
 }
 
 
@@ -115,6 +116,63 @@ def skipped(symbol: str, reason: str, **extra: Any) -> None:
             list(cols.values()),
         )
     )
+
+
+def book_json(token_id: str, depth: int = 5) -> Optional[str]:
+    """Top `depth` levels per side as compact JSON [[price, size], ...], best first."""
+    import json
+
+    try:
+        from src.trading.orders import get_clob_client
+
+        book = get_clob_client().get_order_book(token_id)
+
+        def levels(side, reverse):
+            out = [(float(x["price"]), float(x["size"])) for x in (book.get(side) or [])]
+            return [list(x) for x in sorted(out, reverse=reverse)[:depth]]
+
+        return json.dumps({"bids": levels("bids", True), "asks": levels("asks", False)}, separators=(",", ":"))
+    except Exception:
+        return None
+
+
+def evaluation(symbol: str, method: str, confidence, bias, p_up, best_bid, best_ask, signals, raw_scores) -> None:
+    """Record one strategy evaluation (every 20s per market, traded or not); finished by finish_evaluation."""
+    import json
+
+    from src.markets import slug_for, window_bounds
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    try:
+        now = datetime.now(tz=ZoneInfo("America/New_York"))
+        start, _ = window_bounds(symbol, now)
+        rs = raw_scores if isinstance(raw_scores, dict) else {}
+        row = (
+            _now(), symbol, slug_for(symbol), (now - start).total_seconds(), method, confidence, bias, p_up,
+            best_bid, best_ask, rs.get("additive_confidence"), rs.get("bayesian_confidence"),
+            json.dumps(signals, default=str, separators=(",", ":"))[:4000] if signals else None,
+            json.dumps(rs, default=str, separators=(",", ":"))[:4000] if rs else None, "evaluated",
+        )
+    except Exception as e:
+        log_error(f"pair_log evaluation: {e}")
+        return
+
+    def run(conn):
+        cur = conn.execute(
+            "INSERT INTO evaluations (ts, symbol, slug, secs_into_window, method, confidence, bias, p_up, best_bid, best_ask, additive_confidence, bayesian_confidence, signals, raw_scores, decision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            row,
+        )
+        return cur.lastrowid
+
+    _ctx.evaluation = _safe(run)
+
+
+def finish_evaluation(decision: str, trade_id: Optional[int] = None) -> None:
+    eid = getattr(_ctx, "evaluation", None)
+    _ctx.evaluation = None
+    if eid:
+        _safe(lambda conn: conn.execute("UPDATE evaluations SET decision=?, trade_id=? WHERE id=?", (decision, trade_id, eid)))
 
 
 def tick(t_s: float, phase: str = "wait", entry_filled: float = 0.0, hedge_filled: float = 0.0) -> None:
@@ -237,6 +295,7 @@ def snapshot_positions(every: float = 30.0) -> int:
         except Exception:
             pass  # not a paper database
         n = 0
+        held_value = 0.0
         # path after we stopped waiting: both legs of recent attempts, to see what the market did next
         for aid, t0, e_tok, h_tok in conn.execute(
             "SELECT a.id, a.ts, "
@@ -273,6 +332,18 @@ def snapshot_positions(every: float = 30.0) -> int:
                 (_now(), tid, symbol, slug, side, tok, size, avg, bid, ask, mid, left),
             )
             n += 1
+            held_value += size * (mid or avg or 0.0)
+        try:
+            row = conn.execute("SELECT cash, start_cash FROM paper_account WHERE id=1").fetchone()
+            if row:
+                import src.config.settings as cfg
+
+                conn.execute(
+                    "INSERT INTO account_snapshots (ts, cash, held, equity, start_cash, open_legs, profile) VALUES (?,?,?,?,?,?,?)",
+                    (_now(), row[0], held_value, row[0] + held_value, row[1], n, getattr(cfg, "RISK_PROFILE", None)),
+                )
+        except Exception:
+            pass  # real mode: no paper account
         return n
 
     return _safe(run) or 0

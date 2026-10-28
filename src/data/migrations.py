@@ -360,6 +360,46 @@ def migration_014_create_measurement_tables(conn: Any) -> None:
     log("    ✓ pair_attempts, order_events, attempt_ticks, position_marks ready")
 
 
+def migration_015_create_market_data_tables(conn: Any) -> None:
+    """Raw market data for offline research: ticks, trade tape, window results, evaluations, equity."""
+    c = conn.cursor()
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS market_ticks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, symbol TEXT, slug TEXT, secs_left REAL,
+            up_bid REAL, up_ask REAL, down_bid REAL, down_ask REAL, spot REAL, strike REAL)"""
+    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_market_ticks_slug ON market_ticks(slug, ts)")
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS market_trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, symbol TEXT, slug TEXT, token_id TEXT,
+            outcome TEXT, price REAL, size REAL, side TEXT)"""
+    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_market_trades_slug ON market_trades(slug, ts)")
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS market_windows (
+            slug TEXT PRIMARY KEY, symbol TEXT, start_ts TEXT, end_ts TEXT, strike REAL, final_spot REAL,
+            up_won INTEGER, recorded_at TEXT)"""
+    )
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS evaluations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, symbol TEXT, slug TEXT, secs_into_window REAL,
+            method TEXT, confidence REAL, bias TEXT, p_up REAL, best_bid REAL, best_ask REAL,
+            additive_confidence REAL, bayesian_confidence REAL, signals TEXT, raw_scores TEXT,
+            decision TEXT, trade_id INTEGER)"""
+    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_evaluations_slug ON evaluations(slug)")
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS account_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, cash REAL, held REAL, equity REAL,
+            start_cash REAL, open_legs INTEGER, profile TEXT)"""
+    )
+    cols = {r[1] for r in c.execute("PRAGMA table_info(pair_attempts)")}
+    for name in ("entry_book", "hedge_book", "other_book_at_first"):
+        if name not in cols:
+            c.execute(f"ALTER TABLE pair_attempts ADD COLUMN {name} TEXT")
+    log("    ✓ market_ticks, market_trades, market_windows, evaluations, account_snapshots ready")
+
+
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
     (2, "Verify timestamp column", migration_002_add_created_at_column),
@@ -418,6 +458,11 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
         14,
         "Create pair measurement tables (attempts, order events, ticks, position marks)",
         migration_014_create_measurement_tables,
+    ),
+    (
+        15,
+        "Create market data tables (ticks, trade tape, window results, evaluations, account snapshots)",
+        migration_015_create_market_data_tables,
     ),
 ]
 

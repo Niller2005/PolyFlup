@@ -106,6 +106,9 @@ def _entry_worker(symbol: str, balance: float, allocation: float, verbose: bool)
     set_allocation_cap(allocation)  # sizing code never exceeds what was reserved at launch
     try:
         trade_id = execute_first_entry(symbol, balance, verbose=verbose)
+        from src.trading import pair_log
+
+        pair_log.finish_evaluation("trade" if trade_id else "no_trade", trade_id or None)
         if trade_id:
             log(f"✅ [{symbol}] Trade #{trade_id} placed successfully")
         else:
@@ -218,6 +221,12 @@ def main():
 
     ws_manager.start()
     init_ws_callbacks()
+    try:
+        from src.data import market_recorder
+
+        market_recorder.start(MARKETS)
+    except Exception as e:
+        log_error(f"market recorder not started: {e}")
 
     # Clear any stale notifications from previous runs
     try:

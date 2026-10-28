@@ -1,6 +1,7 @@
 """WebSocket Manager for real-time Polymarket data"""
 
 import json
+from collections import deque
 import asyncio
 import threading
 import time
@@ -21,6 +22,7 @@ class WebSocketManager:
         # Base URL from settings: wss://ws-subscriptions-clob.polymarket.com
         self.wss_base_url = CLOB_WSS_HOST.rstrip("/")
         self.prices: Dict[str, float] = {}  # token_id -> midpoint_price
+        self.trade_tape: deque = deque(maxlen=20000)  # last_trade_price events, drained by the market recorder
         self.bids: Dict[str, float] = {}  # token_id -> best_bid
         self.asks: Dict[str, float] = {}  # token_id -> best_ask
         self.price_timestamps: Dict[
@@ -123,6 +125,7 @@ class WebSocketManager:
                         ] += 1
 
                     log(f"✅ WebSocket connected to Market Channel")
+                    self._market_initial_sent = False
                     if self.subscribed_tokens:
                         await self._subscribe_market(ws, self.subscribed_tokens)
 
@@ -229,7 +232,13 @@ class WebSocketManager:
         """Subscribe to market channel"""
         if not token_ids:
             return
-        msg = {"type": "market", "assets_ids": token_ids}
+        # custom_feature_enabled adds best_bid_ask events (top of book without parsing full books)
+        if getattr(self, "_market_initial_sent", False):
+            # a second {"type": "market"} message would replace the subscription: add instead
+            msg = {"assets_ids": token_ids, "operation": "subscribe", "custom_feature_enabled": True}
+        else:
+            msg = {"type": "market", "assets_ids": token_ids, "custom_feature_enabled": True}
+            self._market_initial_sent = True
         await ws.send(json.dumps(msg))
         log(f"📡 Subscribed to {len(token_ids)} tokens on Market Channel")
 
@@ -309,6 +318,18 @@ class WebSocketManager:
                 if not asset_id:
                     return
 
+                if event_type == "book":
+                    try:
+                        bids = [float(x["price"]) for x in data.get("bids") or []]
+                        asks = [float(x["price"]) for x in data.get("asks") or []]
+                        if bids and asks:
+                            self.bids[str(asset_id)] = max(bids)
+                            self.asks[str(asset_id)] = min(asks)
+                            self.prices[str(asset_id)] = (max(bids) + min(asks)) / 2.0
+                            self.price_timestamps[str(asset_id)] = time.time()
+                    except (KeyError, TypeError, ValueError):
+                        pass
+
                 if event_type == "best_bid_ask":
                     b, a = data.get("best_bid"), data.get("best_ask")
                     if b and a:
@@ -334,6 +355,12 @@ class WebSocketManager:
                 elif event_type == "last_trade_price":
                     p = data.get("price")
                     if p:
+                        try:
+                            self.trade_tape.append(
+                                (time.time(), str(asset_id), float(p), float(data.get("size") or 0), data.get("side"))
+                            )
+                        except (TypeError, ValueError):
+                            pass
                         self.prices[str(asset_id)] = float(p)
                         self.price_timestamps[str(asset_id)] = time.time()
 

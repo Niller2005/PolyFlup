@@ -9,6 +9,20 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+---
+
+## [0.7.6] - 2026-10-28
+
+### Added
+- **Raw market data recorder** (`src/data/market_recorder.py`, `MARKET_RECORD_INTERVAL=5`, migration 15), independent of trading:
+  - `market_ticks`: top of book of both tokens + spot/strike for every traded market every 5s.
+  - `market_trades`: the websocket trade tape (price, size, side) - needed to model queue fills and adverse selection.
+  - `market_windows`: the real result (strike, final spot, up_won) of every window, traded or not.
+  - `evaluations`: every strategy evaluation (every 20s per market) with confidence, bias, p_up, both methods and the full signal dictionaries, finished with `no_trade` / `trade`.
+  - `account_snapshots`: cash, held value, equity and open legs every 30s (paper).
+  - `pair_attempts.entry_book / hedge_book / other_book_at_first`: top-5 depth of both tokens at placement and of the other leg at first fill.
+- The market websocket now subscribes with `custom_feature_enabled` (best_bid_ask events), handles `book` events, and adds tokens with `operation: subscribe` instead of replacing the subscription - all traded markets now have cached books (fewer REST calls).
+
 ### Added
 - TUI: leg-outs (one leg filled, other timed out) appear in Recent trades as `L<id>` rows with their real result (`LEG-OUT sold`, or `LEG-OUT held ✓ won / ✗ lost` once resolved).
 

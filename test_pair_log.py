@@ -10,7 +10,7 @@ import tempfile
 os.environ.setdefault("PROXY_PK", "0x" + "1" * 64)
 
 import src.data.db_connection as dbc
-from src.data.migrations import migration_014_create_measurement_tables
+from src.data.migrations import migration_014_create_measurement_tables, migration_015_create_market_data_tables
 from src.trading import pair_log
 
 
@@ -19,6 +19,8 @@ def fresh():
     os.close(fd)
     c = sqlite3.connect(path)
     migration_014_create_measurement_tables(c)
+    migration_015_create_market_data_tables(c)
+    migration_015_create_market_data_tables(c)  # idempotent
     c.commit()
     c.close()
     dbc.DB_FILE = path
@@ -65,6 +67,22 @@ def test_unknown_columns_are_ignored():
     fresh()
     pair_log.begin("BTC", "s", "MAKER", "UP", 5.0, 0.5, 0.49)
     pair_log.update(bogus="drop table pair_attempts; --", outcome="both")  # must not be interpolated
+
+
+def test_evaluation_is_finished_with_the_trade_outcome():
+    path = fresh()
+    pair_log.evaluation("BTC-5M", "BAYESIAN", 0.42, "UP", 0.61, 0.60, 0.62, {"a": 1}, {"bayesian_confidence": 0.42, "additive_confidence": 0.3})
+    pair_log.finish_evaluation("no_trade")
+    pair_log.finish_evaluation("trade", 5)  # second finish without a new evaluation must not touch the row
+    r = rows(path, "select symbol, method, bias, decision, trade_id, bayesian_confidence, additive_confidence, secs_into_window is not null from evaluations")
+    assert r == [("BTC-5M", "BAYESIAN", "UP", "no_trade", None, 0.42, 0.3, 1)]
+
+
+def test_new_market_data_tables_exist():
+    path = fresh()
+    names = {r[0] for r in rows(path, "select name from sqlite_master where type='table'")}
+    assert {"market_ticks", "market_trades", "market_windows", "evaluations", "account_snapshots"} <= names
+    assert {"entry_book", "hedge_book", "other_book_at_first"} <= {r[1] for r in rows(path, "pragma table_info(pair_attempts)")}
 
 
 if __name__ == "__main__":

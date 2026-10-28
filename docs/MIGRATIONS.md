@@ -165,6 +165,7 @@ uv run python -c "import sqlite3; conn = sqlite3.connect('trades.db'); c = conn.
 | 12 | Create `shadow_signals` table for late-window evaluations | ✅ | 2026-10 |
 | 13 | Repair pre-settlement entry exits that were booked as hedge exits | ✅ | 2026-10 |
 | 14 | Measurement tables: `pair_attempts`, `order_events`, `attempt_ticks`, `position_marks` | ✅ | 2026-10 |
+| 15 | Market data: `market_ticks`, `market_trades`, `market_windows`, `evaluations`, `account_snapshots` + attempt book columns | ✅ | 2026-10 |
 
 ### Migration 012: shadow_signals
 

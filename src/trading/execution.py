@@ -1184,6 +1184,7 @@ def _begin_pair_attempt(
             entry_depth=liquidity.get("entry_depth"), hedge_depth=liquidity.get("hedge_depth"),
             spot=spot, strike=strike, dist_pct=(abs(spot - strike) / strike * 100.0) if spot and strike else None,
             exposure=open_exposure_usd(), entry_order_id=entry_order_id, hedge_order_id=hedge_order_id,
+            entry_book=pair_log.book_json(entry_token), hedge_book=pair_log.book_json(hedge_token),
             tokens=(entry_token, hedge_token),
         )
         pair_log.event("place", token_id=entry_token, order_id=entry_order_id, side=BUY, price=entry_price, size=size, post_only=int(mode == "MAKER"), success=1, purpose="entry leg")
@@ -1209,7 +1210,7 @@ def _track_fills(elapsed, entry_got, hedge_got, entry_token, hedge_token, entry_
                 pair_log.event("fill", token_id=tok, order_id=oid, side=BUY, size=got, filled=got, purpose=f"{leg} leg")
                 if len(seen) == 1:
                     ob, oa = _book_top(other)
-                    pair_log.update(first_leg=leg, first_fill_s=elapsed, other_bid_at_first=ob, other_ask_at_first=oa)
+                    pair_log.update(first_leg=leg, first_fill_s=elapsed, other_bid_at_first=ob, other_ask_at_first=oa, other_book_at_first=pair_log.book_json(other))
     except Exception as e:
         log_error(f"pair_log track failed: {e}")
 

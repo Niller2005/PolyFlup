@@ -58,6 +58,25 @@ SELECT note, COUNT(*) FROM pair_attempts WHERE outcome='skipped' GROUP BY 1 ORDE
 SELECT ts, event, side, price, size, purpose, success FROM order_events WHERE attempt_id = ? ORDER BY id;
 ```
 
+## 2c. Raw data for offline research (v0.7.6+)
+| Table | Use |
+|---|---|
+| `market_ticks` | every market, every 5s: up/down bid+ask, spot, strike, secs_left. Replay any pair/maker idea, compute momentum/volatility features offline. |
+| `market_trades` | websocket trade tape per token (price, size, side): model whether a resting bid would have been filled and by what. |
+| `market_windows` | real result of every window (up_won), including windows we never traded: unbiased base rates. |
+| `evaluations` | every strategy evaluation with confidence/bias/p_up/signals JSON and the decision: is the signal predictive at all? |
+| `account_snapshots` | cash / held / equity series (equity curve with marks). |
+| `pair_attempts.entry_book/hedge_book/other_book_at_first` | JSON top-5 depth `{"bids":[[p,s]..],"asks":[..]}` at placement / first fill. |
+```sql
+-- is the signal calibrated? confidence vs how often the bias side won the window
+SELECT ROUND(e.confidence,1) c, e.bias, COUNT(*) n, ROUND(AVG((e.bias='UP')=w.up_won),3) hit
+FROM evaluations e JOIN market_windows w ON w.slug=e.slug WHERE e.bias IN ('UP','DOWN') GROUP BY 1,2;
+-- how often would a bid at the touch have traded within 30s (tape)?
+SELECT COUNT(*) FROM market_trades WHERE slug=? AND token_id=? AND price<=? AND ts BETWEEN ? AND ?;
+-- up-token path of one window
+SELECT ts, secs_left, up_bid, up_ask, spot, strike FROM market_ticks WHERE slug=? ORDER BY ts;
+```
+
 ## 3. Mining the logs
 ```bash
 uv run python .opencode/skill/strategy-analysis/log_events.py            # tally of key decision events (numbers normalised)

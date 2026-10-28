@@ -294,6 +294,10 @@ def _prepare_trade_params(
         bias = raw_scores.get("additive_bias", bias)
         method_used = "ADDITIVE"
 
+    from src.trading import pair_log
+
+    pair_log.evaluation(symbol, method_used, confidence, bias, p_up, best_bid, best_ask, signals, raw_scores)
+
     # Log which method was selected for A/B testing
     if verbose and bias != "NEUTRAL":
         log(
