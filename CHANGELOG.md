@@ -9,6 +9,19 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+---
+
+## [0.8.0] - 2026-10-28
+
+### Added
+- **Data-driven parameters** (`src/trading/adaptive.py`, `ADAPTIVE=YES`): values that were hard-coded are measured from the current database's `pair_attempts` / `attempt_ticks` (last `ADAPTIVE_WINDOW` attempts, shrunk towards the configured value with `ADAPTIVE_PRIOR_N` pseudo-attempts; the configured values are priors/defaults until `ADAPTIVE_MIN_N` attempts exist):
+  - **leg-fail rate, leg-out loss and pair edge** (per market, shrunk to the global estimate) replace `KELLY_LEG_FAIL_RATE` / `KELLY_LEG_LOSS` / `MIN_NET_EDGE` in Kelly sizing;
+  - **fill timeout** = p90 of the completion times of finished pairs + 5s (never above the configured/scaled value, min 15s);
+  - **tolerated lock loss** replaces `TRAIL_MAX_LOCK_LOSS`: found by replaying recorded leg-outs against their recorded book ticks and picking the tolerance with the best total PnL (0-8c);
+  - **explore sizing** (`ADAPTIVE_SIZING=YES`): a market whose measured pair EV `(1-r)*edge - r*loss` is negative trades at the 5-share minimum instead of being switched off, so it keeps producing data at minimal cost; full size returns when EV is >= 0. The estimate and decision are logged (`📐 adaptive: ...`) and stored in `pair_attempts.note`.
+  - On the 2026-10-28 paper data every market measures about -4 to -7 c/share, so all markets with >= 10 attempts trade at the minimum size until that changes. `ADAPTIVE=NO` restores the fixed values.
+
+---
 ### Changed
 - Trail escalation ticks scale with the trailed leg's price level: `TRAIL_MAX_TICKS` is the mid-range value and is multiplied by `sqrt(4p(1-p))` (rounded, min 1). Measured best-bid moves per 5s were ~3.3c at 0.3-0.8, ~2.7c at 0.1-0.2/0.8-0.9 and ~1.7c at the extremes, which this follows.
 

@@ -97,6 +97,14 @@ TRAIL_MIN_REPRICE_SECONDS = int(os.getenv("TRAIL_MIN_REPRICE_SECONDS", "5"))
 LEGOUT_HOLD_SHARE = float(os.getenv("LEGOUT_HOLD_SHARE", "0.25"))
 # Raw market data recorder (top of book of every traded market, trade tape, window results); 0 = off
 MARKET_RECORD_INTERVAL = float(os.getenv("MARKET_RECORD_INTERVAL", "5"))
+# Data-driven parameters (src/trading/adaptive.py): leg-fail rate / leg-out loss / pair edge measured from our own
+# pair_attempts, fill timeout from the completion-time p90, tolerated lock loss replay-optimised on recorded leg-outs,
+# and minimum-size "explore" sizing while a market's measured pair EV is negative. The configured values are priors/defaults.
+ADAPTIVE = os.getenv("ADAPTIVE", "YES").upper() == "YES"
+ADAPTIVE_SIZING = os.getenv("ADAPTIVE_SIZING", "YES").upper() == "YES"  # explore at minimum size while EV < 0
+ADAPTIVE_WINDOW = int(os.getenv("ADAPTIVE_WINDOW", "300"))  # most recent attempts used
+ADAPTIVE_MIN_N = int(os.getenv("ADAPTIVE_MIN_N", "20"))  # attempts before a measured value replaces its default
+ADAPTIVE_PRIOR_N = float(os.getenv("ADAPTIVE_PRIOR_N", "20"))  # pseudo-observations of the configured prior
 # After one leg fills, the market has usually moved so that the other leg's bid is a few cents above the
 # MIN_NET_EDGE cap (median ~3-4c). Completing the pair there as a maker costs a small certain loss, but a
 # leg-out costs ~14c/share (flatten at the taker fee + spread). Replaying 15 recorded leg-outs, resting the

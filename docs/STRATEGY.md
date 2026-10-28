@@ -375,6 +375,12 @@ The dynamic scale-in mechanism was removed with the move to atomic hedging: addi
 
 ---
 
+## Data-driven parameters
+
+`src/trading/adaptive.py` replaces assumed constants with estimates from our own `pair_attempts` (see CHANGELOG 0.8.0): leg-fail rate, leg-out loss and completed-pair edge per market (shrunk to the global figure and to the configured prior), the fill timeout (p90 of completion times), and the tolerated lock loss (replay-optimised on recorded leg-outs). A market whose measured `(1 - r) * edge - r * loss` is negative trades at the 5-share minimum (exploration) so data keeps flowing without the loss.
+
+---
+
 ## Position Sizing
 
 ```

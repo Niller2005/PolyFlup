@@ -204,6 +204,11 @@ def _calculate_bet_size(
         # Pair Kelly: guaranteed MIN_NET_EDGE when both legs fill vs KELLY_LEG_LOSS when they don't
         from src.trading.edge import pair_kelly_fraction, scaled_kelly
 
+        from src.trading import adaptive
+
+        KELLY_LEG_FAIL_RATE = adaptive.leg_fail_rate(None, KELLY_LEG_FAIL_RATE)  # measured, not assumed
+        KELLY_LEG_LOSS = adaptive.legout_loss(None, KELLY_LEG_LOSS)
+        MIN_NET_EDGE = adaptive.pair_edge(None, MIN_NET_EDGE)
         full = pair_kelly_fraction(MIN_NET_EDGE, KELLY_LEG_FAIL_RATE, KELLY_LEG_LOSS)
         frac = scaled_kelly(full, KELLY_FRACTION, KELLY_MAX_FRACTION)
         allocation_usd = balance * frac

@@ -2,7 +2,7 @@
 
 import time
 from typing import Optional, Dict, Any
-from src.trading import pair_log
+from src.trading import adaptive, pair_log
 from src.utils.logger import fmt_num, log, log_error, send_discord
 from src.data.database import save_trade
 from src.trading.orders import (
@@ -1241,6 +1241,11 @@ def place_entry_and_hedge_atomic(
         if not up_id or not down_id:
             return None, None, None
 
+        # Size from measured economics: full size only while this market's pair EV is not negative
+        entry_size, adaptive_note = adaptive.pair_size(symbol, entry_size)
+        if adaptive_note:
+            log(f"   📐 [{symbol}] {adaptive_note}")
+
         # Determine hedge token and price
         if entry_side == "UP":
             hedge_token_id = down_id
@@ -1655,6 +1660,7 @@ def place_entry_and_hedge_atomic(
         HEDGE_FILL_TIMEOUT_SECONDS = int(
             scale_seconds(HEDGE_FILL_TIMEOUT_SECONDS, symbol, floor=3 * HEDGE_POLL_INTERVAL_SECONDS)
         )
+        HEDGE_FILL_TIMEOUT_SECONDS = int(adaptive.timeout_seconds(symbol, HEDGE_FILL_TIMEOUT_SECONDS))  # p90 of measured completion times
         HEDGE_GTC_FALLBACK_SECONDS = int(
             scale_seconds(HEDGE_GTC_FALLBACK_SECONDS, symbol, floor=HEDGE_POLL_INTERVAL_SECONDS)
         )
@@ -1671,6 +1677,8 @@ def place_entry_and_hedge_atomic(
             entry_order_id, hedge_order_id, HEDGE_FILL_TIMEOUT_SECONDS, confidence, liquidity_metrics,
             pair_net_edge(entry_price, hedge_price, mode == "TAKER", mode == "TAKER", TAKER_FEE_RATE),
         )
+        if adaptive_note:
+            pair_log.update(note=adaptive_note)
         log(
             f"   ⏱️  [{symbol}] Monitoring fills for {HEDGE_FILL_TIMEOUT_SECONDS}s (GTC fallback @ {HEDGE_GTC_FALLBACK_SECONDS}s, polling every {HEDGE_POLL_INTERVAL_SECONDS}s)"
         )
@@ -1753,13 +1761,13 @@ def place_entry_and_hedge_atomic(
             step = max(1.0, HEDGE_FILL_TIMEOUT_SECONDS / (max_ticks + 1))
             ticks = min(max_ticks, int(waited // step))
             # a small certain loss (<= TRAIL_MAX_LOCK_LOSS) beats a ~14c/sh expected leg-out loss
-            target, cap = trail_target(filled_price, bid, ask, ticks, -TRAIL_MAX_LOCK_LOSS)
+            target, cap = trail_target(filled_price, bid, ask, ticks, -adaptive.lock_loss(TRAIL_MAX_LOCK_LOSS))
             trail_state["last"] = now
 
             if bid > cap + 1e-9 and not trail_state["capped"]:
                 trail_state["capped"] = True
                 log(
-                    f"   🎣 [{symbol}] Trail capped: {leg} best bid ${bid:.2f} is above the ${cap:.2f} cap ({filled_side} filled @ ${filled_price:.2f}, min lock {-TRAIL_MAX_LOCK_LOSS * 100:+.1f}¢) - cannot chase"
+                    f"   🎣 [{symbol}] Trail capped: {leg} best bid ${bid:.2f} is above the ${cap:.2f} cap ({filled_side} filled @ ${filled_price:.2f}, min lock {-adaptive.lock_loss(TRAIL_MAX_LOCK_LOSS) * 100:+.1f}¢) - cannot chase"
                 )
             if target is None or abs(target - cur_price) < 0.005:
                 return
