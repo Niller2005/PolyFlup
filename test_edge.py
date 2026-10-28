@@ -197,6 +197,15 @@ def test_trail_may_rest_above_break_even_by_the_allowed_lock_loss():
     assert trail_target(0.56, 0.47, 0.48, 0, 0.01) == (0.43, 0.43)  # old behaviour: stuck 4c below the market
 
 
+def test_trail_ticks_scale_with_price_level():
+    from src.trading.edge import trail_max_ticks
+
+    assert trail_max_ticks(0.50, 2) == 2 and trail_max_ticks(0.50, 3) == 3
+    assert trail_max_ticks(0.15, 3) == 2 and trail_max_ticks(0.85, 3) == 2  # 3*0.71
+    assert trail_max_ticks(0.05, 2) == 1 and trail_max_ticks(0.95, 4) == 2  # never below 1
+    assert trail_max_ticks(0.0, 3) == 1 and trail_max_ticks(1.0, 3) == 1
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

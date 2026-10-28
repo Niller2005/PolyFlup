@@ -158,6 +158,18 @@ def meets_edge(net_edge: float, minimum: float) -> bool:
     return net_edge >= minimum - 1e-9
 
 
+def trail_max_ticks(price: float, base_ticks: int) -> int:
+    """Escalation ticks for a trailing leg quoted around `price`, scaled by how fast that price moves.
+
+    A binary token's short-term move scales with sqrt(p(1-p)): measured |change of best bid| per 5s
+    was ~3.3c for prices 0.3-0.8, 2.6-3.0c at 0.1-0.2 / 0.8-0.9 and 1.6-1.8c beyond 0.9 / below 0.1
+    (sqrt(4p(1-p)) predicts 1.0 / 0.7-0.8 / 0.4-0.6 of the mid-range value). `base_ticks` is the mid-range
+    value (TRAIL_MAX_TICKS); cheap/expensive legs get fewer ticks, never fewer than 1.
+    """
+    p = min(max(price, 0.0), 1.0)
+    return max(1, int(round(base_ticks * (4.0 * p * (1.0 - p)) ** 0.5)))
+
+
 def trail_target(
     filled_price: float, best_bid: float, best_ask: float, ticks: int, min_edge: float
 ):

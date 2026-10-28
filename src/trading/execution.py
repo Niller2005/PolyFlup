@@ -1725,7 +1725,7 @@ def place_entry_and_hedge_atomic(
                 TRAIL_MAX_TICKS,
                 TRAIL_MIN_REPRICE_SECONDS,
             )
-            from src.trading.edge import trail_target
+            from src.trading.edge import trail_max_ticks, trail_target
 
             if not ENABLE_TRAILING or not use_post_only or entry_done == hedge_done:
                 return
@@ -1749,8 +1749,9 @@ def place_entry_and_hedge_atomic(
             if not bid or not ask:
                 return
             waited = now - trail_state["since"]
-            step = max(1.0, HEDGE_FILL_TIMEOUT_SECONDS / (TRAIL_MAX_TICKS + 1))
-            ticks = min(TRAIL_MAX_TICKS, int(waited // step))
+            max_ticks = trail_max_ticks(bid, TRAIL_MAX_TICKS)  # scaled by how fast this price level moves
+            step = max(1.0, HEDGE_FILL_TIMEOUT_SECONDS / (max_ticks + 1))
+            ticks = min(max_ticks, int(waited // step))
             # a small certain loss (<= TRAIL_MAX_LOCK_LOSS) beats a ~14c/sh expected leg-out loss
             target, cap = trail_target(filled_price, bid, ask, ticks, -TRAIL_MAX_LOCK_LOSS)
             trail_state["last"] = now

@@ -9,6 +9,9 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+### Changed
+- Trail escalation ticks scale with the trailed leg's price level: `TRAIL_MAX_TICKS` is the mid-range value and is multiplied by `sqrt(4p(1-p))` (rounded, min 1). Measured best-bid moves per 5s were ~3.3c at 0.3-0.8, ~2.7c at 0.1-0.2/0.8-0.9 and ~1.7c at the extremes, which this follows.
+
 ---
 
 ## [0.7.6] - 2026-10-28

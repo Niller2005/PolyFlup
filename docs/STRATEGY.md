@@ -432,7 +432,7 @@ Taker fee per share: `0.07 × p × (1 − p)` in pUSD, for BUY and SELL. Makers 
    - If neither has the required net edge the trade is skipped.
 3. **Batch Order Placement**: both orders go out together; maker orders never cross the book.
 4. **Fill Monitoring**: polls every 5s for up to `HEDGE_FILL_TIMEOUT_SECONDS` (scaled to the window: 90s on 15m, 30s on 5m).
-5. **Trailing**: once one leg has filled, the other is cancelled and re-quoted at the best bid (plus up to `TRAIL_MAX_TICKS` as time passes). The price never exceeds `1 − filled + TRAIL_MAX_LOCK_LOSS` (default 3¢ above break-even): completing a pair as a maker at a small certain loss beats the ~14¢/share a leg-out costs, and completing passively saves the taker fee plus spread that flattening pays.
+5. **Trailing**: once one leg has filled, the other is cancelled and re-quoted at the best bid (plus up to `TRAIL_MAX_TICKS` ticks as time passes, scaled by `sqrt(4p(1-p))` of the trailed leg's price so cheap and expensive legs escalate less). The price never exceeds `1 − filled + TRAIL_MAX_LOCK_LOSS` (default 3¢ above break-even): completing a pair as a maker at a small certain loss beats the ~14¢/share a leg-out costs, and completing passively saves the taker fee plus spread that flattening pays.
 6. **Leg risk**: if the cap makes trailing impossible, a taker hedge is bought only when its net result beats both selling the filled leg and holding it (market-implied value); otherwise the resting order stays until the timeout.
 7. **Outcome**: both filled → trade saved with the final (trailed) prices; one filled → emergency liquidation (below); neither → both cancelled.
 
