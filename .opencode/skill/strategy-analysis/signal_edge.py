@@ -14,9 +14,13 @@ import sqlite3
 import sys
 from collections import defaultdict
 
-args = [a for a in sys.argv[1:] if not a.startswith("--")]
-db = args[0] if args else "trades_paper.db"
-min_conf = float(sys.argv[sys.argv.index("--min-conf") + 1]) if "--min-conf" in sys.argv else 0.0
+argv = sys.argv[1:]
+min_conf = 0.0
+if "--min-conf" in argv:
+    i = argv.index("--min-conf")
+    min_conf = float(argv[i + 1])
+    del argv[i : i + 2]
+db = argv[0] if argv else "trades_paper.db"
 c = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
 
 rows = c.execute(
