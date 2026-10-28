@@ -159,12 +159,49 @@ class Dashboard:
                 windows,
                 ("   paper cash " if paper else "   balance ", DIM),
                 (f"{bal:,.2f} pUSD" if bal is not None else "—", "bold"),
+                *self.equity_cells(bal),
                 ("   ", ""),
                 profile,
             ),
             Text.assemble(status, ("  ", ""), (datetime.now(timezone.utc).strftime("%H:%M:%S UTC"), DIM)),
         )
         return Panel(grid, box=box.ROUNDED, border_style=CYAN, padding=(0, 1))
+
+    def equity(self, cash: Optional[float]):
+        """(held value, equity, pnl vs start) with open legs marked at the market midpoint.
+
+        Paper: holdings at their own token mids. Real: open trades (both legs held are worth
+        size at resolution, a single leg size*mid, a sold leg drops out). pnl is None without a start balance.
+        """
+        if cash is None:
+            return None, None, None
+        held = 0.0
+        if self.snap.paper_cash is not None:
+            for h in self.snap.paper_holdings:
+                mid = self.feed.mid(h.token_id)
+                held += h.size * (mid if mid is not None else h.avg_price)
+        else:
+            for p in self.snap.open_positions:
+                mid = self.feed.mid(p.token_id)
+                m = mid if mid is not None else p.entry_price
+                if p.is_hedged and not p.entry_sold and not p.hedge_sold:
+                    held += p.size
+                elif p.is_hedged and p.entry_sold and not p.hedge_sold:
+                    held += p.size * (1.0 - m)
+                elif not p.entry_sold:
+                    held += p.size * m
+        equity = cash + held
+        start = self.snap.paper_start if self.snap.paper_cash is not None else None
+        return held, equity, (equity - start) if start else None
+
+    def equity_cells(self, cash: Optional[float]):
+        held, equity, pnl = self.equity(cash)
+        if equity is None or self.compact:
+            return ()
+        cells = [("   held ", DIM), (f"{held:,.2f}", "bold"), ("   equity ", DIM), (f"{equity:,.2f}", f"bold {CYAN}")]
+        if pnl is not None:
+            cells += [(f" ({pnl:+,.2f})", GREEN if pnl >= 0 else RED)]
+        return cells
 
     def profile_text(self) -> Text:
         want = profiles.normalize(self.snap.profile) if self.snap.profile else None
