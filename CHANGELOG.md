@@ -11,6 +11,22 @@ and this project uses semantic versioning.
 
 ---
 
+## [0.8.2] - 2026-10-28
+
+See `docs/ANALYSIS_2026-10-28.md` (5 hours, 10 markets, 660 attempts, 420 resolved windows).
+
+### Changed
+- **Tolerated lock loss is now a randomised arm per attempt** (`ADAPTIVE_LOCK_ARMS=0.01,0.03,0.06`, `ADAPTIVE_EPSILON=0.3`, recorded in `pair_attempts.lock_arm`, migration 16). Once every arm has `ADAPTIVE_MIN_N` results the best mean result per share is used, exploring 30% of the time. This replaces the replay optimiser, which always picked the 8c maximum because its objective never charged the worse locks on pairs that complete: live, 8c made 32% of completed pairs lock at -4c...-8c (average lock -2.4c vs -0.3c) without lowering the leg-out rate (25% at 3c vs 26-33% at 8c).
+
+### Fixed
+- `position_marks` / `account_snapshots` counted an entry leg twice (a trade row and the matching paper holding), inflating `held` and `equity` (peak 1,559 against a real minimum of ~650). One row per token now; cash, fills and `pair_attempts` were never affected, earlier equity snapshots are.
+
+### Findings (no code change)
+- Pair strategy: -6c/share in every segment; hold vs sell a leg-out is a wash (paired +2.6c, SE 4.5c); signal edge over the market -1.1c, 95% CI [-6.7, +4.9] (62 window starts); the frozen directional rule D1 failed out-of-sample (-6.5c/share, 49 window starts). Do not build position-adding on this signal.
+
+---
+---
+
 ## [0.8.1] - 2026-10-28
 
 ### Fixed (confidence calculation, `src/trading/strategy.py`)

@@ -79,6 +79,8 @@ SELECT ts, secs_left, up_bid, up_ask, spot, strike FROM market_ticks WHERE slug=
 
 Signal vs market (does confidence beat the price?): `signal_edge.py [db]` (from `evaluations` + `market_windows`, per confidence / method / minute / price bucket, with distinct-window counts) and `signal_edge_logs.py` (log + Binance klines, for data older than v0.7.6).
 
+Pre-registered directional rule: `directional_rule.py --since <ts>` (rule D1, frozen 2026-10-28 04:10 UTC). Out-of-sample result 2026-10-28: -6.5c/share over 49 window starts - failed. Any new rule must be frozen BEFORE looking at the evaluation window, tested with `--since`, and needs >= 30 window starts with the interval's lower bound above 0.
+
 ## 3. Mining the logs
 ```bash
 uv run python .opencode/skill/strategy-analysis/log_events.py            # tally of key decision events (numbers normalised)

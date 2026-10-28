@@ -85,6 +85,24 @@ def test_new_market_data_tables_exist():
     assert {"entry_book", "hedge_book", "other_book_at_first"} <= {r[1] for r in rows(path, "pragma table_info(pair_attempts)")}
 
 
+def test_snapshot_counts_a_token_once_even_if_it_is_in_trades_and_holdings():
+    path = fresh()
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE trades (id INTEGER PRIMARY KEY, symbol TEXT, slug TEXT, side TEXT, token_id TEXT, size REAL, entry_price REAL, is_hedged INT, hedge_order_price REAL, window_end TEXT, settled INT DEFAULT 0, exited_early INT DEFAULT 0)")
+    c.execute("CREATE TABLE paper_positions (token_id TEXT PRIMARY KEY, size REAL, avg_price REAL, slug TEXT, opened_at TEXT, outcome TEXT)")
+    c.execute("CREATE TABLE paper_account (id INTEGER PRIMARY KEY, cash REAL, start_cash REAL, created_at TEXT)")
+    c.execute("INSERT INTO paper_account VALUES (1, 900, 1000, 't')")
+    c.execute("INSERT INTO trades (id,symbol,slug,side,token_id,size,entry_price,is_hedged,hedge_order_price) VALUES (1,'BTC','s','UP','tUP',10,0.5,1,0.49)")
+    c.executemany("INSERT INTO paper_positions VALUES (?,?,?,?,?,?)", [("tUP", 10, 0.5, "s", "x", "Up"), ("tDN", 10, 0.49, "s", "x", "Down")])
+    c.commit()
+    c.close()
+    pair_log._top = lambda token: (0.4, 0.6)  # mid 0.5 for both legs
+    pair_log._last_mark = 0.0
+    assert pair_log.snapshot_positions(every=0.0) == 2
+    assert rows(path, "select count(*), count(distinct token_id) from position_marks") == [(2, 2)]
+    assert rows(path, "select round(held,2), round(equity,2), open_legs from account_snapshots") == [(10.0, 910.0, 2)]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

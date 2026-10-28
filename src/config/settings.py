@@ -105,6 +105,10 @@ ADAPTIVE_SIZING = os.getenv("ADAPTIVE_SIZING", "YES").upper() == "YES"  # explor
 ADAPTIVE_WINDOW = int(os.getenv("ADAPTIVE_WINDOW", "300"))  # most recent attempts used
 ADAPTIVE_MIN_N = int(os.getenv("ADAPTIVE_MIN_N", "20"))  # attempts before a measured value replaces its default
 ADAPTIVE_PRIOR_N = float(os.getenv("ADAPTIVE_PRIOR_N", "20"))  # pseudo-observations of the configured prior
+# Tolerated certain loss when completing a pair: each attempt draws one arm at random; once every arm has ADAPTIVE_MIN_N
+# results the best arm (mean result per share) is used, exploring uniformly ADAPTIVE_EPSILON of the time. Empty = fixed.
+ADAPTIVE_LOCK_ARMS = [float(x) for x in os.getenv("ADAPTIVE_LOCK_ARMS", "0.01,0.03,0.06").split(",") if x.strip()]
+ADAPTIVE_EPSILON = float(os.getenv("ADAPTIVE_EPSILON", "0.3"))
 # After one leg fills, the market has usually moved so that the other leg's bid is a few cents above the
 # MIN_NET_EDGE cap (median ~3-4c). Completing the pair there as a maker costs a small certain loss, but a
 # leg-out costs ~14c/share (flatten at the taker fee + spread). Replaying 15 recorded leg-outs, resting the

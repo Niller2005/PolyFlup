@@ -26,7 +26,7 @@ _ATTEMPT_COLS = {
     "sell_price", "sell_size", "sell_fee", "realized_pnl", "winner_side", "filled_leg_won",
     "trade_id", "closed_at", "note", "entry_order_id", "hedge_order_id", "net_edge", "secs_into_window",
     "confidence", "p_up", "spot", "strike", "dist_pct", "entry_depth", "hedge_depth", "cash", "exposure",
-    "entry_book", "hedge_book", "other_book_at_first",
+    "entry_book", "hedge_book", "other_book_at_first", "lock_arm",
 }
 
 
@@ -281,19 +281,23 @@ def snapshot_positions(every: float = 30.0) -> int:
         return 0
     _last_mark = now
     def run(conn):
-        rows = []
+        # one row per token: in paper mode the holdings are the truth (a trade row for the same token would
+        # count the entry leg twice, inflating the equity series), trade rows only add context
+        by_token = {}
         for tid, symbol, slug, side, tok, size, entry, hedged, hedge_price, win_end in conn.execute(
             "SELECT id, symbol, slug, side, token_id, size, entry_price, is_hedged, hedge_order_price, window_end "
             "FROM trades WHERE settled = 0 AND COALESCE(exited_early,0)=0"
         ):
-            rows.append((tid, symbol, slug, side, tok, size, entry, win_end))
+            by_token[tok] = (tid, symbol, slug, side, tok, size, entry, win_end)
         try:
             for tok, size, avg, slug, outcome in conn.execute(
                 "SELECT token_id, size, avg_price, slug, outcome FROM paper_positions WHERE size > 0.001"
             ):
-                rows.append((None, None, slug, (outcome or "").upper(), tok, size, avg, None))
+                ctx = by_token.get(tok)
+                by_token[tok] = (ctx[0] if ctx else None, ctx[1] if ctx else None, slug, (outcome or "").upper(), tok, size, avg, ctx[7] if ctx else None)
         except Exception:
             pass  # not a paper database
+        rows = list(by_token.values())
         n = 0
         held_value = 0.0
         # path after we stopped waiting: both legs of recent attempts, to see what the market did next

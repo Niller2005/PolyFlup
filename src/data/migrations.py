@@ -400,6 +400,15 @@ def migration_015_create_market_data_tables(conn: Any) -> None:
     log("    ✓ market_ticks, market_trades, market_windows, evaluations, account_snapshots ready")
 
 
+def migration_016_add_lock_arm(conn: Any) -> None:
+    """Tolerance arm drawn for each pair attempt (A/B/bandit on TRAIL tolerance)."""
+    c = conn.cursor()
+    cols = {r[1] for r in c.execute("PRAGMA table_info(pair_attempts)")}
+    if "lock_arm" not in cols:
+        c.execute("ALTER TABLE pair_attempts ADD COLUMN lock_arm REAL")
+        log("    ✓ pair_attempts.lock_arm added")
+
+
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
     (2, "Verify timestamp column", migration_002_add_created_at_column),
@@ -463,6 +472,11 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
         15,
         "Create market data tables (ticks, trade tape, window results, evaluations, account snapshots)",
         migration_015_create_market_data_tables,
+    ),
+    (
+        16,
+        "Add lock_arm to pair_attempts",
+        migration_016_add_lock_arm,
     ),
 ]
 

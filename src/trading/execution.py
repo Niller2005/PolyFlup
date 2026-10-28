@@ -1679,6 +1679,10 @@ def place_entry_and_hedge_atomic(
         )
         if adaptive_note:
             pair_log.update(note=adaptive_note)
+        from src.config.settings import TRAIL_MAX_LOCK_LOSS as _LOCK_DEFAULT
+
+        lock_tol = adaptive.lock_loss(_LOCK_DEFAULT)  # this attempt's randomised tolerance arm
+        pair_log.update(lock_arm=lock_tol)
         log(
             f"   ⏱️  [{symbol}] Monitoring fills for {HEDGE_FILL_TIMEOUT_SECONDS}s (GTC fallback @ {HEDGE_GTC_FALLBACK_SECONDS}s, polling every {HEDGE_POLL_INTERVAL_SECONDS}s)"
         )
@@ -1761,13 +1765,13 @@ def place_entry_and_hedge_atomic(
             step = max(1.0, HEDGE_FILL_TIMEOUT_SECONDS / (max_ticks + 1))
             ticks = min(max_ticks, int(waited // step))
             # a small certain loss (<= TRAIL_MAX_LOCK_LOSS) beats a ~14c/sh expected leg-out loss
-            target, cap = trail_target(filled_price, bid, ask, ticks, -adaptive.lock_loss(TRAIL_MAX_LOCK_LOSS))
+            target, cap = trail_target(filled_price, bid, ask, ticks, -lock_tol)
             trail_state["last"] = now
 
             if bid > cap + 1e-9 and not trail_state["capped"]:
                 trail_state["capped"] = True
                 log(
-                    f"   🎣 [{symbol}] Trail capped: {leg} best bid ${bid:.2f} is above the ${cap:.2f} cap ({filled_side} filled @ ${filled_price:.2f}, min lock {-adaptive.lock_loss(TRAIL_MAX_LOCK_LOSS) * 100:+.1f}¢) - cannot chase"
+                    f"   🎣 [{symbol}] Trail capped: {leg} best bid ${bid:.2f} is above the ${cap:.2f} cap ({filled_side} filled @ ${filled_price:.2f}, min lock {-lock_tol * 100:+.1f}¢) - cannot chase"
                 )
             if target is None or abs(target - cur_price) < 0.005:
                 return

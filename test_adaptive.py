@@ -10,7 +10,7 @@ import tempfile
 os.environ.setdefault("PROXY_PK", "0x" + "1" * 64)
 
 import src.data.db_connection as dbc
-from src.data.migrations import migration_014_create_measurement_tables
+from src.data.migrations import migration_014_create_measurement_tables, migration_016_add_lock_arm
 from src.trading import adaptive
 
 
@@ -25,15 +25,19 @@ def test_p_quantile():
     assert adaptive.p_quantile(list(range(1, 11)), 0.9) == 10 and adaptive.p_quantile([5], 0.9) == 5
 
 
-def test_best_lock_loss_picks_the_tolerance_that_pays():
-    # paid 0.50: break-even cap is 0.50. The other ask came down to 0.53 -> needs a 3c tolerance
-    ticks = [(10.0, 0.60), (20.0, 0.53)]
-    cases = [(0.50, 10.0, -1.4, ticks)] * 5  # flatten lost 14c/sh
-    grid = [i / 100 for i in range(0, 9)]
-    assert adaptive.best_lock_loss(cases, grid) == 0.03  # completes at -3c instead of -14c; more tolerance only costs
-    far = [(0.50, 10.0, -1.4, [(10.0, 0.80)])] * 5  # never comes back: tolerate nothing
-    assert adaptive.best_lock_loss(far, grid) == 0.0
-    assert adaptive.best_lock_loss([], grid) is None
+def test_choose_arm_explores_until_every_arm_has_data_then_exploits():
+    import random
+
+    arms = [0.01, 0.03, 0.06]
+    rng = random.Random(0)
+    # an arm without enough results -> uniform exploration over all arms
+    picks = {adaptive.choose_arm({0.01: (50, 0.0), 0.03: (5, 0.0)}, arms, 20, 0.0, rng) for _ in range(200)}
+    assert picks == set(arms)
+    # everything measured: best mean wins when not exploring
+    stats = {0.01: (40, -0.05), 0.03: (40, -0.02), 0.06: (40, -0.08)}
+    assert all(adaptive.choose_arm(stats, arms, 20, 0.0, rng) == 0.03 for _ in range(50))
+    # epsilon keeps exploring the others sometimes
+    assert len({adaptive.choose_arm(stats, arms, 20, 0.5, rng) for _ in range(200)}) == 3
 
 
 def make_db(rows):
@@ -41,6 +45,7 @@ def make_db(rows):
     os.close(fd)
     c = sqlite3.connect(path)
     migration_014_create_measurement_tables(c)
+    migration_016_add_lock_arm(c)
     c.executemany(
         "INSERT INTO pair_attempts (symbol, outcome, first_leg, size, final_entry_price, final_hedge_price, second_fill_s, sell_price, sell_size, sell_fee, resolution) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         rows,
@@ -69,7 +74,6 @@ def test_too_little_data_keeps_full_size_and_defaults():
     make_db([("BTC", "timeout", "entry", 40, 0.50, 0.49, None, 0.35, 40, 0.5, "sell")] * 3)
     assert adaptive.pair_size("BTC", 60.0)[0] == 60.0
     assert adaptive.timeout_seconds("BTC", 90.0) == 90.0  # fewer than ADAPTIVE_MIN_N completions
-    assert adaptive.lock_loss(0.03) == 0.03
 
 
 def test_timeout_follows_completion_time_p90_but_never_exceeds_default():
@@ -77,6 +81,25 @@ def test_timeout_follows_completion_time_p90_but_never_exceeds_default():
     got = adaptive.timeout_seconds("ETH-5M", 40.0)
     assert 25 <= got <= 40  # p90 of 5..29 is 27 -> 32
     assert adaptive.timeout_seconds("ETH-5M", 20.0) == 20.0
+
+
+
+
+def test_arm_stats_use_realised_results_per_share():
+    path = make_db([])
+    c = sqlite3.connect(path)
+    cols = "symbol, outcome, first_leg, size, final_entry_price, final_hedge_price, realized_pnl, lock_arm"
+    c.executemany(f"INSERT INTO pair_attempts ({cols}) VALUES (?,?,?,?,?,?,?,?)", [
+        ("BTC", "both", "entry", 10, 0.50, 0.49, None, 0.03),    # lock +1c
+        ("BTC", "both", "entry", 10, 0.52, 0.51, None, 0.03),    # lock -3c
+        ("BTC", "timeout", "entry", 10, 0.50, 0.49, -1.5, 0.03),  # -15c per share
+        ("BTC", "timeout", "entry", 10, 0.50, 0.49, None, 0.03),  # unresolved hold: skipped
+        ("BTC", "both", "entry", 10, 0.50, 0.49, None, None),     # old attempt without an arm: skipped
+    ])
+    c.commit()
+    c.close()
+    n, mean = adaptive._arm_stats()[0.03]
+    assert n == 3 and abs(mean - (0.01 - 0.03 - 0.15) / 3) < 1e-9
 
 
 if __name__ == "__main__":

@@ -10,8 +10,8 @@ What is measured
   legout_loss(symbol)     mean loss per share of a leg-out (taker sale incl. fee)
   pair_ev(symbol)         (1-r) * edge_when_completed - r * legout_loss, per share
   timeout_seconds(...)    p90 of the time completed pairs took (waiting longer rarely pays)
-  lock_loss(default)      the certain loss we should tolerate to complete a pair, found by replaying
-                          recorded leg-outs against the book ticks recorded while they waited
+  lock_loss(default)      tolerated certain loss to complete a pair: randomised arms compared on realised
+                          results per share (bandit), recorded per attempt in pair_attempts.lock_arm
   pair_size(symbol, n)    full size only while pair_ev >= 0, minimum size ("explore") otherwise, so a
                           losing market keeps producing data at minimal cost instead of being switched off
 """
@@ -64,27 +64,12 @@ def p_quantile(values: Sequence[float], q: float) -> Optional[float]:
     return xs[min(len(xs) - 1, int(q * len(xs)))]
 
 
-def best_lock_loss(
-    cases: Sequence[Tuple[float, float, float, List[Tuple[float, float]]]],
-    grid: Sequence[float],
-) -> Optional[float]:
-    """Pick the tolerated certain loss that would have made the most money on recorded leg-outs.
-
-    Each case is (paid, size, actual_pnl, [(t_s, other_ask), ...]) with only the ticks after the first
-    fill. Resting the second leg at `1 - paid + A` completes the pair at a loss of A whenever the other
-    leg's ask touched that price; otherwise the leg-out result stands. Returns the best A or None.
-    """
-    if not cases:
-        return None
-    best, best_pnl = None, None
-    for a in grid:
-        total = 0.0
-        for paid, size, actual, ticks in cases:
-            cap = 1.0 - paid + a
-            total += (-a * size) if any(ask <= cap + 1e-9 for _, ask in ticks) else actual
-        if best_pnl is None or total > best_pnl + 1e-9:  # ties go to the smaller tolerance
-            best, best_pnl = a, total
-    return best
+def choose_arm(stats_by_arm: Dict[float, Tuple[int, float]], arms: Sequence[float], min_n: int, epsilon: float, rng) -> float:
+    """Pick a tolerance arm: uniformly at random until every arm has `min_n` results, then the arm with the
+    best measured mean result per share (explore uniformly with probability `epsilon`)."""
+    if rng.random() < epsilon or any(stats_by_arm.get(a, (0, 0.0))[0] < min_n for a in arms):
+        return rng.choice(list(arms))
+    return max(arms, key=lambda a: stats_by_arm[a][1])
 
 
 # ---- data access ---------------------------------------------------------------------------------
@@ -201,44 +186,42 @@ def timeout_seconds(symbol: str, default: float) -> float:
     return default if q is None else max(15.0, min(default, q + 5.0))
 
 
-def _lock_loss() -> Optional[float]:
-    from src.config.settings import ADAPTIVE_MIN_N, ADAPTIVE_WINDOW
+def _arm_stats() -> Dict[float, Tuple[int, float]]:
+    """{tolerance: (n, mean result per share)} from attempts that recorded their `lock_arm`."""
+    from src.config.settings import ADAPTIVE_WINDOW
 
-    cases = []
+    out: Dict[float, List[float]] = {}
     with db_connection() as conn:
-        rows = conn.execute(
-            """SELECT id, first_leg, first_fill_s, size, final_entry_price, final_hedge_price, sell_price, sell_size, sell_fee
-               FROM pair_attempts WHERE outcome='timeout' AND sell_price IS NOT NULL AND first_leg IS NOT NULL
-               ORDER BY id DESC LIMIT ?""",
+        for arm, outcome, ep, hp, pnl, size in conn.execute(
+            """SELECT lock_arm, outcome, final_entry_price, final_hedge_price, realized_pnl, size FROM pair_attempts
+               WHERE lock_arm IS NOT NULL AND outcome IN ('both','timeout') ORDER BY id DESC LIMIT ?""",
             (ADAPTIVE_WINDOW,),
-        ).fetchall()
-        for aid, leg, f1, size, ep, hp, sp, ss, fee in rows:
-            paid = ep if leg == "entry" else hp
-            if paid is None or sp is None:
+        ):
+            if outcome == "both" and ep is not None and hp is not None:
+                res = 1.0 - ep - hp
+            elif outcome == "timeout" and pnl is not None and size:
+                res = pnl / size  # sold or resolved result per share (unresolved held legs are skipped)
+            else:
                 continue
-            col = "hedge_ask" if leg == "entry" else "entry_ask"
-            ticks = [
-                (t, a)
-                for t, a in conn.execute(
-                    f"SELECT t_s, {col} FROM attempt_ticks WHERE attempt_id=? AND phase='wait' AND {col} IS NOT NULL", (aid,)
-                )
-                if f1 is None or t >= f1
-            ]
-            if not ticks:
-                continue
-            qty = ss or size
-            cases.append((paid, size, (sp - paid) * qty - (fee or 0.0), ticks))
-    if len(cases) < ADAPTIVE_MIN_N:
-        return None
-    return best_lock_loss(cases, [i / 100.0 for i in range(0, 9)])
+            out.setdefault(round(arm, 4), []).append(res)
+    return {a: (len(v), sum(v) / len(v)) for a, v in out.items()}
 
 
 def lock_loss(default: float) -> float:
-    """Certain loss tolerated to complete a pair (replay-optimised on recorded leg-outs)."""
-    if not _enabled():
+    """Tolerated certain loss for ONE attempt: a randomised arm (A/B/bandit), recorded in pair_attempts.lock_arm.
+
+    The earlier replay optimiser always pushed the tolerance to its maximum (it never charged the cost of
+    completing at worse locks) and in the live data 8c produced no fewer leg-outs than 3c, only 2c worse
+    locks. Arms are therefore compared on realised results per share instead.
+    """
+    import random
+
+    from src.config.settings import ADAPTIVE_EPSILON, ADAPTIVE_LOCK_ARMS, ADAPTIVE_MIN_N
+
+    if not _enabled() or not ADAPTIVE_LOCK_ARMS:
         return default
-    v = _cached("lock_loss", _lock_loss)
-    return default if v is None else float(v)
+    stats_by_arm = _cached("arms", _arm_stats) or {}
+    return choose_arm(stats_by_arm, ADAPTIVE_LOCK_ARMS, ADAPTIVE_MIN_N, ADAPTIVE_EPSILON, random)
 
 
 def pair_size(symbol: str, size: float) -> Tuple[float, str]:
