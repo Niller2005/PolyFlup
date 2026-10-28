@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from src import profiles
-from src.markets import DEFAULT_MINUTES, window_bounds, window_minutes
+from src.markets import DEFAULT_MINUTES, parse_slug, window_bounds, window_minutes
 
 CLOB_HOST = "https://clob.polymarket.com"
 ET = ZoneInfo("America/New_York")
@@ -44,6 +44,8 @@ class OpenPosition:
     hedge_sold: bool = False  # hedge leg exited early
     exit_price: Optional[float] = None  # entry leg sale price
     hedge_exit_price: Optional[float] = None  # hedge leg sale price
+    slug: Optional[str] = None
+    unpaired: bool = False  # a held leg with no trade row (other leg unfilled / pair not saved)
 
     @property
     def hedge_side(self) -> str:
@@ -167,6 +169,8 @@ class PaperHolding:
     size: float
     avg_price: float
     label: str
+    slug: Optional[str] = None
+    outcome: Optional[str] = None
 
 
 @dataclass
@@ -239,6 +243,39 @@ def _label(slug: Optional[str], outcome: Optional[str], token_id: str) -> str:
     return "…" + token_id[-6:]
 
 
+def _add_unpaired(snap: Snapshot) -> None:
+    """Show paper holdings that no open trade accounts for (e.g. one leg of a pair that has not
+    filled its other side yet): a held leg is a position even without a trade row."""
+    covered = set()
+    for p in snap.open_positions:
+        if p.slug:
+            covered.add((p.slug, p.side))
+            if p.is_hedged:
+                covered.add((p.slug, p.hedge_side))
+    for h in snap.paper_holdings:
+        side = (h.outcome or "").upper()
+        if not h.slug or (h.slug, side) in covered:
+            continue
+        parsed = parse_slug(h.slug)
+        snap.open_positions.append(
+            OpenPosition(
+                id=0,
+                symbol=parsed[0] if parsed else h.label,
+                side=side or "?",
+                size=h.size,
+                entry_price=h.avg_price,
+                bet_usd=h.size * h.avg_price,
+                token_id=h.token_id,
+                window_end=parsed[2] if parsed else None,
+                has_exit_order=False,
+                scaled_in=False,
+                is_reversal=False,
+                slug=h.slug,
+                unpaired=True,
+            )
+        )
+
+
 def _load_paper(conn: sqlite3.Connection, snap: Snapshot) -> None:
     """Paper account (cash, resting orders, holdings) - empty for real databases."""
     try:
@@ -261,7 +298,7 @@ def _load_paper(conn: sqlite3.Connection, snap: Snapshot) -> None:
             )
         for r in conn.execute("SELECT token_id, size, avg_price, slug, outcome FROM paper_positions WHERE size > 0.001"):
             snap.paper_holdings.append(
-                PaperHolding(r["token_id"], r["size"], r["avg_price"], _label(r["slug"], r["outcome"], r["token_id"]))
+                PaperHolding(r["token_id"], r["size"], r["avg_price"], _label(r["slug"], r["outcome"], r["token_id"]), r["slug"], r["outcome"])
             )
     except sqlite3.Error:
         pass
@@ -295,7 +332,7 @@ def load_snapshot(db_path: Path, recent_limit: int = 12, curve_len: int = 40) ->
                    limit_sell_order_id, scaled_in, is_reversal,
                    {opt("is_hedged", "0")}, {opt("hedge_order_price")},
                    {opt("exited_early", "0")}, {opt("hedge_exited_early", "0")},
-                   {opt("exit_price")}, {opt("hedge_exit_price")}
+                   {opt("exit_price")}, {opt("hedge_exit_price")}, {opt("slug")}
             FROM trades WHERE settled = 0 ORDER BY id DESC
             """
         ):
@@ -318,8 +355,10 @@ def load_snapshot(db_path: Path, recent_limit: int = 12, curve_len: int = 40) ->
                     hedge_sold=bool(r["hedge_exited_early"]),
                     exit_price=r["exit_price"],
                     hedge_exit_price=r["hedge_exit_price"],
+                    slug=r["slug"],
                 )
             )
+        _add_unpaired(snap)
 
         for r in conn.execute(
             """

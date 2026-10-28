@@ -49,6 +49,38 @@ def test_unhedged_is_plain_mark_to_market():
     assert not locked and abs(pnl - 0.6) < 1e-9 and abs(pct - (0.70 / 0.64 - 1)) < 1e-9
 
 
+def test_held_leg_without_trade_row_is_listed_as_open_position():
+    import os
+    import sqlite3
+    import tempfile
+    from pathlib import Path
+
+    from src.tui.data import load_snapshot
+
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE paper_account (id INTEGER PRIMARY KEY, cash REAL, start_cash REAL, created_at TEXT)")
+    c.execute("INSERT INTO paper_account VALUES (1, 900, 1000, 't')")
+    c.execute("CREATE TABLE paper_orders (id TEXT PRIMARY KEY, token_id TEXT, side TEXT, price REAL, size REAL, filled REAL, status TEXT, order_type TEXT, post_only INT, created_at TEXT, updated_at TEXT, slug TEXT, outcome TEXT)")
+    c.execute("CREATE TABLE paper_positions (token_id TEXT PRIMARY KEY, size REAL, avg_price REAL, slug TEXT, opened_at TEXT, outcome TEXT)")
+    c.execute("CREATE TABLE trades (id INTEGER PRIMARY KEY, symbol TEXT, slug TEXT, side TEXT, size REAL, entry_price REAL, bet_usd REAL, token_id TEXT, is_hedged INT, hedge_order_price REAL, settled INT DEFAULT 0, window_end TEXT, limit_sell_order_id TEXT, scaled_in INT, is_reversal INT, exit_price REAL, pnl_usd REAL, roi_pct REAL, final_outcome TEXT, exited_early INT, hedge_exited_early INT, hedge_exit_price REAL, settled_at TEXT, timestamp TEXT)")
+    # hedged pair on btc (both legs held, one trade row) + a lone ETH leg with no row
+    c.execute("INSERT INTO trades (id,symbol,slug,side,size,entry_price,bet_usd,token_id,is_hedged,hedge_order_price) VALUES (1,'BTC-5M','btc-updown-5m-1793144400','UP',10,0.5,5,'t1',1,0.49)")
+    c.executemany("INSERT INTO paper_positions VALUES (?,?,?,?,?,?)", [
+        ("t1", 10, 0.5, "btc-updown-5m-1793144400", "x", "Up"),
+        ("t2", 10, 0.49, "btc-updown-5m-1793144400", "x", "Down"),
+        ("t3", 20, 0.4, "eth-updown-5m-1793144400", "x", "Down"),
+    ])
+    c.commit()
+    c.close()
+    snap = load_snapshot(Path(path))
+    lone = [p for p in snap.open_positions if p.unpaired]
+    assert [(p.symbol, p.side, p.size) for p in lone] == [("ETH-5M", "DOWN", 20)]
+    assert len(snap.open_positions) == 2  # the hedge leg of the BTC pair is not listed twice
+    os.unlink(path)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

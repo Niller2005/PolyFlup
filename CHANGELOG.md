@@ -9,6 +9,9 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+### Fixed
+- TUI: a held leg without a trade row (e.g. one filled leg of a pair, still waiting for the other) is listed under Open positions as `⚠ 1 leg only` (paper mode).
+
 ### Changed
 - TUI layout: Performance and the Paper account span the full right column; Recent trades moved under Open positions on the left.
 - TUI: `m` opens a risk-profile dialog (↑/↓ or j/k, Enter applies, Esc cancels); 1/2/3/0 still work.

@@ -68,6 +68,8 @@ def fmt_left(seconds: Optional[float]) -> Text:
 
 def hedge_status(p: "OpenPosition") -> Text:
     """Which legs are still held: both (hedged), only the entry, or one sold early."""
+    if p.unpaired:
+        return Text("⚠ 1 leg only", style=f"bold {YELLOW}")
     realized = p.realized()
     booked = f" ({realized:+.2f})" if realized is not None else ""
     if p.entry_sold and p.hedge_sold:
@@ -203,7 +205,7 @@ class Dashboard:
             left = (p.window_end - now).total_seconds() if p.window_end else None
             tags = ("⇄" if p.is_reversal else "") + ("+" if p.scaled_in else "")
             cells = [
-                Text(str(p.id), style=DIM),
+                Text("·" if p.unpaired else str(p.id), style=DIM),
                 Text(p.symbol, style="bold"),
                 side_text(p.side),
                 f"{p.size:,.2f}",
