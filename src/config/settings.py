@@ -241,8 +241,9 @@ EMERGENCY_SELL_MIN_PROFIT_CENTS = float(
     os.getenv("EMERGENCY_SELL_MIN_PROFIT_CENTS", "5.0")
 )  # Consider "winning" if +5¢ or more
 EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD = float(
-    os.getenv("EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD", "0.70")
-)  # Hold unhedged position if confidence >= this threshold (default 70%)
+    os.getenv("EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD", "2.0")
+)  # Hold unhedged position if confidence >= this threshold. >1 = off (default): signal-based holds lost 3 of 3
+# (-92%, -97%, -100%) and would contaminate the random hold-vs-sell comparison (LEGOUT_HOLD_SHARE).
 
 # Pre-Settlement Exit Strategy for Unhedged Positions
 # Pre-Settlement Exit Strategy - Progressive timing with decreasing confidence requirements

@@ -364,7 +364,7 @@ class Dashboard:
             result = trade.outcome or ("EARLY" if trade.exited_early else "")
             table.add_row(
                 Text(when, style=DIM),
-                Text(str(trade.id), style=DIM),
+                Text(f"L{-trade.id}" if trade.id < 0 else str(trade.id), style=DIM),
                 Text(trade.symbol, style="bold"),
                 side_text(trade.side),
                 f"{trade.entry_price:.3f}",

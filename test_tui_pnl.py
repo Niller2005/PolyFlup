@@ -81,6 +81,37 @@ def test_held_leg_without_trade_row_is_listed_as_open_position():
     os.unlink(path)
 
 
+def test_leg_outs_show_up_in_recent_trades_with_their_real_result():
+    import os
+    import sqlite3
+    import tempfile
+    from pathlib import Path
+
+    from src.data.migrations import migration_014_create_measurement_tables
+    from src.tui.data import load_snapshot
+
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    c = sqlite3.connect(path)
+    c.execute("CREATE TABLE trades (id INTEGER PRIMARY KEY, symbol TEXT, slug TEXT, side TEXT, size REAL, entry_price REAL, bet_usd REAL, token_id TEXT, is_hedged INT, hedge_order_price REAL, settled INT DEFAULT 0, window_end TEXT, limit_sell_order_id TEXT, scaled_in INT, is_reversal INT, exit_price REAL, pnl_usd REAL, roi_pct REAL, final_outcome TEXT, exited_early INT, hedge_exited_early INT, hedge_exit_price REAL, settled_at TEXT, timestamp TEXT)")
+    migration_014_create_measurement_tables(c)
+    cols = "outcome, first_leg, entry_side, final_entry_price, final_hedge_price, size, entry_filled, hedge_filled, sell_price, sell_size, sell_fee, resolution, filled_leg_won, realized_pnl, closed_at, symbol"
+    c.executemany(f"INSERT INTO pair_attempts ({cols}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [
+        ("timeout", "entry", "UP", 0.50, 0.48, 10, 10, 0, 0.30, 10, 0.1, "sell", 0, None, "2026-10-28T01:00:00+00:00", "BTC"),   # sold: (0.30-0.50)*10-0.1
+        ("timeout", "hedge", "UP", 0.50, 0.48, 10, 0, 10, None, None, None, "hold_ab", 1, None, "2026-10-28T01:01:00+00:00", "ETH"),  # held, won: (1-0.48)*10
+        ("timeout", "entry", "DOWN", 0.40, 0.58, 10, 10, 0, None, None, None, "hold_ab", None, None, "2026-10-28T01:02:00+00:00", "SOL"), # held, unresolved
+        ("both", "entry", "UP", 0.5, 0.49, 10, 10, 10, None, None, None, None, None, None, "2026-10-28T01:03:00+00:00", "XRP"),     # not a leg-out
+    ])
+    c.commit()
+    c.close()
+    recent = {t.symbol: t for t in load_snapshot(Path(path)).recent}
+    assert set(recent) == {"BTC", "ETH", "SOL"}
+    assert abs(recent["BTC"].pnl - (-2.1)) < 1e-9 and recent["BTC"].outcome == "LEG-OUT sold" and recent["BTC"].side == "UP"
+    assert abs(recent["ETH"].pnl - 5.2) < 1e-9 and recent["ETH"].side == "DOWN" and "won" in recent["ETH"].outcome
+    assert recent["SOL"].pnl is None and recent["SOL"].exit_price is None
+    os.unlink(path)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

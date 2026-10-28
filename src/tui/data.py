@@ -114,7 +114,7 @@ class ClosedTrade:
     entry_price: float
     exit_price: Optional[float]
     size: float
-    pnl: float
+    pnl: Optional[float]  # None while a held leg-out is unresolved
     roi_pct: Optional[float]
     outcome: str
     exited_early: bool
@@ -241,6 +241,45 @@ def _label(slug: Optional[str], outcome: Optional[str], token_id: str) -> str:
         iv = short[1].split("-")[0].upper() if len(short) > 1 else ""
         return f"{asset}{'-' + iv if iv and iv != '15M' else ''} {(outcome or '').upper()}".strip()
     return "…" + token_id[-6:]
+
+
+def _load_legouts(conn: sqlite3.Connection, snap: Snapshot, limit: int) -> None:
+    """Pairs where only one leg filled (sold or held) belong in Recent trades with their real result."""
+    try:
+        rows = conn.execute(
+            """SELECT id, symbol, entry_side, first_leg, final_entry_price, final_hedge_price, size,
+                      entry_filled, hedge_filled, sell_price, sell_size, sell_fee, resolution,
+                      filled_leg_won, realized_pnl, closed_at
+               FROM pair_attempts WHERE outcome = 'timeout' AND first_leg IN ('entry', 'hedge')
+               ORDER BY id DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+    except sqlite3.Error:
+        return  # older database without the measurement tables
+    for r in rows:
+        entry_leg = r["first_leg"] == "entry"
+        side = r["entry_side"] if entry_leg else {"UP": "DOWN", "DOWN": "UP"}.get(r["entry_side"], "?")
+        paid = (r["final_entry_price"] if entry_leg else r["final_hedge_price"]) or 0.0
+        qty = (r["entry_filled"] if entry_leg else r["hedge_filled"]) or r["size"] or 0.0
+        held = (r["resolution"] or "").startswith("hold")
+        if r["sell_price"] is not None and not held:
+            qty = r["sell_size"] or qty
+            pnl = (r["sell_price"] - paid) * qty - (r["sell_fee"] or 0.0)
+            outcome = "LEG-OUT sold"
+        elif r["filled_leg_won"] is not None:
+            pnl = r["realized_pnl"] if r["realized_pnl"] is not None else (r["filled_leg_won"] - paid) * qty
+            outcome = "LEG-OUT held " + ("✓ won" if r["filled_leg_won"] else "✗ lost")
+        else:
+            pnl, outcome = None, "LEG-OUT held…" if held else "LEG-OUT"
+        cost = paid * qty
+        snap.recent.append(
+            ClosedTrade(
+                id=-r["id"], symbol=r["symbol"] or "?", side=(side or "?").upper(), entry_price=paid,
+                exit_price=None if held else r["sell_price"], size=qty, pnl=pnl,
+                roi_pct=(pnl / cost * 100.0) if pnl is not None and cost else None,
+                outcome=outcome, exited_early=False, settled_at=_parse_ts(r["closed_at"]),
+            )
+        )
 
 
 def _add_unpaired(snap: Snapshot) -> None:
@@ -384,6 +423,10 @@ def load_snapshot(db_path: Path, recent_limit: int = 12, curve_len: int = 40) ->
                     settled_at=_parse_ts(r["settled_at"]),
                 )
             )
+
+        _load_legouts(conn, snap, recent_limit)
+        snap.recent.sort(key=lambda t: t.settled_at or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+        del snap.recent[recent_limit:]
 
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         snap.periods = [

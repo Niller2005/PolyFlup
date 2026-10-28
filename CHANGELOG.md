@@ -9,6 +9,12 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- TUI: leg-outs (one leg filled, other timed out) appear in Recent trades as `L<id>` rows with their real result (`LEG-OUT sold`, or `LEG-OUT held ✓ won / ✗ lost` once resolved).
+
+### Changed
+- `EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD` default is now off (2.0): signal-based holds lost 3 of 3 (-92%, -97%, -100%); holding is now only done by the random `LEGOUT_HOLD_SHARE` arm so the comparison stays clean.
+
 ---
 
 ## [0.7.5] - 2026-10-28
