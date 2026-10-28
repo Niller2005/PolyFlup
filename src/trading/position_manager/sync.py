@@ -248,6 +248,7 @@ def sync_positions_with_exchange(user_address: str):
                             "ETH",
                             "SOL",
                             "XRP",
+                            "DOGE",
                         ]:
                             symbol = parsed_slug[0]
                             win_start, win_end = parsed_slug[1], parsed_slug[2]

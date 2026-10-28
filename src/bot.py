@@ -133,7 +133,10 @@ def launch_entries(symbols: list, balance: float, verbose: bool = True) -> int:
     from src.trading import inflight
     from src.trading.exposure import sizing_state
 
+    import random
+
     launched = 0
+    symbols = random.sample(list(symbols), len(symbols))  # no market starves behind the concurrency cap
     for symbol in symbols:
         with _entry_lock:
             running = [s for s, t in _entry_threads.items() if t.is_alive()]

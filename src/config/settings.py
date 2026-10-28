@@ -411,6 +411,7 @@ BINANCE_FUNDING_MAP = {
     "ETH": "ETHUSDT",
     "XRP": "XRPUSDT",
     "SOL": "SOLUSDT",
+    "DOGE": "DOGEUSDT",
 }
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

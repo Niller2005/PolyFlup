@@ -10,6 +10,9 @@ and this project uses semantic versioning.
 ## [Unreleased]
 
 ### Added
+- DOGE markets (Binance DOGEUSDT mapping, position adoption); entry launch order is randomised so no market starves behind `ENTRY_MAX_CONCURRENT`.
+
+### Added
 - **Pair measurement data** (migration 14, `src/trading/pair_log.py`; recording never affects trading):
   - `pair_attempts`: one row per entry+hedge attempt and per skipped opportunity - mode, prices, net edge, confidence, time in window, spot/strike/distance, books and depth at placement, cash/exposure, profile, which leg filled first and when, the other leg's book at that moment, outcome, sale price/size/fee, resolution (sell/hold), and after the market resolves the winner, whether the filled leg won and the realized PnL.
   - `order_events`: every order placed/cancelled/repriced/sold, linked to its attempt.
