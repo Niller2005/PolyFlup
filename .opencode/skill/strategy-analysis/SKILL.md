@@ -77,6 +77,8 @@ SELECT COUNT(*) FROM market_trades WHERE slug=? AND token_id=? AND price<=? AND 
 SELECT ts, secs_left, up_bid, up_ask, spot, strike FROM market_ticks WHERE slug=? ORDER BY ts;
 ```
 
+Signal vs market (does confidence beat the price?): `signal_edge.py [db]` (from `evaluations` + `market_windows`, per confidence / method / minute / price bucket, with distinct-window counts) and `signal_edge_logs.py` (log + Binance klines, for data older than v0.7.6).
+
 ## 3. Mining the logs
 ```bash
 uv run python .opencode/skill/strategy-analysis/log_events.py            # tally of key decision events (numbers normalised)
