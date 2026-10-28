@@ -306,6 +306,60 @@ def migration_013_repair_misattributed_hedge_exits(conn: Any) -> None:
         log("    ✓ no mis-attributed exits found")
 
 
+def migration_014_create_measurement_tables(conn: Any) -> None:
+    """Pair-strategy measurement: attempts, order events, per-poll ticks and position marks."""
+    c = conn.cursor()
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pair_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, symbol TEXT, slug TEXT, mode TEXT, profile TEXT,
+            entry_side TEXT, size REAL, entry_price REAL, hedge_price REAL, combined REAL, net_edge REAL,
+            secs_left REAL, secs_into_window REAL, timeout_s REAL, confidence REAL, p_up REAL,
+            spot REAL, strike REAL, dist_pct REAL,
+            entry_bid REAL, entry_ask REAL, hedge_bid REAL, hedge_ask REAL,
+            entry_depth REAL, hedge_depth REAL, cash REAL, exposure REAL,
+            entry_order_id TEXT, hedge_order_id TEXT,
+            outcome TEXT, first_leg TEXT, first_fill_s REAL, second_fill_s REAL,
+            other_bid_at_first REAL, other_ask_at_first REAL, trail_moves INTEGER,
+            final_entry_price REAL, final_hedge_price REAL, entry_filled REAL, hedge_filled REAL,
+            resolution TEXT, sell_price REAL, sell_size REAL, sell_fee REAL, realized_pnl REAL,
+            winner_side TEXT, filled_leg_won INTEGER, trade_id INTEGER, closed_at TEXT, note TEXT
+        )
+        """
+    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pair_attempts_slug ON pair_attempts(slug)")
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS order_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, attempt_id INTEGER, symbol TEXT, event TEXT,
+            token_id TEXT, order_id TEXT, side TEXT, price REAL, size REAL, filled REAL, order_type TEXT,
+            post_only INTEGER, success INTEGER, error TEXT, purpose TEXT, note TEXT
+        )
+        """
+    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_order_events_attempt ON order_events(attempt_id)")
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS attempt_ticks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id INTEGER, ts TEXT, t_s REAL, phase TEXT,
+            entry_bid REAL, entry_ask REAL, hedge_bid REAL, hedge_ask REAL,
+            entry_filled REAL, hedge_filled REAL, spot REAL, secs_left REAL
+        )
+        """
+    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_attempt_ticks_attempt ON attempt_ticks(attempt_id)")
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS position_marks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT, trade_id INTEGER, symbol TEXT, slug TEXT,
+            side TEXT, token_id TEXT, size REAL, avg_price REAL, bid REAL, ask REAL, mid REAL, secs_left REAL
+        )
+        """
+    )
+    c.execute("CREATE INDEX IF NOT EXISTS idx_position_marks_slug ON position_marks(slug)")
+    log("    ✓ pair_attempts, order_events, attempt_ticks, position_marks ready")
+
+
 MIGRATIONS: List[tuple[int, str, Callable]] = [
     (1, "Add scale_in_order_id column", migration_001_add_scale_in_order_id),
     (2, "Verify timestamp column", migration_002_add_created_at_column),
@@ -359,6 +413,11 @@ MIGRATIONS: List[tuple[int, str, Callable]] = [
         13,
         "Repair entry exits that were booked as hedge exits",
         migration_013_repair_misattributed_hedge_exits,
+    ),
+    (
+        14,
+        "Create pair measurement tables (attempts, order events, ticks, position marks)",
+        migration_014_create_measurement_tables,
     ),
 ]
 

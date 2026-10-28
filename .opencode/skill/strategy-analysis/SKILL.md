@@ -40,6 +40,24 @@ SELECT decision, COUNT(*), ROUND(AVG(won),3) hit, ROUND(AVG(p_use),3) p, ROUND(A
 ```
 `uv run analyze_strategy.py [--db PATH]` covers early exits, calibration and shadow signals.
 
+## 2b. Measurement tables (v0.7.3+; empty for older data)
+```sql
+-- leg-out rate, and did the filled leg win? (n first!)
+SELECT mode, symbol, COUNT(*) n, SUM(outcome='timeout') legouts, ROUND(AVG(outcome='timeout'),3) rate,
+       ROUND(AVG(CASE WHEN outcome='timeout' THEN filled_leg_won END),3) filled_leg_won,
+       ROUND(SUM(realized_pnl),2) legout_pnl FROM pair_attempts WHERE outcome IN ('both','timeout') GROUP BY 1,2;
+-- adverse selection vs context: does time in window / distance / confidence predict leg-outs?
+SELECT CAST(secs_into_window/60 AS INT) min_in, COUNT(*) n, ROUND(AVG(outcome='timeout'),2) rate FROM pair_attempts WHERE outcome IN ('both','timeout') GROUP BY 1;
+-- how the other leg's book looked when the first leg filled (cannot-chase evidence)
+SELECT first_leg, ROUND(AVG(other_bid_at_first - (1-CASE first_leg WHEN 'entry' THEN final_entry_price ELSE final_hedge_price END)),3) FROM pair_attempts WHERE outcome='timeout' GROUP BY 1;
+-- market path after we sold (what holding would have done)
+SELECT a.id, t.t_s, t.entry_bid, t.hedge_bid FROM attempt_ticks t JOIN pair_attempts a ON a.id=t.attempt_id WHERE a.outcome='timeout' AND t.phase='after' ORDER BY a.id, t.t_s;
+-- skipped opportunities by reason
+SELECT note, COUNT(*) FROM pair_attempts WHERE outcome='skipped' GROUP BY 1 ORDER BY 2 DESC;
+-- every order of one attempt
+SELECT ts, event, side, price, size, purpose, success FROM order_events WHERE attempt_id = ? ORDER BY id;
+```
+
 ## 3. Mining the logs
 ```bash
 uv run python .opencode/skill/strategy-analysis/log_events.py            # tally of key decision events (numbers normalised)

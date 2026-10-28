@@ -113,6 +113,9 @@ def _entry_worker(symbol: str, balance: float, allocation: float, verbose: bool)
     except Exception as e:
         log_error(f"[{symbol}] Entry worker failed: {e}")
     finally:
+        from src.trading import pair_log
+
+        pair_log.end()
         inflight.clear(symbol)
 
 
@@ -306,6 +309,13 @@ def main():
                     risk_runtime.poll()
                 except Exception as e:
                     log_error(f"Risk profile poll failed: {e}")
+
+            try:
+                from src.trading import pair_log
+
+                pair_log.maintenance()
+            except Exception as e:
+                log_error(f"pair_log maintenance failed: {e}")
 
             if now_ts - last_position_check >= 1:
                 check_open_positions(

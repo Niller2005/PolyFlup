@@ -75,8 +75,8 @@ def test_unknown_profile_falls_back_to_custom():
 
 def test_request_then_poll_applies_and_acknowledges():
     path = fresh()
-    risk_runtime.init()  # env default: custom
-    assert risk_runtime.active_profile() == "custom"
+    risk_runtime.init()  # env default: balanced
+    assert risk_runtime.active_profile() == "balanced"
     profiles.request_profile(path, "aggressive")  # what the TUI does
     risk_runtime.poll()
     assert risk_runtime.active_profile() == "aggressive" and settings.BET_PERCENT == 10.0

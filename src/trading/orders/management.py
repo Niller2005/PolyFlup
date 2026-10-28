@@ -10,6 +10,7 @@ from src.utils.logger import log
 from .client import client
 from src.config.settings import PAPER_TRADING
 from src import paper
+from src.trading import pair_log
 
 def get_order_status(order_id: str) -> str:
     if PAPER_TRADING:
@@ -69,6 +70,7 @@ def get_orders(
         log(f"⚠️  Error fetching orders: {e}")
         return []
 
+@pair_log.logged_cancel
 def cancel_order(order_id: str) -> bool:
     if PAPER_TRADING:
         return paper.cancel(order_id)

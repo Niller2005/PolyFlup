@@ -9,6 +9,13 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+### Added
+- **Pair measurement data** (migration 14, `src/trading/pair_log.py`; recording never affects trading):
+  - `pair_attempts`: one row per entry+hedge attempt and per skipped opportunity - mode, prices, net edge, confidence, time in window, spot/strike/distance, books and depth at placement, cash/exposure, profile, which leg filled first and when, the other leg's book at that moment, outcome, sale price/size/fee, resolution (sell/hold), and after the market resolves the winner, whether the filled leg won and the realized PnL.
+  - `order_events`: every order placed/cancelled/repriced/sold, linked to its attempt.
+  - `attempt_ticks`: top of book of both legs every poll while waiting, and every 30s for 16 minutes afterwards (what the market did after we sold).
+  - `position_marks`: bid/ask/mid of every open leg every 30s.
+
 ### Fixed
 - TUI: a held leg without a trade row (e.g. one filled leg of a pair, still waiting for the other) is listed under Open positions as `⚠ 1 leg only` (paper mode).
 

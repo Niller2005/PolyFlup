@@ -11,6 +11,7 @@ from py_clob_client_v2 import (
 from src.utils.logger import log, log_error
 from src.config.settings import PAPER_TRADING
 from src import paper
+from src.trading import pair_log
 from .client import client, _ensure_api_creds
 from .constants import BUY
 from .utils import (
@@ -21,6 +22,7 @@ from .utils import (
 )
 
 
+@pair_log.logged_single("limit")
 def place_limit_order(
     token_id: str,
     price: float,
@@ -106,6 +108,7 @@ def place_order(token_id: str, price: float, size: float) -> dict:
     return place_limit_order(token_id, price, size, BUY)
 
 
+@pair_log.logged_single("market")
 def place_market_order(
     token_id: str,
     size: float,
@@ -195,6 +198,7 @@ def place_market_order(
         }
 
 
+@pair_log.logged_batch
 def place_batch_orders(
     orders: List[Dict[str, Any]], order_type: str = "GTC"
 ) -> List[dict]:

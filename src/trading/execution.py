@@ -2,6 +2,7 @@
 
 import time
 from typing import Optional, Dict, Any
+from src.trading import pair_log
 from src.utils.logger import fmt_num, log, log_error, send_discord
 from src.data.database import save_trade
 from src.trading.orders import (
@@ -713,6 +714,7 @@ def emergency_sell_position(
                     )
                     # Record exit price in database for P&L tracking
                     _record_exit_price(entry_order_id, attempt_price, symbol)
+                    pair_log.record_sale(symbol, size, attempt_price, reason)
                     return True
 
                 # GTC fallback order - place and wait briefly
@@ -747,6 +749,7 @@ def emergency_sell_position(
                             )
                             # Record exit price in database for P&L tracking
                             _record_exit_price(entry_order_id, attempt_price, symbol)
+                            pair_log.record_sale(symbol, size, attempt_price, reason)
                             return True
 
                 except Exception as ws_err:
@@ -963,6 +966,7 @@ def emergency_sell_position(
                     )
                     # Record exit price in database for P&L tracking
                     _record_exit_price(entry_order_id, attempt_price, symbol)
+                    pair_log.record_sale(symbol, size, attempt_price, reason)
                     return True
 
                 # GTC orders need time to be taken - wait and check status
@@ -999,6 +1003,7 @@ def emergency_sell_position(
                             )
                             # Record exit price in database for P&L tracking
                             _record_exit_price(entry_order_id, attempt_price, symbol)
+                            pair_log.record_sale(symbol, size, attempt_price, reason)
                             return True
 
                 except Exception as ws_err:
@@ -1126,6 +1131,70 @@ def calculate_adaptive_combined_threshold(
         return COMBINED_PRICE_THRESHOLD
 
 
+
+def _begin_pair_attempt(
+    symbol, mode, entry_side, size, entry_price, hedge_price, entry_token, hedge_token,
+    entry_order_id, hedge_order_id, timeout_s, confidence, liquidity, net_edge,
+):
+    """Open a pair_attempts row with the context needed to explain the outcome later."""
+    try:
+        import src.config.settings as cfg
+        from src.markets import slug_for, window_bounds
+        from src.trading.exposure import open_exposure_usd
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(tz=ZoneInfo("America/New_York"))
+        start, end = window_bounds(symbol, now)
+        eb, ea = _book_top(entry_token)
+        hb, ha = _book_top(hedge_token)
+        prices = None
+        try:
+            from src.trading.late_window import _prices
+
+            prices = _prices(symbol, start)
+        except Exception:
+            pass
+        strike, spot = (prices[0], prices[1]) if prices else (None, None)
+        liquidity = liquidity or {}
+        pair_log.begin(
+            symbol, slug_for(symbol), mode, entry_side, size, entry_price, hedge_price,
+            secs_left=(end - now).total_seconds(), timeout_s=timeout_s, net_edge=net_edge,
+            secs_into_window=(now - start).total_seconds(), confidence=confidence, profile=getattr(cfg, "RISK_PROFILE", None),
+            entry_bid=eb, entry_ask=ea, hedge_bid=hb, hedge_ask=ha,
+            entry_depth=liquidity.get("entry_depth"), hedge_depth=liquidity.get("hedge_depth"),
+            spot=spot, strike=strike, dist_pct=(abs(spot - strike) / strike * 100.0) if spot and strike else None,
+            exposure=open_exposure_usd(), entry_order_id=entry_order_id, hedge_order_id=hedge_order_id,
+            tokens=(entry_token, hedge_token),
+        )
+        pair_log.event("place", token_id=entry_token, order_id=entry_order_id, side=BUY, price=entry_price, size=size, post_only=int(mode == "MAKER"), success=1, purpose="entry leg")
+        pair_log.event("place", token_id=hedge_token, order_id=hedge_order_id, side=BUY, price=hedge_price, size=size, post_only=int(mode == "MAKER"), success=1, purpose="hedge leg")
+    except Exception as e:
+        log_error(f"pair_log begin failed: {e}")
+
+
+def _track_fills(elapsed, entry_got, hedge_got, entry_token, hedge_token, entry_order_id, hedge_order_id):
+    """Per-poll tick plus first-fill bookkeeping (which leg, when, and the other leg's book then)."""
+    a = pair_log.current()
+    if not a:
+        return
+    try:
+        pair_log.tick(elapsed, "wait", entry_got, hedge_got)
+        seen = a.setdefault("seen", set())
+        for leg, got, tok, oid, other in (
+            ("entry", entry_got, entry_token, entry_order_id, hedge_token),
+            ("hedge", hedge_got, hedge_token, hedge_order_id, entry_token),
+        ):
+            if got > 0.01 and leg not in seen:
+                seen.add(leg)
+                pair_log.event("fill", token_id=tok, order_id=oid, side=BUY, size=got, filled=got, purpose=f"{leg} leg")
+                if len(seen) == 1:
+                    ob, oa = _book_top(other)
+                    pair_log.update(first_leg=leg, first_fill_s=elapsed, other_bid_at_first=ob, other_ask_at_first=oa)
+    except Exception as e:
+        log_error(f"pair_log track failed: {e}")
+
+
 def place_entry_and_hedge_atomic(
     symbol: str,
     entry_token_id: str,
@@ -1169,6 +1238,7 @@ def place_entry_and_hedge_atomic(
         )
 
         if not is_liquid:
+            pair_log.skipped(symbol, f"liquidity: {skip_reason}", entry_side=entry_side, size=entry_size, confidence=confidence)
             log(f"   ⏭️  [{symbol}] SKIPPING TRADE: {skip_reason}")
             if liquidity_metrics:
                 log(
@@ -1258,6 +1328,10 @@ def place_entry_and_hedge_atomic(
                     )
 
         if mode is None:
+            pair_log.skipped(symbol, "no pair with net edge" if not locals().get("quote") else ("maker band" if not locals().get("band_ok") else "maker edge"),
+                             entry_side=entry_side, size=entry_size, confidence=confidence,
+                             entry_bid=locals().get("e_bid"), entry_ask=locals().get("e_ask"),
+                             hedge_bid=locals().get("h_bid"), hedge_ask=locals().get("h_ask"))
             log(
                 f"   ⏭️  [{symbol}] No entry+hedge pair with net edge ≥ {MIN_NET_EDGE * 100:.1f}¢/sh after fees - skipping"
             )
@@ -1572,6 +1646,11 @@ def place_entry_and_hedge_atomic(
             log(f"   ⚠️  [{symbol}] Missing order IDs, skipping monitoring")
             return None, None, None
 
+        _begin_pair_attempt(
+            symbol, mode, entry_side, entry_size, entry_price, hedge_price, entry_token_id, hedge_token_id,
+            entry_order_id, hedge_order_id, HEDGE_FILL_TIMEOUT_SECONDS, confidence, liquidity_metrics,
+            pair_net_edge(entry_price, hedge_price, mode == "TAKER", mode == "TAKER", TAKER_FEE_RATE),
+        )
         log(
             f"   ⏱️  [{symbol}] Monitoring fills for {HEDGE_FILL_TIMEOUT_SECONDS}s (GTC fallback @ {HEDGE_GTC_FALLBACK_SECONDS}s, polling every {HEDGE_POLL_INTERVAL_SECONDS}s)"
         )
@@ -1684,6 +1763,7 @@ def place_entry_and_hedge_atomic(
                     return
             new_id = res[0]["order_id"]
             trail_state["moves"] += 1
+            pair_log.event("reprice", token_id=token, order_id=new_id, side=BUY, price=target, size=entry_size, purpose="trail", note=f"from {cur_price:.2f} bid {bid:.2f} ask {ask:.2f}")
             if trailing_entry:
                 entry_order_id, entry_price = new_id, target
                 entry_result["order_id"] = new_id
@@ -1717,6 +1797,7 @@ def place_entry_and_hedge_atomic(
 
                 entry_filled = entry_filled_size >= (entry_size - 0.01)
                 hedge_filled = hedge_filled_size >= (entry_size - 0.01)
+                _track_fills(elapsed, entry_filled_size, hedge_filled_size, entry_token_id, hedge_token_id, entry_order_id, hedge_order_id)
 
                 # SUCCESS: Both filled!
                 if entry_filled and hedge_filled:
@@ -1724,6 +1805,11 @@ def place_entry_and_hedge_atomic(
                         f"   ✅ [{symbol}] Both orders filled after {elapsed}s - trade complete!"
                     )
                     both_filled = True
+                    pair_log.update(
+                        outcome="both", second_fill_s=elapsed, final_entry_price=entry_price,
+                        final_hedge_price=hedge_price, entry_filled=entry_filled_size,
+                        hedge_filled=hedge_filled_size, trail_moves=trail_state["moves"], closed_at=pair_log._now(),
+                    )
                     # Status was captured at placement ("live"); mark filled so the saved trade
                     # syncs its real (possibly trailed) fill price from the exchange
                     entry_result["status"] = "MATCHED"
@@ -1832,6 +1918,7 @@ def place_entry_and_hedge_atomic(
                             hedge_order_id = gtc_result.get("order_id")
                             hedge_price = gtc_hedge_price  # Update for DB tracking
                             gtc_switched = True
+                            pair_log.event("taker_hedge", token_id=hedge_token_id, order_id=hedge_order_id, side=BUY, price=gtc_hedge_price, size=remaining_hedge_size, order_type="GTC", purpose="taker hedge")
 
                             from src.config.settings import TAKER_FEE_RATE
                             from src.trading.edge import taker_fee
@@ -1899,6 +1986,11 @@ def place_entry_and_hedge_atomic(
 
                 final_entry_filled = final_entry_filled_size >= (entry_size - 0.01)
                 final_hedge_filled = final_hedge_filled_size >= (entry_size - 0.01)
+                pair_log.update(
+                    outcome="timeout", entry_filled=final_entry_filled_size, hedge_filled=final_hedge_filled_size,
+                    final_entry_price=entry_price, final_hedge_price=hedge_price,
+                    trail_moves=trail_state["moves"], closed_at=pair_log._now(),
+                )
 
                 # CRITICAL: Handle partial fills with smart hold logic
                 # Check which position is more profitable and hold the winner
@@ -2082,6 +2174,8 @@ def place_entry_and_hedge_atomic(
                             log(
                                 f"   💎 [{symbol}] Trusting signal: {entry_side} @ ${entry_price:.2f} expected to win"
                             )
+                            pair_log.update(resolution="hold")
+                            pair_log.event("hold", token_id=entry_token_id, side=entry_side, price=entry_price, size=final_entry_filled_size, purpose="high confidence")
                             # Don't emergency sell - keep position through resolution
                             # This is a calculated risk based on strong signal confidence
                         else:
