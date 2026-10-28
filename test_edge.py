@@ -189,6 +189,14 @@ def test_hedged_pairs_are_not_exited_early_by_default():
     assert settings.PRE_SETTLEMENT_EXIT_HEDGED is False
 
 
+def test_trail_may_rest_above_break_even_by_the_allowed_lock_loss():
+    from src.trading.edge import trail_target
+
+    # DOWN filled @0.56, UP bid ran to 0.47: break-even cap is 0.44, a 3c allowed loss lifts it to 0.47
+    assert trail_target(0.56, 0.47, 0.48, 0, -0.03) == (0.47, 0.47)
+    assert trail_target(0.56, 0.47, 0.48, 0, 0.01) == (0.43, 0.43)  # old behaviour: stuck 4c below the market
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

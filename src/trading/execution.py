@@ -1701,6 +1701,7 @@ def place_entry_and_hedge_atomic(
             from src.config.settings import (
                 ENABLE_TRAILING,
                 MIN_NET_EDGE,
+                TRAIL_MAX_LOCK_LOSS,
                 TRAIL_MAX_TICKS,
                 TRAIL_MIN_REPRICE_SECONDS,
             )
@@ -1730,13 +1731,14 @@ def place_entry_and_hedge_atomic(
             waited = now - trail_state["since"]
             step = max(1.0, HEDGE_FILL_TIMEOUT_SECONDS / (TRAIL_MAX_TICKS + 1))
             ticks = min(TRAIL_MAX_TICKS, int(waited // step))
-            target, cap = trail_target(filled_price, bid, ask, ticks, MIN_NET_EDGE)
+            # a small certain loss (<= TRAIL_MAX_LOCK_LOSS) beats a ~14c/sh expected leg-out loss
+            target, cap = trail_target(filled_price, bid, ask, ticks, -TRAIL_MAX_LOCK_LOSS)
             trail_state["last"] = now
 
             if bid > cap + 1e-9 and not trail_state["capped"]:
                 trail_state["capped"] = True
                 log(
-                    f"   🎣 [{symbol}] Trail capped: {leg} best bid ${bid:.2f} is above the ${cap:.2f} cap ({filled_side} filled @ ${filled_price:.2f}, min lock {MIN_NET_EDGE * 100:.1f}¢) - cannot chase"
+                    f"   🎣 [{symbol}] Trail capped: {leg} best bid ${bid:.2f} is above the ${cap:.2f} cap ({filled_side} filled @ ${filled_price:.2f}, min lock {-TRAIL_MAX_LOCK_LOSS * 100:+.1f}¢) - cannot chase"
                 )
             if target is None or abs(target - cur_price) < 0.005:
                 return

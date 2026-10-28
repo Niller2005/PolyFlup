@@ -92,6 +92,12 @@ TRAIL_MAX_TICKS = int(
     os.getenv("TRAIL_MAX_TICKS", "2")
 )  # Ticks above best bid the trailing leg may escalate to as time passes (never above the MIN_NET_EDGE cap)
 TRAIL_MIN_REPRICE_SECONDS = int(os.getenv("TRAIL_MIN_REPRICE_SECONDS", "5"))
+# After one leg fills, the market has usually moved so that the other leg's bid is a few cents above the
+# MIN_NET_EDGE cap (median ~3-4c). Completing the pair there as a maker costs a small certain loss, but a
+# leg-out costs ~14c/share (flatten at the taker fee + spread). Replaying 15 recorded leg-outs, resting the
+# second leg up to 3c above break-even completed 6 of them and cut leg-out PnL from -110 to -65.
+# The second leg may therefore be quoted at up to `1 - filled + TRAIL_MAX_LOCK_LOSS` (a lock of -TRAIL_MAX_LOCK_LOSS).
+TRAIL_MAX_LOCK_LOSS = float(os.getenv("TRAIL_MAX_LOCK_LOSS", "0.03"))
 
 # Late-window conviction mode: when the leading side is far from the strike near close
 LATE_WINDOW_ENABLED = (

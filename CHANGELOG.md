@@ -9,8 +9,18 @@ and this project uses semantic versioning.
 
 ## [Unreleased]
 
+---
+
+## [0.7.4] - 2026-10-28
+
+### Changed
+- **Trailing may complete a pair at a small certain loss** (`TRAIL_MAX_LOCK_LOSS=0.03`): after one leg fills, the other is rested at best bid but no higher than `1 - filled + 0.03` (previously `1 - filled - 0.01`). At first fill the other leg's bid is typically 3-4c above the old cap, and a leg-out costs ~14c/share. Replaying 15 recorded leg-outs from `attempt_ticks`: 6 would have completed and leg-out PnL improves from -110 to -65 (5c: 10 of 15, -45). Small sample - re-run the replay on new `pair_attempts` data.
 ### Added
 - DOGE markets (Binance DOGEUSDT mapping, position adoption); entry launch order is randomised so no market starves behind `ENTRY_MAX_CONCURRENT`.
+
+---
+
+## [0.7.3] - 2026-10-28
 
 ### Added
 - **Pair measurement data** (migration 14, `src/trading/pair_log.py`; recording never affects trading):
