@@ -1132,6 +1132,25 @@ def calculate_adaptive_combined_threshold(
 
 
 
+def _legout_ab_hold(symbol: str, side: str, token_id: str, price: float, size: float) -> bool:
+    """Randomly keep a pure leg-out to resolution instead of selling it (A/B arm, recorded).
+
+    Selling and holding look equivalent in the data so far (filled legs win ~24% against a ~27c sale
+    price, n~45, and a taker sale costs ~1.4c fee), so a share of leg-outs is held to resolution and
+    compared later via pair_attempts.resolution ('hold_ab' vs 'sell'), filled_leg_won and realized_pnl.
+    """
+    import random
+
+    from src.config.settings import LEGOUT_HOLD_SHARE
+
+    if LEGOUT_HOLD_SHARE <= 0 or random.random() >= LEGOUT_HOLD_SHARE:
+        return False
+    log(f"   🧪 [{symbol}] A/B: holding the filled {side} leg ({size:.0f} @ ${price:.2f}) to resolution instead of selling")
+    pair_log.update(resolution="hold_ab")
+    pair_log.event("hold", token_id=token_id, side=side, price=price, size=size, purpose="ab hold to resolution")
+    return True
+
+
 def _begin_pair_attempt(
     symbol, mode, entry_side, size, entry_price, hedge_price, entry_token, hedge_token,
     entry_order_id, hedge_order_id, timeout_s, confidence, liquidity, net_edge,
@@ -2162,7 +2181,12 @@ def place_entry_and_hedge_atomic(
                                 f"   🧭 [{symbol}] Signal says hold ({confidence:.1%}) but {entry_side} bid is "
                                 f"{('$%.2f' % cur_entry_bid) if cur_entry_bid else 'n/a'} (<$0.50): market disagrees - selling"
                             )
-                        if (
+                        ab_hold = final_hedge_filled_size <= 0.01 and _legout_ab_hold(
+                            symbol, entry_side, entry_token_id, entry_price, final_entry_filled_size
+                        )
+                        if ab_hold:
+                            pass  # keep the position; resolution is recorded in pair_attempts
+                        elif (
                             final_hedge_filled_size <= 0.01
                             and confidence is not None
                             and confidence >= EMERGENCY_SELL_CONFIDENCE_HOLD_THRESHOLD
@@ -2356,6 +2380,10 @@ def place_entry_and_hedge_atomic(
                             entry_price=hedge_price,
                             window_end=window_end,
                         )
+                    elif final_entry_filled_size <= 0.01 and _legout_ab_hold(
+                        symbol, hedge_side, hedge_token_id, hedge_price, final_hedge_filled_size
+                    ):
+                        pass  # A/B arm: keep the hedge leg to resolution
                     else:
                         # Neither is clearly winning, or both similar - SELL BOTH
                         log(

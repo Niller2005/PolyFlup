@@ -11,6 +11,13 @@ and this project uses semantic versioning.
 
 ---
 
+## [0.7.5] - 2026-10-28
+
+### Added
+- **Hold-to-resolution A/B arm for leg-outs** (`LEGOUT_HOLD_SHARE=0.25`): that share of pure leg-outs (one leg filled, other timed out) is kept to resolution instead of sold; recorded as `pair_attempts.resolution='hold_ab'`, with `filled_leg_won` and `realized_pnl` filled after the market resolves. Evidence so far does not favour either: filled legs win ~24% against a ~27c sale price (n~45, two data sets pointing opposite ways), a z-model probability or the entry confidence did not beat the bid (where the model said hold by 10c+, the leg won 11%, n=9), and a taker sale costs only ~1.4c fee. Compare arms with `SELECT resolution, COUNT(*), AVG(realized_pnl) FROM pair_attempts WHERE outcome='timeout' GROUP BY 1`.
+
+---
+
 ## [0.7.4] - 2026-10-28
 
 ### Changed

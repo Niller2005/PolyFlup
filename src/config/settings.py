@@ -92,6 +92,9 @@ TRAIL_MAX_TICKS = int(
     os.getenv("TRAIL_MAX_TICKS", "2")
 )  # Ticks above best bid the trailing leg may escalate to as time passes (never above the MIN_NET_EDGE cap)
 TRAIL_MIN_REPRICE_SECONDS = int(os.getenv("TRAIL_MIN_REPRICE_SECONDS", "5"))
+# A/B experiment: share of pure leg-outs (one leg filled, other timed out) kept to resolution instead of sold.
+# Data so far shows no edge either way (hold-vs-sell within ~3c/share, n~45), so measure it.
+LEGOUT_HOLD_SHARE = float(os.getenv("LEGOUT_HOLD_SHARE", "0.25"))
 # After one leg fills, the market has usually moved so that the other leg's bid is a few cents above the
 # MIN_NET_EDGE cap (median ~3-4c). Completing the pair there as a maker costs a small certain loss, but a
 # leg-out costs ~14c/share (flatten at the taker fee + spread). Replaying 15 recorded leg-outs, resting the
